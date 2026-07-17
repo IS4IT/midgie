@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Desired state. Diff against b.xml should yield a single 'replace' itemDelta for <description>. -->
+<role xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      oid="11111111-1111-1111-1111-111111111111">
+    <name>Example Role</name>
+    <description>Desired description</description>
+</role>

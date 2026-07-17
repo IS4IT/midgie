@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Live/current state. Differs from a.xml only in <description>. -->
+<role xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      oid="11111111-1111-1111-1111-111111111111">
+    <name>Example Role</name>
+    <description>Current description</description>
+</role>

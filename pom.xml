@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- groupId is a placeholder; rename to your own namespace before publishing. -->
+    <groupId>net.haeger.midpoint</groupId>
+    <artifactId>midpoint-diff</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>midpoint-diff</name>
+    <description>Schema-aware diff of midPoint objects into an itemDelta (ObjectModificationType).</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>17</maven.compiler.release>
+
+        <!-- Base-schema version knob. The midpoint-schema jar carries the COMPILE-TIME base
+             object model (UserType, RoleType, ...), so this MUST match the target midPoint's
+             major line. Bump it (and rebuild) to target a different midPoint version. -->
+        <midpoint.version>4.10.3</midpoint.version>
+
+        <picocli.version>4.7.6</picocli.version>
+        <junit.version>5.10.2</junit.version>
+    </properties>
+
+    <repositories>
+        <!-- midPoint + prism artifacts are published here, not to Maven Central. -->
+        <repository>
+            <id>evolveum-releases</id>
+            <url>https://nexus.evolveum.com/nexus/repository/releases/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <!-- Pulls prism-api / prism-impl transitively. Provides MidPointPrismContextFactory,
+             DeltaConvertor, and the compile-time base schema on the classpath. -->
+        <dependency>
+            <groupId>com.evolveum.midpoint.infra</groupId>
+            <artifactId>schema</artifactId>
+            <version>${midpoint.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>info.picocli</groupId>
+            <artifactId>picocli</artifactId>
+            <version>${picocli.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>midpoint-diff</finalName>
+        <plugins>
+            <!-- Fat JAR. NOTE: prism/JAXB ship XSD catalogs + ServiceLoader files under
+                 META-INF; if the shaded jar misbehaves at runtime, add the matching
+                 AppendingTransformer entries (see CLAUDE.md "shade caveat"). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.3</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>net.haeger.midpoint.diff.Main</mainClass>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>

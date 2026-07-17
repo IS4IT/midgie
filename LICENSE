@@ -1,0 +1,24 @@
+Copyright (c) 2026 Lothar Haeger
+
+Licensed under the European Union Public Licence (EUPL) v. 1.2.
+
+SPDX-License-Identifier: EUPL-1.2
+
+This project links the midPoint schema library (com.evolveum.midpoint.infra:schema),
+which is distributed under the EUPL-1.2. As a derived/linked work this project is
+therefore licensed under the EUPL-1.2 as well; it cannot be relicensed under a
+non-EUPL-compatible licence (e.g. MIT/Apache-2.0).
+
+You may not use this work except in compliance with the Licence. You may obtain a
+copy of the Licence at:
+
+    https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12
+
+Unless required by applicable law or agreed to in writing, software distributed under
+the Licence is distributed on an "AS IS" basis, WITHOUT WARRANTIES OR CONDITIONS OF
+ANY KIND, either express or implied. See the Licence for the specific language
+governing permissions and limitations under the Licence.
+
+TODO before publishing: replace this notice with the full verbatim EUPL-1.2 text
+(available at the URL above) and confirm the exact licence of the midpoint-schema
+artifact version you depend on.
