@@ -17,7 +17,8 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] ⭐ **Keep the password off the CLI** — resolved from `--password` → `--password-env VAR` → `--password-file FILE` → `MIDPOINT_PASSWORD` → interactive prompt.
 - [x] **Env-var config** — `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD` default the connection (an explicit LIVE file still wins over an env host, so file diffs aren't broken).
 - [x] **Clearer REST errors** — 401 (auth) / 403 (authz) / connection-refused / timeout carry an actionable hint; the best-effort schema-read stays quiet on 401/connection so the real error shows once.
-- [ ] **Configurable timeouts + retry/backoff** on 503 (server still starting) and transient blips; `--cacert`/truststore for real TLS verification (note: `--insecure` trusts the cert but not hostname mismatch).
+- [x] **Configurable timeouts + retry/backoff** — `--timeout <seconds>` (per-request) and `--retries <n>` (GET-only, on 503/connection-refused/timeout with exponential backoff); writes are never auto-retried.
+- [ ] **Real TLS verification** — `--cacert`/truststore, and make `--insecure` also bypass hostname mismatch. Deferred: can't be verified against the HTTP-only rig (needs an HTTPS midPoint with a private CA).
 
 ## D. Correctness edges (each also wants a test)
 - [ ] ⭐ **Protected/encrypted values** — `<protectedString>` ciphertext differs on every fetch → spurious deltas *and* secrets in the output. Decide policy: ignore protected strings, or warn loudly.

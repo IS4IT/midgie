@@ -55,6 +55,15 @@ public final class ConnectionOptions {
             description = "Trust any TLS certificate (for self-signed https midPoint servers).")
     boolean insecure;
 
+    @Option(names = "--timeout", paramLabel = "SECONDS", defaultValue = "30",
+            description = "Per-request timeout in seconds (default 30).")
+    int timeoutSeconds;
+
+    @Option(names = "--retries", paramLabel = "N", defaultValue = "0",
+            description = "Retry idempotent reads on 503/connection-refused/timeout, N times with backoff "
+                    + "(useful while the server is starting).")
+    int retries;
+
     /** The resolved host: {@code --host} if given, else {@code MIDPOINT_URL}. Null when neither is set. */
     public URI host() {
         if (hostOption != null) {
@@ -89,7 +98,11 @@ public final class ConnectionOptions {
         if (password == null) {
             return null; // resolvePassword() already explained why
         }
-        return new MidpointRestClient(host(), user, password, insecure);
+        MidpointRestClient.Config config = new MidpointRestClient.Config()
+                .insecure(insecure)
+                .requestTimeout(java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds)))
+                .maxRetries(retries);
+        return new MidpointRestClient(host(), user, password, config);
     }
 
     /** Resolve the password from the most-explicit source available, or {@code null} (with an error). */

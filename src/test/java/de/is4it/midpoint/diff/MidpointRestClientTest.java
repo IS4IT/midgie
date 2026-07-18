@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -30,6 +32,7 @@ class MidpointRestClientTest {
 
     private HttpServer server;
     private MidpointRestClient client;
+    private URI host;
 
     // captured from the last request
     private volatile String lastMethod;
@@ -39,13 +42,23 @@ class MidpointRestClientTest {
     private volatile String lastContentType;
     private volatile String lastBody;
 
+    // stub behaviour for the retry/timeout tests
+    private final AtomicInteger failuresRemaining = new AtomicInteger(0); // /users/flaky returns 503 this many times
+    private final AtomicInteger flakyRequests = new AtomicInteger(0);     // total hits on /users/flaky
+
     @BeforeEach
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/midpoint/ws/rest/users", this::handle);
         server.start();
-        URI host = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/midpoint");
+        host = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/midpoint");
         client = new MidpointRestClient(host, "administrator", "s3cret", false);
+        failuresRemaining.set(0);
+        flakyRequests.set(0);
+    }
+
+    private MidpointRestClient clientWith(MidpointRestClient.Config config) {
+        return new MidpointRestClient(host, "administrator", "s3cret", config);
     }
 
     @AfterEach
@@ -121,6 +134,50 @@ class MidpointRestClientTest {
         assertEquals("/midpoint/ws/rest/users/aaa", lastPath);
     }
 
+    @Test
+    void retriesIdempotentGetOnTransientFailure() throws Exception {
+        failuresRemaining.set(2); // first two GETs -> 503, third -> 200
+        MidpointRestClient retrying = clientWith(
+                new MidpointRestClient.Config().maxRetries(3).retryBaseDelay(Duration.ofMillis(2)));
+
+        String body = retrying.getObject("users", "flaky");
+
+        assertTrue(body.contains("recovered"), body);
+        assertEquals(3, flakyRequests.get(), "one initial GET + two retries");
+    }
+
+    @Test
+    void failsWhenRetriesAreExhausted() {
+        failuresRemaining.set(5);
+        MidpointRestClient retrying = clientWith(
+                new MidpointRestClient.Config().maxRetries(2).retryBaseDelay(Duration.ofMillis(2)));
+
+        MidpointRestClient.RestException ex = assertThrows(
+                MidpointRestClient.RestException.class, () -> retrying.getObject("users", "flaky"));
+        assertEquals(503, ex.statusCode());
+        assertEquals(3, flakyRequests.get(), "one initial GET + two retries, then gives up");
+    }
+
+    @Test
+    void writesAreNotRetried() {
+        failuresRemaining.set(5);
+        MidpointRestClient retrying = clientWith(
+                new MidpointRestClient.Config().maxRetries(3).retryBaseDelay(Duration.ofMillis(2)));
+
+        assertThrows(MidpointRestClient.RestException.class,
+                () -> retrying.patchObject("users", "flaky", "<objectModification/>"));
+        assertEquals(1, flakyRequests.get(), "a PATCH must not be retried");
+    }
+
+    @Test
+    void requestTimeoutIsHonoured() {
+        MidpointRestClient impatient = clientWith(
+                new MidpointRestClient.Config().requestTimeout(Duration.ofMillis(300)));
+
+        IOException ex = assertThrows(IOException.class, () -> impatient.getObject("users", "slow"));
+        assertTrue(ex.getMessage().contains("timed out"), ex.getMessage());
+    }
+
     // --- stub server ---
 
     private void handle(HttpExchange exchange) throws IOException {
@@ -131,7 +188,17 @@ class MidpointRestClientTest {
         lastContentType = exchange.getRequestHeaders().getFirst("Content-Type");
         lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
-        if (lastPath.endsWith("/users/missing")) {
+        if (lastPath.endsWith("/users/flaky")) {
+            flakyRequests.incrementAndGet();
+            if (failuresRemaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+                respond(exchange, 503, "service unavailable");
+            } else {
+                respond(exchange, 200, "<user><name>recovered</name></user>");
+            }
+        } else if (lastPath.endsWith("/users/slow")) {
+            sleep(2000);
+            respond(exchange, 200, "<user/>");
+        } else if (lastPath.endsWith("/users/missing")) {
             respond(exchange, 404, "not found");
         } else if (lastPath.endsWith("/users/unauth")) {
             respond(exchange, 401, "unauthorized");
@@ -145,6 +212,14 @@ class MidpointRestClientTest {
             respond(exchange, 204, "");
         } else {
             respond(exchange, 200, "<user><name>from-server</name></user>");
+        }
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

@@ -50,14 +50,52 @@ public final class MidpointRestClient {
         }
     }
 
-    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
-    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration RETRY_MAX_DELAY = Duration.ofSeconds(30);
+
+    /** Timeout / retry / TLS knobs for the client (fluent setters; sensible defaults). */
+    public static final class Config {
+        private boolean insecure;
+        private Duration connectTimeout = Duration.ofSeconds(10);
+        private Duration requestTimeout = Duration.ofSeconds(30);
+        private int maxRetries;
+        private Duration retryBaseDelay = Duration.ofSeconds(1);
+
+        public Config insecure(boolean value) {
+            this.insecure = value;
+            return this;
+        }
+
+        public Config connectTimeout(Duration value) {
+            this.connectTimeout = value;
+            return this;
+        }
+
+        public Config requestTimeout(Duration value) {
+            this.requestTimeout = value;
+            return this;
+        }
+
+        public Config maxRetries(int value) {
+            this.maxRetries = Math.max(0, value);
+            return this;
+        }
+
+        public Config retryBaseDelay(Duration value) {
+            this.retryBaseDelay = value;
+            return this;
+        }
+    }
 
     private final URI restBase;
     private final String authHeader;
     private final HttpClient httpClient;
+    private final Duration requestTimeout;
+    private final int maxRetries;
+    private final Duration retryBaseDelay;
 
     /**
+     * Convenience constructor with default timeouts and no retries.
+     *
      * @param host     the midPoint application root, e.g. {@code http://localhost:12080/midpoint}
      *                 (a trailing {@code /ws/rest} is accepted and not duplicated)
      * @param user     REST user (e.g. {@code administrator})
@@ -65,12 +103,19 @@ public final class MidpointRestClient {
      * @param insecure trust any TLS certificate (for self-signed https servers)
      */
     public MidpointRestClient(URI host, String user, String password, boolean insecure) {
+        this(host, user, password, new Config().insecure(insecure));
+    }
+
+    public MidpointRestClient(URI host, String user, String password, Config config) {
         this.restBase = restBaseOf(host);
         this.authHeader = "Basic " + Base64.getEncoder()
                 .encodeToString((user + ":" + password).getBytes(StandardCharsets.UTF_8));
+        this.requestTimeout = config.requestTimeout;
+        this.maxRetries = config.maxRetries;
+        this.retryBaseDelay = config.retryBaseDelay;
 
-        HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT);
-        if (insecure) {
+        HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(config.connectTimeout);
+        if (config.insecure) {
             builder.sslContext(trustAllSslContext());
         }
         this.httpClient = builder.build();
@@ -128,7 +173,7 @@ public final class MidpointRestClient {
 
     private HttpRequest.Builder baseRequest(URI uri) {
         return HttpRequest.newBuilder(uri)
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(requestTimeout)
                 .header("Authorization", authHeader);
     }
 
@@ -136,25 +181,54 @@ public final class MidpointRestClient {
         return sendRaw(request, what).body();
     }
 
+    /**
+     * Send the request, retrying idempotent GETs on transient failures (HTTP 503, connection refused,
+     * timeout) up to {@code maxRetries} with exponential backoff. Writes are never retried — re-running
+     * {@code apply} is the safe recovery.
+     */
     private HttpResponse<String> sendRaw(HttpRequest request, String what) throws IOException {
-        HttpResponse<String> response;
+        boolean retryable = "GET".equals(request.method());
+        int attempt = 0;
+        while (true) {
+            try {
+                HttpResponse<String> response =
+                        httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                int status = response.statusCode();
+                if (status == 503 && retryable && attempt < maxRetries) {
+                    backoff(attempt++);
+                    continue;
+                }
+                if (status < 200 || status >= 300) {
+                    throw new RestException(status,
+                            what + " failed: HTTP " + status + statusHint(status) + shortBody(response.body()));
+                }
+                return response;
+            } catch (java.net.ConnectException | java.net.http.HttpTimeoutException e) {
+                if (retryable && attempt < maxRetries) {
+                    backoff(attempt++);
+                    continue;
+                }
+                if (e instanceof java.net.ConnectException) {
+                    throw new IOException(what + " — cannot connect to " + restBase
+                            + " (is the server up and the URL correct? " + e.getMessage() + ")", e);
+                }
+                throw new IOException(what + " — timed out talking to " + restBase + " (" + e.getMessage() + ")", e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException(what + " was interrupted", e);
+            }
+        }
+    }
+
+    /** Sleep for {@code retryBaseDelay * 2^attempt}, capped, before the next attempt. */
+    private void backoff(int attempt) throws IOException {
+        long millis = Math.min(retryBaseDelay.toMillis() * (1L << attempt), RETRY_MAX_DELAY.toMillis());
         try {
-            response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        } catch (java.net.ConnectException e) {
-            throw new IOException(what + " — cannot connect to " + restBase
-                    + " (is the server up and the URL correct? " + e.getMessage() + ")", e);
-        } catch (java.net.http.HttpTimeoutException e) {
-            throw new IOException(what + " — timed out talking to " + restBase + " (" + e.getMessage() + ")", e);
+            Thread.sleep(millis);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IOException(what + " was interrupted", e);
+            throw new IOException("interrupted while backing off before a retry", e);
         }
-        int status = response.statusCode();
-        if (status < 200 || status >= 300) {
-            throw new RestException(status,
-                    what + " failed: HTTP " + status + statusHint(status) + shortBody(response.body()));
-        }
-        return response;
     }
 
     /** Actionable hint for the common HTTP failures. */

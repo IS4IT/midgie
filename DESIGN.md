@@ -75,7 +75,9 @@ the midPoint source tree.
 Connection details default from `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD`. To keep the
 password off the command line (it leaks into `ps` and shell history), resolve it — in order — from
 `--password`, `--password-env <VAR>`, `--password-file <FILE>`, `MIDPOINT_PASSWORD`, or an interactive
-prompt. REST failures carry an actionable hint (401 auth, 403 authz, connection refused).
+prompt. REST failures carry an actionable hint (401 auth, 403 authz, connection refused). `--timeout`
+sets the per-request timeout; `--retries <n>` retries idempotent reads on 503 / connection-refused /
+timeout with exponential backoff (rides out a server that is still starting).
 
 ## Strategy flags
 
