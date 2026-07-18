@@ -1,0 +1,101 @@
+# Test rig: a real midPoint server for exercising midpoint-diff over REST
+# (the future `diff --host` / `apply` live modes).
+#
+# Adapted from ../connector-sap/docker/docker-compose.yml (itself from
+# Evolveum/midpoint-docker), stripped down to just the midPoint + PostgreSQL
+# stack — no connector bundle, no JCo, no deploy script.
+#
+# IMPORTANT: the midPoint image tag (MP_VER) must match <midpoint.version> in
+# pom.xml. midpoint-diff bundles the compile-time base schema for that version,
+# and diffing against a different major line will misparse objects. Both are
+# pinned to 4.10.3 (bump together).
+#
+# Usage (from project root):
+#   docker compose -f docker/docker-compose.yml up -d      # start (DB + repo init + server)
+#   # GUI:  http://localhost:12080/midpoint          (administrator / T3stPw890uio)
+#   # REST: http://localhost:12080/midpoint/ws/rest/...
+#   # Logs: docker compose -f docker/docker-compose.yml logs -f mp_server
+#   # DB:   docker compose -f docker/docker-compose.yml exec mp_data psql -U midpoint
+#   docker compose -f docker/docker-compose.yml down     # stop (keep data)
+#   docker compose -f docker/docker-compose.yml down -v  # tear down (-v wipes volumes)
+
+# Pin the Compose project name so containers, volumes and the network are always
+# prefixed midpoint_diff_* regardless of the directory the file is invoked from.
+name: midpoint_diff
+
+services:
+
+  mp_data:
+    image: postgres:${PG_VER:-17}-alpine
+    environment:
+      - POSTGRES_PASSWORD=db.secret.pw.007
+      - POSTGRES_USER=midpoint
+      - POSTGRES_INITDB_ARGS=--lc-collate=en_US.utf8 --lc-ctype=en_US.utf8
+    networks: [net]
+    volumes:
+      - mp_data:/var/lib/postgresql/data
+    # PostgreSQL is intentionally not published on the host (use `compose exec
+    # mp_data psql ...` for inspection) so concurrent test rigs don't clash.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U midpoint"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # One-shot: create the native PostgreSQL repository + audit schema if absent.
+  data_init:
+    image: evolveum/midpoint:${MP_VER:-4.10.3}
+    command: >
+      bash -c "
+      cd /opt/midpoint ;
+      bin/midpoint.sh init-native ;
+      echo ' - - - - - - ' ;
+      bin/ninja.sh -B info >/dev/null 2>/tmp/ninja.log ;
+      grep -q \"ERROR\" /tmp/ninja.log && (
+      bin/ninja.sh run-sql --create --mode REPOSITORY  ;
+      bin/ninja.sh run-sql --create --mode AUDIT
+      ) ||
+      echo -e '\\n Repository init is not needed...' ;
+      "
+    depends_on:
+      mp_data:
+        condition: service_healthy
+    environment:
+      - MP_SET_midpoint_repository_jdbcUsername=midpoint
+      - MP_SET_midpoint_repository_jdbcPassword=db.secret.pw.007
+      - MP_SET_midpoint_repository_jdbcUrl=jdbc:postgresql://mp_data:5432/midpoint
+      - MP_SET_midpoint_repository_database=postgresql
+      - MP_INIT_CFG=/opt/midpoint/var
+    networks: [net]
+    volumes:
+      - mp_home:/opt/midpoint/var
+
+  mp_server:
+    image: evolveum/midpoint:${MP_VER:-4.10.3}
+    depends_on:
+      data_init:
+        condition: service_completed_successfully
+      mp_data:
+        condition: service_healthy
+    command: ["/opt/midpoint/bin/midpoint.sh", "container"]
+    ports:
+      - "${MP_PORT:-12080}:8080"
+    environment:
+      - MP_SET_midpoint_administrator_initialPassword=T3stPw890uio
+      - MP_SET_midpoint_repository_jdbcUsername=midpoint
+      - MP_SET_midpoint_repository_jdbcPassword=db.secret.pw.007
+      - MP_SET_midpoint_repository_jdbcUrl=jdbc:postgresql://mp_data:5432/midpoint
+      - MP_SET_midpoint_repository_database=postgresql
+      - MP_UNSET_midpoint_repository_hibernateHbm2ddl=1
+      - MP_NO_ENV_COMPAT=1
+    networks: [net]
+    volumes:
+      - mp_home:/opt/midpoint/var
+
+networks:
+  net:
+    driver: bridge
+
+volumes:
+  mp_data:
+  mp_home:
