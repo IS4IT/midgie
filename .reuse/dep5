@@ -10,6 +10,7 @@ Files:
  README.md
  DESIGN.md
  CLAUDE.md
+ TODO.md
  docker/README.md
  examples/*.xml
  src/test/resources/*
