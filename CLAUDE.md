@@ -35,9 +35,13 @@ mvn -q test
 
 - **Base-schema version coupling.** The `midpoint-schema` jar carries the *compile-time* base object
   model, so it must match the target midPoint's major line. It is pinned by `<midpoint.version>` in
-  `pom.xml` (default `4.10.3`). Targeting another midPoint version = bump that property and rebuild. You
-  cannot feed the base schema in as XML; only *extension* schema is runtime-loadable (`--schema-dir` /
-  `--schema` / live-read). See DESIGN.md "Schema".
+  `pom.xml` (default `4.10.3`). Targeting another midPoint version = bump that property **and** `MP_VER`
+  in `docker/.env`, then rebuild. Two guards enforce this: the build fails (maven-antrun in the `validate`
+  phase) if `docker/.env`'s `MP_VER` drifts from `<midpoint.version>`, and at runtime the live modes warn
+  if the server's version (read via `GET /nodes`) is a different major line than the bundled schema
+  (`VersionSupport`, using the filtered `build-info.properties`). You cannot feed the base schema in as
+  XML; only *extension* schema is runtime-loadable (`--schema-dir` / `--schema` / live-read). See
+  DESIGN.md "Schema".
 
 - **License is EUPL-1.2, not MIT/Apache.** This links `midpoint-schema` (EUPL). A derived work must stay
   EUPL-compatible. Do not relicense.

@@ -19,9 +19,13 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.evolveum.midpoint.prism.PrismContext;
+import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
+
 import picocli.CommandLine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -123,6 +127,19 @@ class LiveIntegrationTest {
         CliResult diff = run("diff", desired.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--format", "summary");
         assertEquals(0, diff.exit, diff.err); // 0 == no differences
         assertTrue(diff.out.contains("No differences"), "expected 'No differences', got: " + diff.out);
+    }
+
+    @Test
+    void liveVersionIsReadableAndMatchesTheBundledSchemaLine() throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+
+        PrismContext prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
+        String live = VersionSupport.liveVersion(prismContext, client);
+
+        assertNotNull(live, "should read the server version from GET /nodes");
+        assertTrue(VersionSupport.sameMajorLine(live, VersionSupport.compileTimeVersion()),
+                "rig version " + live + " should share a major line with the bundled schema "
+                        + VersionSupport.compileTimeVersion() + " (the rig is pinned to the same MP_VER)");
     }
 
     // --- helpers ---

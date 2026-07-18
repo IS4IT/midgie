@@ -85,6 +85,9 @@ public class DiffCommand implements Callable<Integer> {
 
         try {
             PrismContext prismContext = schemaOptions.buildContext(live ? client : null);
+            if (live) {
+                VersionSupport.warnIfMismatch(prismContext, client);
+            }
 
             PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
             PrismObject<? extends Objectable> current = live

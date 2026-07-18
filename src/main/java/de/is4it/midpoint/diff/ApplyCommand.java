@@ -88,6 +88,7 @@ public class ApplyCommand implements Callable<Integer> {
 
         try {
             PrismContext prismContext = schemaOptions.buildContext(client);
+            VersionSupport.warnIfMismatch(prismContext, client);
             PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
             LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);
 

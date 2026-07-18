@@ -27,7 +27,7 @@ name: midpoint_diff
 services:
 
   mp_data:
-    image: postgres:${PG_VER:-17}-alpine
+    image: postgres:${PG_VER}-alpine
     environment:
       - POSTGRES_PASSWORD=db.secret.pw.007
       - POSTGRES_USER=midpoint
@@ -45,7 +45,7 @@ services:
 
   # One-shot: create the native PostgreSQL repository + audit schema if absent.
   data_init:
-    image: evolveum/midpoint:${MP_VER:-4.10.3}
+    image: evolveum/midpoint:${MP_VER}
     command: >
       bash -c "
       cd /opt/midpoint ;
@@ -72,7 +72,7 @@ services:
       - mp_home:/opt/midpoint/var
 
   mp_server:
-    image: evolveum/midpoint:${MP_VER:-4.10.3}
+    image: evolveum/midpoint:${MP_VER}
     depends_on:
       data_init:
         condition: service_completed_successfully
