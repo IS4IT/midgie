@@ -5,6 +5,7 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -55,6 +56,7 @@ public final class MidpointRestClient {
     /** Timeout / retry / TLS knobs for the client (fluent setters; sensible defaults). */
     public static final class Config {
         private boolean insecure;
+        private File caCert;
         private Duration connectTimeout = Duration.ofSeconds(10);
         private Duration requestTimeout = Duration.ofSeconds(30);
         private int maxRetries;
@@ -62,6 +64,11 @@ public final class MidpointRestClient {
 
         public Config insecure(boolean value) {
             this.insecure = value;
+            return this;
+        }
+
+        public Config caCert(File value) {
+            this.caCert = value;
             return this;
         }
 
@@ -116,7 +123,12 @@ public final class MidpointRestClient {
 
         HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(config.connectTimeout);
         if (config.insecure) {
+            // "insecure" must mean insecure: trust any cert AND skip hostname verification. The latter
+            // is only honoured by java.net.http via this system property.
+            System.setProperty("jdk.internal.httpclient.disableHostnameVerification", "true");
             builder.sslContext(trustAllSslContext());
+        } else if (config.caCert != null) {
+            builder.sslContext(caCertSslContext(config.caCert));
         }
         this.httpClient = builder.build();
     }
@@ -194,7 +206,7 @@ public final class MidpointRestClient {
                 HttpResponse<String> response =
                         httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
                 int status = response.statusCode();
-                if (status == 503 && retryable && attempt < maxRetries) {
+                if (isTransient(status) && retryable && attempt < maxRetries) {
                     backoff(attempt++);
                     continue;
                 }
@@ -218,6 +230,11 @@ public final class MidpointRestClient {
                 throw new IOException(what + " was interrupted", e);
             }
         }
+    }
+
+    /** Server-unavailable statuses worth retrying: 503, plus 502/504 from a proxy (e.g. midPoint starting). */
+    private static boolean isTransient(int status) {
+        return status == 502 || status == 503 || status == 504;
     }
 
     /** Sleep for {@code retryBaseDelay * 2^attempt}, capped, before the next attempt. */
@@ -276,6 +293,32 @@ public final class MidpointRestClient {
         }
         String trimmed = body.strip();
         return "\n" + (trimmed.length() > 800 ? trimmed.substring(0, 800) + " …" : trimmed);
+    }
+
+    /** SSLContext that trusts exactly the CA certificate(s) in {@code caCertFile} (proper verification). */
+    private static SSLContext caCertSslContext(File caCertFile) {
+        try (java.io.InputStream in = new java.io.FileInputStream(caCertFile)) {
+            java.security.cert.CertificateFactory cf =
+                    java.security.cert.CertificateFactory.getInstance("X.509");
+            java.util.Collection<? extends java.security.cert.Certificate> certs = cf.generateCertificates(in);
+            if (certs.isEmpty()) {
+                throw new IllegalStateException("no certificates found");
+            }
+            java.security.KeyStore keyStore = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType());
+            keyStore.load(null, null);
+            int index = 0;
+            for (java.security.cert.Certificate cert : certs) {
+                keyStore.setCertificateEntry("ca-" + index++, cert);
+            }
+            javax.net.ssl.TrustManagerFactory tmf = javax.net.ssl.TrustManagerFactory
+                    .getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(keyStore);
+            SSLContext context = SSLContext.getInstance("TLS");
+            context.init(null, tmf.getTrustManagers(), new SecureRandom());
+            return context;
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not load --cacert " + caCertFile + ": " + e.getMessage(), e);
+        }
     }
 
     private static SSLContext trustAllSslContext() {

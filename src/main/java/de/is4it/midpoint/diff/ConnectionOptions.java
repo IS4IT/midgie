@@ -52,8 +52,12 @@ public final class ConnectionOptions {
     String oid;
 
     @Option(names = "--insecure",
-            description = "Trust any TLS certificate (for self-signed https midPoint servers).")
+            description = "Trust any TLS certificate and skip hostname verification (self-signed https servers).")
     boolean insecure;
+
+    @Option(names = "--cacert", paramLabel = "FILE",
+            description = "Verify the server's TLS certificate against this CA certificate (PEM).")
+    File caCert;
 
     @Option(names = "--timeout", paramLabel = "SECONDS", defaultValue = "30",
             description = "Per-request timeout in seconds (default 30).")
@@ -87,8 +91,12 @@ public final class ConnectionOptions {
         return (userOption != null) ? userOption : System.getenv("MIDPOINT_USER");
     }
 
-    /** Build a REST client, or print an error and return {@code null} if user/password can't be resolved. */
+    /** Build a REST client, or print an error and return {@code null} if the connection args are invalid. */
     public MidpointRestClient newClient() {
+        if (insecure && caCert != null) {
+            System.err.println("midpoint-diff: use either --insecure or --cacert, not both.");
+            return null;
+        }
         String user = user();
         if (user == null) {
             System.err.println("midpoint-diff: live mode needs a user (--user or MIDPOINT_USER).");
@@ -100,6 +108,7 @@ public final class ConnectionOptions {
         }
         MidpointRestClient.Config config = new MidpointRestClient.Config()
                 .insecure(insecure)
+                .caCert(caCert)
                 .requestTimeout(java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds)))
                 .maxRetries(retries);
         return new MidpointRestClient(host(), user, password, config);

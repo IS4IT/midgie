@@ -1,0 +1,42 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+#
+# Overlay on docker-compose.yml that adds a TLS reverse proxy (nginx, 8443) in front of the plain-HTTP
+# midPoint, plus a midpoint-diff client container that runs the TLS smoke tests against it. The base
+# midPoint (mp_server, HTTP 8080) is untouched, so the HTTP integration tests keep working.
+#
+# Run (from the repo root):
+#   docker/tls/run.sh
+# or manually:
+#   mvn package && docker/tls/gen-certs.sh
+#   docker compose -f docker/docker-compose.yml -f docker/compose.tls.yml up --build \
+#       --abort-on-container-exit --exit-code-from mp_diff
+
+services:
+
+  # TLS front door: serves 8443 with the private-CA-signed cert, proxies to the HTTP midPoint.
+  mp_tls:
+    build:
+      context: ./tls
+      dockerfile: Dockerfile.nginx
+    depends_on:
+      mp_server:
+        condition: service_started
+    networks:
+      net:
+        aliases:
+          - mp-tls     # in the cert SAN — cacert verification succeeds
+          - mp-other   # NOT in the SAN — used to prove hostname verification / --insecure bypass
+    ports:
+      - "12443:8443"   # optional: reach the TLS endpoint from the host for manual debugging
+
+  # The client under test: runs docker/tls/run-tls-tests.sh, then exits with the result.
+  mp_diff:
+    build:
+      context: ..
+      dockerfile: docker/tls/Dockerfile.client
+    depends_on:
+      mp_tls:
+        condition: service_started
+    networks: [net]

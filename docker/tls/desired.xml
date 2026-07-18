@@ -1,0 +1,5 @@
+<user xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      oid="00000000-0000-0000-0000-000000000002">
+  <name>administrator</name>
+  <fullName>TLS Test</fullName>
+</user>

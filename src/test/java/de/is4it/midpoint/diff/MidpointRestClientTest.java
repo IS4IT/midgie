@@ -19,6 +19,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -176,6 +177,18 @@ class MidpointRestClientTest {
 
         IOException ex = assertThrows(IOException.class, () -> impatient.getObject("users", "slow"));
         assertTrue(ex.getMessage().contains("timed out"), ex.getMessage());
+    }
+
+    @Test
+    void cacertLoadsAValidCaCertificate() {
+        assertDoesNotThrow(() -> clientWith(new MidpointRestClient.Config()
+                .caCert(new java.io.File("src/test/resources/tls/test-ca.crt"))));
+    }
+
+    @Test
+    void cacertRejectsAnUnreadableOrNonCertFile() {
+        assertThrows(IllegalStateException.class, () -> clientWith(new MidpointRestClient.Config()
+                .caCert(new java.io.File("/no/such/cacert.pem"))));
     }
 
     // --- stub server ---

@@ -76,8 +76,11 @@ Connection details default from `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PAS
 password off the command line (it leaks into `ps` and shell history), resolve it — in order — from
 `--password`, `--password-env <VAR>`, `--password-file <FILE>`, `MIDPOINT_PASSWORD`, or an interactive
 prompt. REST failures carry an actionable hint (401 auth, 403 authz, connection refused). `--timeout`
-sets the per-request timeout; `--retries <n>` retries idempotent reads on 503 / connection-refused /
-timeout with exponential backoff (rides out a server that is still starting).
+sets the per-request timeout; `--retries <n>` retries idempotent reads on 502/503/504 / connection-refused
+/ timeout with exponential backoff (rides out a server that is still starting). For https, `--cacert <FILE>`
+verifies the server against a CA certificate; `--insecure` trusts any cert and skips hostname verification.
+The `docker/tls/` rig (an nginx TLS proxy in front of midPoint + a client container) exercises these
+end-to-end.
 
 ## Strategy flags
 

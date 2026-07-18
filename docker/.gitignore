@@ -1,1 +1,7 @@
 .DS_Store
+
+# Generated TLS test certs (recreate with tls/gen-certs.sh)
+tls/*.key
+tls/*.crt
+tls/*.csr
+tls/*.srl

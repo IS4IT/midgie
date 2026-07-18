@@ -12,9 +12,12 @@ Files:
  CLAUDE.md
  TODO.md
  docker/README.md
+ docker/tls/README.md
+ docker/tls/desired.xml
  examples/*.xml
  src/test/resources/*
  src/test/resources/schema/*
  src/test/resources/golden/*
+ src/test/resources/tls/*
 Copyright: 2026 IS4IT
 License: EUPL-1.2
