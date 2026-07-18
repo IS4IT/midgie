@@ -126,8 +126,11 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 
 - stdout: `ObjectModificationType` XML (default), or `--format summary` for a human-readable list of
   changed paths.
-- exit `0` = no differences · `1` = differences found (drift) · `2` = error. Lets CI gate on drift
-  without parsing output.
+- Exit-code contract (lets CI gate on drift without parsing output):
+  - `diff` and `apply --dry-run`: `0` = no differences · `1` = differences found / would change · `2` = error.
+  - `apply` (real write): `0` = success (applied, created, already in sync, or user-declined) · `2` = error.
+- `--quiet` / `-q` drops advisory notes/warnings and (for `apply`) status lines, keeping the delta payload,
+  error messages, and the exit code — for clean pipeline output.
 
 ## Packaging & license
 

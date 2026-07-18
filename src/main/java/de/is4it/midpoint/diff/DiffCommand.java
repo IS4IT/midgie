@@ -58,6 +58,10 @@ public class DiffCommand implements Callable<Integer> {
             description = "xml: ObjectModificationType. summary: human-readable changed-path list.")
     String format;
 
+    @Option(names = {"--quiet", "-q"},
+            description = "Suppress advisory notes/warnings; keep the delta output, errors, and exit code.")
+    boolean quiet;
+
     @Override
     public Integer call() {
         StrategyOptions.Resolved strategy = strategyOptions.resolve();
@@ -85,7 +89,7 @@ public class DiffCommand implements Callable<Integer> {
 
         try {
             PrismContext prismContext = schemaOptions.buildContext(live ? client : null);
-            if (live) {
+            if (live && !quiet) {
                 VersionSupport.warnIfMismatch(prismContext, client);
             }
 
@@ -98,9 +102,11 @@ public class DiffCommand implements Callable<Integer> {
                     .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
 
             // Merge notes go to stderr so stdout stays a clean PATCH body.
-            for (String path : result.mergeFallbackPaths()) {
-                System.err.println("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
-                        + "merge does not apply there, so it was left as replace.");
+            if (!quiet) {
+                for (String path : result.mergeFallbackPaths()) {
+                    System.err.println("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
+                            + "merge does not apply there, so it was left as replace.");
+                }
             }
 
             if ("summary".equalsIgnoreCase(format)) {

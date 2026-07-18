@@ -25,6 +25,7 @@ import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 import picocli.CommandLine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -116,6 +117,41 @@ class LiveIntegrationTest {
     }
 
     @Test
+    void dryRunGatesViaExitCodeAndQuietSuppressesChatter(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteTestUser();
+
+        // create-if-absent --dry-run on a missing object -> would change -> exit 1, and it stays absent.
+        File v1 = writeUser(dir, "v1", "Dry One");
+        CliResult dryCreate = run("apply", v1.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--create-if-absent", "--dry-run");
+        assertEquals(1, dryCreate.exit, dryCreate.err);
+        assertFalse(testUserExists(), "dry-run must not create the object");
+
+        // create it for real, then dry-run a change -> would change -> exit 1, delta printed, not applied.
+        run("apply", v1.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        File v2 = writeUser(dir, "v2", "Dry Two");
+        CliResult dryPatch = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--dry-run", "--format", "summary");
+        assertEquals(1, dryPatch.exit, dryPatch.err);
+        assertTrue(dryPatch.out.contains("replace fullName"), "dry-run prints the delta, got: " + dryPatch.out);
+        assertTrue(dryPatch.err.contains("NOT applied"), "advisory note expected without --quiet");
+        assertTrue(client.getObject("users", TEST_OID).contains("Dry One"), "dry-run must not change the object");
+
+        // same dry-run with --quiet -> exit 1, delta still on stdout, but no advisory note on stderr.
+        CliResult dryQuiet = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--dry-run", "--format", "summary", "--quiet");
+        assertEquals(1, dryQuiet.exit, dryQuiet.err);
+        assertTrue(dryQuiet.out.contains("replace fullName"), "quiet keeps the delta payload");
+        assertFalse(dryQuiet.err.contains("NOT applied"), "quiet suppresses the advisory note, got: " + dryQuiet.err);
+
+        // apply for real, then dry-run again -> in sync -> exit 0.
+        run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        CliResult drySync = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        assertEquals(0, drySync.exit, drySync.err);
+    }
+
+    @Test
     void diffHostAgainstUnchangedObjectReportsNoDrift(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
 
@@ -147,6 +183,15 @@ class LiveIntegrationTest {
     private static boolean reachable() {
         try {
             client.getObject("users", ADMIN_OID);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean testUserExists() {
+        try {
+            client.getObject("users", TEST_OID);
             return true;
         } catch (Exception e) {
             return false;

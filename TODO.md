@@ -9,9 +9,9 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] **Show the delta before applying** — the change summary is echoed to stderr before the prompt.
 - [x] **`--create-if-absent` strips operational cruft** — `createBody` runs `removeOperationalItems()` before POST, so metadata/operational items copied from a live GET are not sent.
 
-## B. CI / exit-code semantics
-- [ ] ⭐ **`--dry-run` exits 1 on drift / 0 in sync** — currently always 0, so CI can't gate on "would this change anything?".
-- [ ] **Documented, stable exit-code contract** (0/1/2) across `diff`/`apply`, plus a `--quiet` mode for clean pipeline output.
+## B. CI / exit-code semantics — done
+- [x] ⭐ **`--dry-run` exits 1 on drift / 0 in sync** — `apply --dry-run` now gates like `diff` (1 = would create/patch, 0 = in sync, 2 = error).
+- [x] **Documented, stable exit-code contract** (DESIGN.md "Output & exit codes") across `diff`/`apply`, plus a `--quiet`/`-q` mode that drops advisory/status output while keeping the delta payload, errors, and exit code.
 
 ## C. Credentials & connection
 - [ ] ⭐ **Keep the password off the CLI** — `--password-env VAR`, `--password-file`, or an interactive prompt; `-p` leaks into `ps` and shell history.

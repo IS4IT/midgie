@@ -27,9 +27,13 @@ import picocli.CommandLine.Parameters;
  * object is created via {@code POST} (operational/metadata items stripped first).
  *
  * <p>Because {@code apply} mutates a live server, it confirms before writing: it prompts interactively,
- * or, in a non-interactive session, refuses unless {@code --yes} is given. {@code --dry-run} prints the
- * delta and changes nothing (no prompt). Idempotent: when the object already matches, nothing is sent.
- * Exit codes: {@code 0} = success (applied, created, in sync, or user-declined), {@code 2} = error.
+ * or, in a non-interactive session, refuses unless {@code --yes} is given. Idempotent: when the object
+ * already matches, nothing is sent.
+ *
+ * <p>Exit codes: {@code 2} = error. A real apply returns {@code 0} on success (applied, created, in sync,
+ * or user-declined). {@code --dry-run} changes nothing and gates like {@code diff}: {@code 0} when already
+ * in sync, {@code 1} when it would change something (create or patch). {@code --quiet} drops status and
+ * advisory messages, keeping the delta output, errors, and exit code.
  */
 @Command(
         name = "apply",
@@ -60,12 +64,16 @@ public class ApplyCommand implements Callable<Integer> {
     boolean createIfAbsent;
 
     @Option(names = "--dry-run",
-            description = "Compute and print the delta but do not send it.")
+            description = "Compute and print the delta but do not send it. Exits 1 if it would change anything.")
     boolean dryRun;
 
     @Option(names = {"--yes", "-y"},
             description = "Apply without the interactive confirmation prompt (required in non-interactive use).")
     boolean assumeYes;
+
+    @Option(names = {"--quiet", "-q"},
+            description = "Suppress status and advisory messages; keep the delta output, errors, and exit code.")
+    boolean quiet;
 
     @Option(names = "--format", paramLabel = "xml|summary", defaultValue = "xml",
             description = "Dry-run output format. xml: ObjectModificationType. summary: changed-path list.")
@@ -88,7 +96,9 @@ public class ApplyCommand implements Callable<Integer> {
 
         try {
             PrismContext prismContext = schemaOptions.buildContext(client);
-            VersionSupport.warnIfMismatch(prismContext, client);
+            if (!quiet) {
+                VersionSupport.warnIfMismatch(prismContext, client);
+            }
             PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
             LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);
 
@@ -111,19 +121,18 @@ public class ApplyCommand implements Callable<Integer> {
                     + " does not exist. Pass --create-if-absent to create it.");
             return EXIT_ERROR;
         }
-        System.err.println("midpoint-diff: " + target.restType + "/" + target.oid
+        note("midpoint-diff: " + target.restType + "/" + target.oid
                 + " does not exist; will create it from " + desiredFile.getName() + ".");
         if (dryRun) {
-            System.err.println("midpoint-diff: dry run — nothing created.");
-            return 0;
+            note("midpoint-diff: dry run — would create " + target.restType + "/" + target.oid + " (not created).");
+            return 1; // would change
         }
         Integer stop = confirmOrExit("Create " + target.restType + "/" + target.oid + "?");
         if (stop != null) {
             return stop;
         }
         String createdOid = client.createObject(target.restType, createBody(prismContext, desired));
-        System.out.println("Created " + target.restType + "/"
-                + (createdOid != null ? createdOid : target.oid) + ".");
+        status("Created " + target.restType + "/" + (createdOid != null ? createdOid : target.oid) + ".");
         return 0;
     }
 
@@ -136,31 +145,31 @@ public class ApplyCommand implements Callable<Integer> {
                 .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
 
         for (String path : result.mergeFallbackPaths()) {
-            System.err.println("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
+            note("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
                     + "merge does not apply there, so it was left as replace.");
         }
 
         if (!result.hasDrift()) {
-            System.out.println("No changes: " + target.restType + "/" + target.oid + " already matches desired.");
+            status("No changes: " + target.restType + "/" + target.oid + " already matches desired.");
             return 0;
         }
 
         int changes = result.delta().getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
         if (dryRun) {
+            // The delta is dry-run's payload — printed even under --quiet (redirect stdout to silence it).
             System.out.println("summary".equalsIgnoreCase(format)
                     ? DeltaOutput.toSummary(result.delta())
                     : modificationXml);
-            System.err.println("midpoint-diff: dry run — " + changes + " change(s) NOT applied to "
+            note("midpoint-diff: dry run — " + changes + " change(s) NOT applied to "
                     + target.restType + "/" + target.oid + ".");
-            return 0;
+            return 1; // would change
         }
 
         // Show what will change (stderr, so stdout stays the status line) then confirm.
-        System.err.println("midpoint-diff: will apply " + changes + " change(s) to "
-                + target.restType + "/" + target.oid + ":");
+        note("midpoint-diff: will apply " + changes + " change(s) to " + target.restType + "/" + target.oid + ":");
         for (String line : DeltaOutput.toSummary(result.delta()).split("\n")) {
-            System.err.println("  " + line);
+            note("  " + line);
         }
         Integer stop = confirmOrExit("Apply " + changes + " change(s) to " + target.restType + "/" + target.oid + "?");
         if (stop != null) {
@@ -168,7 +177,7 @@ public class ApplyCommand implements Callable<Integer> {
         }
 
         client.patchObject(target.restType, target.oid, modificationXml);
-        System.out.println("Applied " + changes + " change(s) to " + target.restType + "/" + target.oid + ".");
+        status("Applied " + changes + " change(s) to " + target.restType + "/" + target.oid + ".");
         return 0;
     }
 
@@ -220,5 +229,19 @@ public class ApplyCommand implements Callable<Integer> {
         }
         String normalized = (answer == null) ? "" : answer.trim().toLowerCase();
         return (normalized.equals("y") || normalized.equals("yes")) ? Confirmation.PROCEED : Confirmation.ABORTED;
+    }
+
+    /** Status line (stdout); suppressed under {@code --quiet}. */
+    private void status(String message) {
+        if (!quiet) {
+            System.out.println(message);
+        }
+    }
+
+    /** Advisory line (stderr); suppressed under {@code --quiet}. */
+    private void note(String message) {
+        if (!quiet) {
+            System.err.println(message);
+        }
     }
 }
