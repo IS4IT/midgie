@@ -33,7 +33,7 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 
 ## F. Packaging / docs / release
 - [ ] ⭐ **Update the root `README.md`** — it still says *"early scaffold, the diff engine is being implemented"*; rewrite with real usage + the full flag reference.
-- [ ] **Dynamic version** — inject the pom version into the manifest (`Main` hardcodes `0.1.0`); have `--version` also print the bundled `midpoint-schema` (target midPoint line).
+- [x] **Dynamic version** — `--version` reads the pom `project.version` from the filtered `build-info.properties` (no more hardcoded `0.1.0`) and also prints the bundled midPoint schema line, via a picocli `VersionProvider`.
 - [ ] **CI workflow** — GitHub Actions running `mvn test` (offline-green); optionally provision the rig for the live tests.
 - [ ] **CHANGELOG + a tagged release; suppress/document the classgraph `Unsafe` startup warnings.**
 

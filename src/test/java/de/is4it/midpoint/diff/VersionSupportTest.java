@@ -35,4 +35,12 @@ class VersionSupportTest {
         assertFalse(version.contains("$"), "the ${midpoint.version} token must be filtered, got: " + version);
         assertTrue(version.matches("\\d+\\.\\d+.*"), "should look like a version, got: " + version);
     }
+
+    @Test
+    void projectVersionIsFilteredIntoTheJar() {
+        String version = VersionSupport.projectVersion();
+        assertNotNull(version, "build-info.properties must be on the classpath");
+        assertFalse(version.contains("$"), "the ${project.version} token must be filtered, got: " + version);
+        assertTrue(version.matches("\\d+\\.\\d+.*"), "should look like a version, got: " + version);
+    }
 }

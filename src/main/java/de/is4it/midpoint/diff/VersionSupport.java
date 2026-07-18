@@ -27,13 +27,22 @@ final class VersionSupport {
 
     /** The {@code <midpoint.version>} the schema jar was built against, embedded via build-info.properties. */
     static String compileTimeVersion() {
+        return buildProperty("midpoint.version");
+    }
+
+    /** This tool's own version (the pom {@code project.version}), embedded via build-info.properties. */
+    static String projectVersion() {
+        return buildProperty("project.version");
+    }
+
+    private static String buildProperty(String key) {
         try (InputStream in = VersionSupport.class.getResourceAsStream("/build-info.properties")) {
             if (in == null) {
                 return null;
             }
             Properties props = new Properties();
             props.load(in);
-            return blankToNull(props.getProperty("midpoint.version"));
+            return blankToNull(props.getProperty(key));
         } catch (IOException e) {
             return null;
         }

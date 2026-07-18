@@ -38,6 +38,7 @@ import picocli.CommandLine.Parameters;
 @Command(
         name = "apply",
         mixinStandardHelpOptions = true,
+        versionProvider = VersionProvider.class,
         description = "Reconcile a live midPoint object to the desired state (diff, then PATCH/POST)."
 )
 public class ApplyCommand implements Callable<Integer> {

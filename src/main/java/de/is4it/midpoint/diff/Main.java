@@ -18,7 +18,7 @@ import picocli.CommandLine.Command;
 @Command(
         name = "midpoint-diff",
         mixinStandardHelpOptions = true,
-        version = "midpoint-diff 0.1.0",
+        versionProvider = VersionProvider.class,
         description = "Schema-aware diff of midPoint objects into an itemDelta (ObjectModificationType).",
         subcommands = { DiffCommand.class, ApplyCommand.class }
 )

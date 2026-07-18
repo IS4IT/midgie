@@ -29,6 +29,7 @@ import picocli.CommandLine.Parameters;
 @Command(
         name = "diff",
         mixinStandardHelpOptions = true,
+        versionProvider = VersionProvider.class,
         description = "Diff a desired object against the current one and emit the minimal itemDelta."
 )
 public class DiffCommand implements Callable<Integer> {
