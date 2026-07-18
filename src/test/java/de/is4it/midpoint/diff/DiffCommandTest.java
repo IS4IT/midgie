@@ -132,6 +132,22 @@ class DiffCommandTest {
         assertEquals("role-2", targetRefOid(replaceDelta.getValuesToDelete().iterator().next().getRealValue()));
     }
 
+    @Test
+    void equivalenceControlsMetadataSensitivity(@TempDir Path dir) throws Exception {
+        // Two roles identical except one carries operational <metadata>. Under scope=full so the
+        // metadata isn't dropped by scope filtering, real-value ignores it while data surfaces it.
+        File desired = write(dir, "desired.xml", role("same"));
+        File live = write(dir, "live.xml",
+                role("same", "  <metadata><createChannel>http://x#init</createChannel></metadata>\n"));
+
+        assertFalse(engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.FULL,
+                        DiffEngine.MultiValueStrategy.replaceAll()).hasDrift(),
+                "real-value must ignore operational metadata");
+        assertTrue(engine().diff(desired, live, EquivalenceStrategy.DATA, DiffEngine.Scope.FULL,
+                        DiffEngine.MultiValueStrategy.replaceAll()).hasDrift(),
+                "data must surface the metadata difference");
+    }
+
     // --- helpers ---
 
     private static DiffEngine engine() {

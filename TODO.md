@@ -37,6 +37,6 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [ ] **CI workflow** — GitHub Actions running `mvn test` (offline-green); optionally provision the rig for the live tests.
 - [ ] **CHANGELOG + a tagged release; suppress/document the classgraph `Unsafe` startup warnings.**
 
-## G. Test coverage gaps
-- [ ] **Command-layer offline tests** — bad flags → exit 2, format handling, `--host` vs LIVE mutual exclusion (today only the engine and the rig-gated tests exercise the command layer).
-- [ ] **Golden-file test** of the exact `ObjectModificationType` XML; more `scope=full` delete, `--path` parsing, and equivalence-mapping cases.
+## G. Test coverage gaps — done
+- [x] **Command-layer offline tests** — `CliTest` drives the real CLI offline: missing LIVE, `--host` vs LIVE exclusion, bad `--scope`/`--equivalence`/`--multivalue`/`--path`/`--format` → exit 2, `apply` without `--host`/password → exit 2, plus drift/no-drift exit codes.
+- [x] **Golden-file test** (`GoldenOutputTest`) pins the exact `ObjectModificationType` XML; equivalence metadata-sensitivity added to `DiffCommandTest` (`scope=full` delete already covered there).
