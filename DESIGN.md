@@ -35,7 +35,12 @@ PrismContext ctx = new MidPointPrismContextFactory().createInitializedPrismConte
 PrismObject<?> desired = ctx.parseObject(desiredFile);
 PrismObject<?> live    = ctx.parseObject(liveFile);          // file mode; or GET over REST in live mode
 
-ObjectDelta<?> delta   = desired.diff(live, EquivalenceStrategy.REAL_VALUE); // ignores metadata/operational
+// Direction matters: before.diff(after) yields the delta that, applied to `before`, produces `after`
+// (prism contract, proven by TestParseDiffPatch: userBefore.diff(userAfter) then applyTo(userBefore)
+// == userAfter). The emitted delta is the REST PATCH body applied to the LIVE server object to drive
+// it to the desired state, so it must transform live -> desired. Hence live.diff(desired), NOT the
+// reverse — desired.diff(live) would emit a PATCH that overwrites your config with the stale live value.
+ObjectDelta<?> delta   = live.diff(desired, EquivalenceStrategy.REAL_VALUE); // ignores metadata/operational
 ObjectModificationType mod = DeltaConvertor.toObjectModificationType(delta); // == the REST PATCH body
 ```
 
@@ -46,7 +51,7 @@ Confirmed API facts (source references are into `/Volumes/Daten/git/midpoint`):
 | `MidPointPrismContextFactory` | `com.evolveum.midpoint.schema.MidPointPrismContextFactory` — ctors `()` and `(File extraSchemaDir)` (infra/schema:56, :60); `createInitializedPrismContext()` (infra/schema:179) throws `SchemaException, SAXException, IOException` |
 | `PrismContext.parseObject(File)` | returns `PrismObject<T>` (see `TestParsePasswordPolicy`, `TestParseGenericObject`). Modern form: `ctx.parserFor(file).xml().parse()` |
 | `PrismObject.diff(other, EquivalenceStrategy)` | returns `ObjectDelta<T>` (`com.evolveum.midpoint.prism.delta.ObjectDelta`); see `TestDiffEquals:456` |
-| `EquivalenceStrategy.REAL_VALUE` | ignores operational/metadata items — the default for config diffing (proven in `TestParseDiffPatch`). `REAL_VALUE_CONSIDER_DIFFERENT_IDS` and `ParameterizedEquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS` control container-value matching (id vs natural key) — the primitives for merge-by-key |
+| `EquivalenceStrategy.REAL_VALUE` | ignores operational/metadata items **and container ids** — the default for config diffing (proven in `TestParseDiffPatch`). The `_CONSIDER_DIFFERENT_IDS[_NATURAL_KEYS]` variants turn container-id / natural-key matching **on**, which makes the diff *pair* multi-valued entries and edit them in place; id-agnostic plain `REAL_VALUE` instead emits clean whole-value add/delete. Merge defaults to plain `REAL_VALUE` for that reason (see "Strategy flags"); the id-considering variants are still selectable via `--equivalence` for exploration, with a warning |
 | `DeltaConvertor.toObjectModificationType(ObjectDelta)` | `com.evolveum.midpoint.schema.DeltaConvertor` (infra/schema:237) → `com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType`. Also `toObjectDeltaType` (:259) and `toItemDeltaTypes` (:429) |
 | `Item.diffModifications(other, strategy)` | returns `List<ItemDelta>` — useful for a **scoped** per-item diff (see `TestDiffEquals:565`) |
 
@@ -74,11 +79,28 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   desired XML (managed = present; items absent from the desired object are left alone → preserves
   accumulated state). *full*: full-replace semantics (also removes items missing from desired).
 - `--multivalue replace|merge` (default **replace**), plus per-path `--path <itemPath>=merge|replace` —
-  *replace*: the desired container values are authoritative. *merge*: union — add desired values by key,
-  keep the rest. Merge needs a stable value key (container id or natural key → use
-  `REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS`); items without a key fall back to replace.
-- `--equivalence real-value|literal|data` (default **real-value**) — controls metadata/operational
-  sensitivity of the diff.
+  *replace*: the desired container values are authoritative (live-only values are removed). *merge*: union
+  by content — merge is designed for and defaults to `REAL_VALUE` (values matched by real content, ids
+  ignored), keeps the additions, and drops the deletion of live-only values so accrued runtime state
+  survives. Caveats: an in-place edit of a managed value reads as "old value kept + new value added" (keep
+  that path on *replace* if you want a true in-place update); a single-valued item, or any item that diffs
+  to a whole-value replace, cannot merge and is left as replace (noted on stderr).
+- `--equivalence real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal`
+  (default **real-value**), loosest to strictest — the value-equivalence test that decides what counts as
+  drift and how entries are matched:
+  - *real-value* — ignores container ids, metadata, operational items, element names, ns prefixes, ref
+    filters/options. The config-diff default (no churn from midPoint's own bookkeeping).
+  - *consider-different-ids* — as *real-value*, but PCV ids must not contradict (pairs/edits entries by id).
+  - *natural-keys* — as *consider-different-ids*, plus container natural keys. Maps to
+    `REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS`; prism-`@Experimental`, so it prints a note on stderr
+    when used. Exposed for exploration against a real server.
+  - *ignore-metadata* — ignores metadata/operational/ids, but keeps element names and reference filters/options.
+  - *data* — full parsed data incl. metadata and exact ids; ignores only serialization noise (prefixes).
+  - *literal* — as *data*, but ns prefixes matter too (≈ comparing raw XML).
+
+  `merge` combined with any non-`real-value` strategy is allowed (for exploration) but **warns** on stderr:
+  the id-considering strategies pair values and edit them in place, so accrued values may be mutated
+  instead of preserved. Use `real-value` for a clean, id-agnostic union.
 
 ## Schema (two layers, two knobs)
 
