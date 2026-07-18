@@ -55,21 +55,31 @@ public final class DiffEngine {
     }
 
     /**
-     * Compute the reconciling delta between two object files.
-     *
-     * @param desiredFile the desired-state object XML (source of truth for managed items)
-     * @param liveFile    the current/live object XML
-     * @param strategy    equivalence strategy controlling metadata/operational sensitivity (used when
-     *                    no merge is active; merge forces key-aware container matching)
-     * @param scope       {@link Scope#PRESENT} to preserve unmanaged items, {@link Scope#FULL} for full replace
-     * @param multiValue  how multi-valued containers are treated (replace vs merge, with per-path overrides)
-     * @return the delta plus any paths where merge fell back to replace
+     * Compute the reconciling delta between two object files. Convenience overload that parses both
+     * files and delegates to {@link #diff(PrismObject, PrismObject, ParameterizedEquivalenceStrategy,
+     * Scope, MultiValueStrategy)}.
      */
     public DiffResult diff(File desiredFile, File liveFile, ParameterizedEquivalenceStrategy strategy,
             Scope scope, MultiValueStrategy multiValue) throws SchemaException, IOException {
+        return diff(prismContext.parseObject(desiredFile), prismContext.parseObject(liveFile),
+                strategy, scope, multiValue);
+    }
 
-        PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
-        PrismObject<? extends Objectable> live = prismContext.parseObject(liveFile);
+    /**
+     * Compute the reconciling delta between two already-parsed objects. Used directly by the live modes,
+     * where the live object arrives as XML from REST rather than a file.
+     *
+     * @param desired    the desired-state object (source of truth for managed items)
+     * @param live       the current/live object
+     * @param strategy   equivalence strategy controlling metadata/operational sensitivity (used when no
+     *                   merge is active; merge is designed for real-value content matching)
+     * @param scope      {@link Scope#PRESENT} to preserve unmanaged items, {@link Scope#FULL} for full replace
+     * @param multiValue how multi-valued containers are treated (replace vs merge, with per-path overrides)
+     * @return the delta plus any paths where merge fell back to replace
+     */
+    public DiffResult diff(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> live,
+            ParameterizedEquivalenceStrategy strategy, Scope scope, MultiValueStrategy multiValue)
+            throws SchemaException {
 
         Class<?> desiredType = desired.getCompileTimeClass();
         Class<?> liveType = live.getCompileTimeClass();

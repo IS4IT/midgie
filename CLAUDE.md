@@ -9,9 +9,12 @@ midPoint objects and emits the `ObjectModificationType` XML that midPoint's REST
 a thin wrapper around midPoint's own `PrismObject.diff`. **Read `DESIGN.md` first — it is the full,
 self-contained brief** (modes, flags, two-layer schema handling, output/exit codes, verification).
 
-Status: **scaffold only.** The picocli skeleton compiles and bootstraps the prism context; the diff
-engine itself is a TODO in `DiffCommand.java`. Build the offline `diff` core first (see DESIGN.md
-"Build order").
+Status: **offline core + live modes working.** `DiffEngine` computes the reconciling delta
+(`--scope`, `--multivalue`/`--path`, `--equivalence`); `diff` emits the `ObjectModificationType`
+(offline LIVE file or `--host` GET); `apply` reconciles a live object (`PATCH`, `--create-if-absent`
+`POST`, `--dry-run`, idempotent). All HTTP lives in `MidpointRestClient` — the engine stays REST-free.
+Verified against the `docker/` rig. **Not yet done:** live extension-schema read (`--schema` / reading
+`SchemaType` off the server); `--schema-dir` works, `--schema` is guarded. See DESIGN.md "Build order".
 
 ## Commands
 
