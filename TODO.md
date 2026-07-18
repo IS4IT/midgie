@@ -14,9 +14,9 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] **Documented, stable exit-code contract** (DESIGN.md "Output & exit codes") across `diff`/`apply`, plus a `--quiet`/`-q` mode that drops advisory/status output while keeping the delta payload, errors, and exit code.
 
 ## C. Credentials & connection
-- [ ] ⭐ **Keep the password off the CLI** — `--password-env VAR`, `--password-file`, or an interactive prompt; `-p` leaks into `ps` and shell history.
-- [ ] **Env-var config** — `MIDPOINT_URL` / `_USER` / `_PASSWORD` for CI convenience.
-- [ ] **Clearer REST errors** — map 401 / 403 / connection-refused to actionable messages instead of a generic "HTTP nnn" + body.
+- [x] ⭐ **Keep the password off the CLI** — resolved from `--password` → `--password-env VAR` → `--password-file FILE` → `MIDPOINT_PASSWORD` → interactive prompt.
+- [x] **Env-var config** — `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD` default the connection (an explicit LIVE file still wins over an env host, so file diffs aren't broken).
+- [x] **Clearer REST errors** — 401 (auth) / 403 (authz) / connection-refused / timeout carry an actionable hint; the best-effort schema-read stays quiet on 401/connection so the real error shows once.
 - [ ] **Configurable timeouts + retry/backoff** on 503 (server still starting) and transient blips; `--cacert`/truststore for real TLS verification (note: `--insecure` trusts the cert but not hostname mismatch).
 
 ## D. Correctness edges (each also wants a test)

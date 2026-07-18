@@ -81,13 +81,20 @@ public class DiffCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
 
-        boolean live = connectionOptions.isLive();
-        if (live && liveFile != null) {
-            System.err.println("midpoint-diff: provide either a LIVE file or --host, not both.");
-            return EXIT_ERROR;
-        }
-        if (!live && liveFile == null) {
-            System.err.println("midpoint-diff: offline diff needs a LIVE file, or use --host for live mode.");
+        // A LIVE file means offline; an explicit --host means live. A host inherited only from
+        // MIDPOINT_URL is a fallback that a LIVE file overrides (so an env var doesn't break file diffs).
+        boolean live;
+        if (liveFile != null) {
+            if (connectionOptions.isExplicitHost()) {
+                System.err.println("midpoint-diff: provide either a LIVE file or --host, not both.");
+                return EXIT_ERROR;
+            }
+            live = false;
+        } else if (connectionOptions.isLive()) {
+            live = true;
+        } else {
+            System.err.println("midpoint-diff: offline diff needs a LIVE file, "
+                    + "or set --host (or MIDPOINT_URL) for live mode.");
             return EXIT_ERROR;
         }
 

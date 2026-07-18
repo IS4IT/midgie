@@ -84,6 +84,27 @@ class MidpointRestClientTest {
     }
 
     @Test
+    void unauthorizedAndForbiddenCarryActionableHints() {
+        MidpointRestClient.RestException unauthorized = assertThrows(
+                MidpointRestClient.RestException.class, () -> client.getObject("users", "unauth"));
+        assertEquals(401, unauthorized.statusCode());
+        assertTrue(unauthorized.getMessage().contains("authentication failed"), unauthorized.getMessage());
+
+        MidpointRestClient.RestException forbidden = assertThrows(
+                MidpointRestClient.RestException.class, () -> client.getObject("users", "forbidden"));
+        assertEquals(403, forbidden.statusCode());
+        assertTrue(forbidden.getMessage().contains("not authorized"), forbidden.getMessage());
+    }
+
+    @Test
+    void connectionRefusedGivesAClearMessage() {
+        MidpointRestClient dead = new MidpointRestClient(
+                java.net.URI.create("http://127.0.0.1:1/midpoint"), "u", "p", false);
+        java.io.IOException ex = assertThrows(java.io.IOException.class, () -> dead.getObject("users", "x"));
+        assertTrue(ex.getMessage().contains("cannot connect"), ex.getMessage());
+    }
+
+    @Test
     void createReturnsOidFromLocationHeader() throws Exception {
         String oid = client.createObject("users", "<user/>");
 
@@ -112,6 +133,10 @@ class MidpointRestClientTest {
 
         if (lastPath.endsWith("/users/missing")) {
             respond(exchange, 404, "not found");
+        } else if (lastPath.endsWith("/users/unauth")) {
+            respond(exchange, 401, "unauthorized");
+        } else if (lastPath.endsWith("/users/forbidden")) {
+            respond(exchange, 403, "forbidden");
         } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users")) {
             exchange.getResponseHeaders().add("Location",
                     "http://127.0.0.1/midpoint/ws/rest/users/new-oid-123");

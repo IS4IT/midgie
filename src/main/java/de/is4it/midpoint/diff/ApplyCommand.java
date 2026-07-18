@@ -98,7 +98,7 @@ public class ApplyCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
         if (!connectionOptions.isLive()) {
-            System.err.println("midpoint-diff: apply needs a running server — pass --host (and --user/--password).");
+            System.err.println("midpoint-diff: apply needs a running server — pass --host (or set MIDPOINT_URL).");
             return EXIT_ERROR;
         }
         MidpointRestClient client = connectionOptions.newClient();

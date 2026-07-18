@@ -72,6 +72,11 @@ the midPoint source tree.
   the pending change and confirms first: it prompts interactively, or refuses in a non-interactive session
   unless `--yes`/`-y` is given. `--dry-run` prints the delta and changes nothing.
 
+Connection details default from `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD`. To keep the
+password off the command line (it leaks into `ps` and shell history), resolve it — in order — from
+`--password`, `--password-env <VAR>`, `--password-file <FILE>`, `MIDPOINT_PASSWORD`, or an interactive
+prompt. REST failures carry an actionable hint (401 auth, 403 authz, connection refused).
+
 ## Strategy flags
 
 The source XML stays **pure midPoint XML** — no custom in-XML annotations, so the same file still works

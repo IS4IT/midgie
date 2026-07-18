@@ -140,15 +140,35 @@ public final class MidpointRestClient {
         HttpResponse<String> response;
         try {
             response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (java.net.ConnectException e) {
+            throw new IOException(what + " — cannot connect to " + restBase
+                    + " (is the server up and the URL correct? " + e.getMessage() + ")", e);
+        } catch (java.net.http.HttpTimeoutException e) {
+            throw new IOException(what + " — timed out talking to " + restBase + " (" + e.getMessage() + ")", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException(what + " was interrupted", e);
         }
         int status = response.statusCode();
         if (status < 200 || status >= 300) {
-            throw new RestException(status, what + " failed: HTTP " + status + shortBody(response.body()));
+            throw new RestException(status,
+                    what + " failed: HTTP " + status + statusHint(status) + shortBody(response.body()));
         }
         return response;
+    }
+
+    /** Actionable hint for the common HTTP failures. */
+    private static String statusHint(int status) {
+        switch (status) {
+            case 401:
+                return " — authentication failed (check the user/password)";
+            case 403:
+                return " — not authorized (the user lacks permission for this operation)";
+            case 404:
+                return " — not found";
+            default:
+                return status >= 500 ? " — server error" : "";
+        }
     }
 
     private URI objectUri(String restType, String oid) {

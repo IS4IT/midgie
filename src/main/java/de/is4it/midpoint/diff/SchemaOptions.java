@@ -150,8 +150,24 @@ public final class SchemaOptions {
                 }
             }
         } catch (Exception e) {
+            if (isCredentialOrConnectionFailure(e)) {
+                return; // the caller's object fetch reports the same failure with a clear message
+            }
             System.err.println("midpoint-diff: warning: could not read extension schema from the server ("
                     + e.getMessage() + "); continuing with base schema only.");
         }
+    }
+
+    /**
+     * A 401 or a connection/timeout failure means the whole live operation is doomed and will be reported
+     * clearly by the object fetch, so the schema-read warning would just be noise. A 403 (or anything else)
+     * is kept — the object may still be readable while {@code /schemas} is not.
+     */
+    private static boolean isCredentialOrConnectionFailure(Exception e) {
+        if (e instanceof MidpointRestClient.RestException restException) {
+            return restException.statusCode() == 401;
+        }
+        String message = e.getMessage();
+        return message != null && (message.contains("cannot connect") || message.contains("timed out"));
     }
 }
