@@ -9,12 +9,12 @@ midPoint objects and emits the `ObjectModificationType` XML that midPoint's REST
 a thin wrapper around midPoint's own `PrismObject.diff`. **Read `DESIGN.md` first — it is the full,
 self-contained brief** (modes, flags, two-layer schema handling, output/exit codes, verification).
 
-Status: **offline core + live modes working.** `DiffEngine` computes the reconciling delta
-(`--scope`, `--multivalue`/`--path`, `--equivalence`); `diff` emits the `ObjectModificationType`
+Status: **offline core + live modes + extension schema working.** `DiffEngine` computes the reconciling
+delta (`--scope`, `--multivalue`/`--path`, `--equivalence`); `diff` emits the `ObjectModificationType`
 (offline LIVE file or `--host` GET); `apply` reconciles a live object (`PATCH`, `--create-if-absent`
-`POST`, `--dry-run`, idempotent). All HTTP lives in `MidpointRestClient` — the engine stays REST-free.
-Verified against the `docker/` rig. **Not yet done:** live extension-schema read (`--schema` / reading
-`SchemaType` off the server); `--schema-dir` works, `--schema` is guarded. See DESIGN.md "Build order".
+`POST`, `--dry-run`, idempotent). Extension schema registers from `--schema-dir` (raw XSDs), `--schema`
+(SchemaType XML), and — in live mode — automatically from the server (`SchemaOptions.buildContext`). All
+HTTP lives in `MidpointRestClient`; the engine stays REST-free. Verified against the `docker/` rig.
 
 ## Commands
 

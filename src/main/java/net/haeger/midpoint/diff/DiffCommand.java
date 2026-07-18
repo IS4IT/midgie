@@ -6,7 +6,6 @@ import java.util.concurrent.Callable;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
-import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -21,9 +20,6 @@ import picocli.CommandLine.Parameters;
  * <p>The current object comes either from a local LIVE file (offline mode) or, with {@code --host},
  * from a running midPoint over REST. Either way the diff itself runs locally via {@link DiffEngine}.
  * Exit codes: {@code 0} = no differences, {@code 1} = differences found (drift), {@code 2} = error.
- *
- * <p><b>Not yet implemented</b> (guarded so they fail loudly): {@code --schema} dynamic SchemaType
- * registration. {@code --schema-dir} works today.
  */
 @Command(
         name = "diff",
@@ -48,15 +44,8 @@ public class DiffCommand implements Callable<Integer> {
     @Mixin
     ConnectionOptions connectionOptions;
 
-    // --- Schema (see DESIGN.md "Schema — two layers, two knobs") ---
-
-    @Option(names = "--schema-dir", paramLabel = "DIR",
-            description = "Directory of extension XSDs to register (MidPointPrismContextFactory extra-schema dir).")
-    File schemaDir;
-
-    @Option(names = "--schema", paramLabel = "FILE",
-            description = "Exported SchemaType XML to register as a dynamic schema extension. Repeatable.")
-    File[] schemaFiles;
+    @Mixin
+    SchemaOptions schemaOptions;
 
     // --- Output ---
 
@@ -68,11 +57,6 @@ public class DiffCommand implements Callable<Integer> {
     public Integer call() {
         StrategyOptions.Resolved strategy = strategyOptions.resolve();
         if (strategy == null) {
-            return EXIT_ERROR;
-        }
-        if (schemaFiles != null && schemaFiles.length > 0) {
-            System.err.println("midpoint-diff: --schema (dynamic SchemaType registration) is not implemented yet. "
-                    + "Use --schema-dir for extension XSDs.");
             return EXIT_ERROR;
         }
 
@@ -95,10 +79,7 @@ public class DiffCommand implements Callable<Integer> {
         }
 
         try {
-            MidPointPrismContextFactory factory = (schemaDir != null)
-                    ? new MidPointPrismContextFactory(schemaDir)
-                    : new MidPointPrismContextFactory();
-            PrismContext prismContext = factory.createInitializedPrismContext();
+            PrismContext prismContext = schemaOptions.buildContext(live ? client : null);
 
             PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
             PrismObject<? extends Objectable> current = live

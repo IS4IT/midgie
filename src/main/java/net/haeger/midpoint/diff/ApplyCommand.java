@@ -8,7 +8,6 @@ import java.util.concurrent.Callable;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
-import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -42,6 +41,9 @@ public class ApplyCommand implements Callable<Integer> {
     @Mixin
     ConnectionOptions connectionOptions;
 
+    @Mixin
+    SchemaOptions schemaOptions;
+
     @Option(names = "--create-if-absent",
             description = "If the object does not exist, POST the whole desired object to create it.")
     boolean createIfAbsent;
@@ -49,10 +51,6 @@ public class ApplyCommand implements Callable<Integer> {
     @Option(names = "--dry-run",
             description = "Compute and print the delta but do not send it.")
     boolean dryRun;
-
-    @Option(names = "--schema-dir", paramLabel = "DIR",
-            description = "Directory of extension XSDs to register (MidPointPrismContextFactory extra-schema dir).")
-    File schemaDir;
 
     @Option(names = "--format", paramLabel = "xml|summary", defaultValue = "xml",
             description = "Dry-run output format. xml: ObjectModificationType. summary: changed-path list.")
@@ -74,10 +72,7 @@ public class ApplyCommand implements Callable<Integer> {
         }
 
         try {
-            MidPointPrismContextFactory factory = (schemaDir != null)
-                    ? new MidPointPrismContextFactory(schemaDir)
-                    : new MidPointPrismContextFactory();
-            PrismContext prismContext = factory.createInitializedPrismContext();
+            PrismContext prismContext = schemaOptions.buildContext(client);
 
             PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
             LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);

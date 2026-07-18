@@ -1,0 +1,319 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Repository-resident schema extension (midPoint 4.9+).
+  ~
+  ~ Imported on first startup by InitialDataImport via the classpath*:
+  ~ initial-objects/**/*.xml pattern. SchemaCache then loads it from the
+  ~ repository and registers it with the live PrismContext (see
+  ~ repo/repo-common SchemaCache.init()).
+  ~
+  ~ Filename starts with 9999- so it sorts AFTER midPoint's built-in initial
+  ~ objects, which use lower numeric prefixes.
+  ~
+  ~ NOTE: Initial-objects import is "create-if-absent". Once this schema
+  ~ exists in the repository (matched by OID), subsequent restarts will skip
+  ~ the file even if the XSD inside has changed. To roll out a schema update,
+  ~ either bump the OID, or re-import the file manually via Ninja / GUI with
+  ~ overwrite enabled.
+  -->
+<schema xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+        xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+        xmlns:t="http://prism.evolveum.com/xml/ns/public/types-3"
+        xmlns:a="http://prism.evolveum.com/xml/ns/public/annotation-3"
+        xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+        oid="00000000-0000-0000-0001-1ec000000003">
+    <name>lcm-extension-schema</name>
+    <description>Lifecycle Management overlay - extension schema</description>
+    <lifecycleState>active</lifecycleState>
+    <definition>
+        <xsd:schema xmlns:a="http://prism.evolveum.com/xml/ns/public/annotation-3"
+                    xmlns:tns="http://is4it.de/midpoint/v1/aieLCM"
+                    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                    elementFormDefault="qualified"
+                    targetNamespace="http://is4it.de/midpoint/v1/aieLCM">
+            <xsd:annotation>
+                <xsd:appinfo>
+                    <a:defaultPrefix>aielcm</a:defaultPrefix>
+                </xsd:appinfo>
+            </xsd:annotation>
+            <xsd:import namespace="http://prism.evolveum.com/xml/ns/public/annotation-3"/>
+            <xsd:complexType name="DelimitedValueType">
+                <xsd:annotation>
+                    <xsd:documentation>
+                        A single attribute/value entry with an optional validity window.
+                        Multi-valued in extensions: each entry independently carries the
+                        target attribute name, its value, and the time interval during which
+                        the value should be considered active. Used by the LCM trigger
+                        handler to project time-bounded values onto regular focus properties.
+                    </xsd:documentation>
+                    <xsd:appinfo>
+                        <a:displayName>Delimited Values</a:displayName>
+                    </xsd:appinfo>
+                </xsd:annotation>
+                <xsd:sequence>
+                    <xsd:element name="attribute" type="xsd:string">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Name of the focus property this entry projects onto.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Attribute</a:displayName>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                    <xsd:element name="value" type="xsd:string">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Value to project onto the named attribute while the
+                                validity window is active.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Value</a:displayName>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                    <xsd:element minOccurs="0" name="validFrom" type="xsd:dateTime">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Inclusive start of the validity window (validFrom &lt;= now).
+                                Absent means "valid since forever".
+
+                                Timezone note: the midPoint GUI date-picker stores values
+                                without a timezone designator. Such tz-naive timestamps are
+                                interpreted in the JVM's default timezone (UTC in the standard
+                                Docker/production setup). Use "Edit RAW" to supply an explicit
+                                ISO 8601 offset, e.g. 2026-06-01T15:30:00+02:00.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Valid From</a:displayName>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                    <xsd:element minOccurs="0" name="validTo" type="xsd:dateTime">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Exclusive end of the validity window (now &lt; validTo).
+                                Absent means "valid forever from validFrom".
+
+                                Timezone note: the midPoint GUI date-picker stores values
+                                without a timezone designator. Such tz-naive timestamps are
+                                interpreted in the JVM's default timezone (UTC in the standard
+                                Docker/production setup). Use "Edit RAW" to supply an explicit
+                                ISO 8601 offset, e.g. 2026-06-01T18:00:00+02:00.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Valid To</a:displayName>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                    <xsd:element minOccurs="0" name="originDescription" type="xsd:string">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Free-form provenance marker (e.g. resource name) so callers
+                                can identify which subsystem created the entry.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Origin</a:displayName>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                </xsd:sequence>
+            </xsd:complexType>
+            <xsd:complexType name="RoleExtensionType">
+                <xsd:annotation>
+                    <xsd:appinfo>
+                        <a:extension ref="c:RoleType"/>
+                    </xsd:appinfo>
+                </xsd:annotation>
+                <xsd:sequence>
+                    <xsd:element minOccurs="0" name="lcmLastProcessed" type="xsd:dateTime">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Timestamp of the most recent LCM trigger handler execution
+                                on this object. Set by LastProcessedTriggerHandler.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                    <xsd:element maxOccurs="unbounded" minOccurs="0" name="delimitedValues" type="tns:DelimitedValueType">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Time-bounded attribute/value entries. Each entry carries
+                                its own validity window; the LCM trigger handler projects
+                                the currently-valid subset onto regular focus properties.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Delimited Values</a:displayName>
+                                <a:indexed>false</a:indexed>
+                                <a:container/>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                </xsd:sequence>
+            </xsd:complexType>
+            <xsd:complexType name="ServiceExtensionType">
+                <xsd:annotation>
+                    <xsd:appinfo>
+                        <a:extension ref="c:ServiceType"/>
+                    </xsd:appinfo>
+                </xsd:annotation>
+                <xsd:sequence>
+                    <xsd:element minOccurs="0" name="lcmLastProcessed" type="xsd:dateTime">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Timestamp of the most recent LCM trigger handler execution
+                                on this object. Set by LastProcessedTriggerHandler.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                    <xsd:element maxOccurs="unbounded" minOccurs="0" name="delimitedValues" type="tns:DelimitedValueType">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Time-bounded attribute/value entries. Each entry carries
+                                its own validity window; the LCM trigger handler projects
+                                the currently-valid subset onto regular focus properties.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Delimited Values</a:displayName>
+                                <a:indexed>false</a:indexed>
+                                <a:container/>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                </xsd:sequence>
+            </xsd:complexType>
+            <xsd:complexType name="OrgExtensionType">
+                <xsd:annotation>
+                    <xsd:appinfo>
+                        <a:extension ref="c:OrgType"/>
+                    </xsd:appinfo>
+                </xsd:annotation>
+                <xsd:sequence>
+                    <xsd:element minOccurs="0" name="lcmLastProcessed" type="xsd:dateTime">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Timestamp of the most recent LCM trigger handler execution
+                                on this object. Set by LastProcessedTriggerHandler.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                    <xsd:element maxOccurs="unbounded" minOccurs="0" name="delimitedValues" type="tns:DelimitedValueType">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Time-bounded attribute/value entries. Each entry carries
+                                its own validity window; the LCM trigger handler projects
+                                the currently-valid subset onto regular focus properties.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Delimited Values</a:displayName>
+                                <a:indexed>false</a:indexed>
+                                <a:container/>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                </xsd:sequence>
+            </xsd:complexType>
+            <xsd:complexType name="SystemConfigExtensionType">
+                <xsd:annotation>
+                    <xsd:documentation>
+                        Global default phase configuration for the recompute-template
+                        trigger handler. Override per-template with ObjectTemplateExtensionType.
+                    </xsd:documentation>
+                    <xsd:appinfo>
+                        <a:extension ref="c:SystemConfigurationType"/>
+                    </xsd:appinfo>
+                </xsd:annotation>
+                <xsd:sequence>
+                    <xsd:element maxOccurs="unbounded" minOccurs="0" name="recomputeTemplatePhases" type="xsd:string">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Global default set of clockwork phases to run (AUTOMATIC) when
+                                the recompute-template trigger handler fires. Each value is a
+                                camelCase PartialProcessingOptionsType field name (e.g. "outbound",
+                                "projection"). Phases absent from this list are SKIP.
+                                Overridable per object-template via ObjectTemplateExtensionType.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:indexed>false</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                </xsd:sequence>
+            </xsd:complexType>
+            <xsd:complexType name="ObjectTemplateExtensionType">
+                <xsd:annotation>
+                    <xsd:documentation>
+                        Per-template phase configuration for the recompute-template trigger
+                        handler. Takes precedence over the system-config setting.
+                    </xsd:documentation>
+                    <xsd:appinfo>
+                        <a:extension ref="c:ObjectTemplateType"/>
+                    </xsd:appinfo>
+                </xsd:annotation>
+                <xsd:sequence>
+                    <xsd:element maxOccurs="unbounded" minOccurs="0" name="recomputeTemplatePhases" type="xsd:string">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Object-template-level override of the clockwork phases to run
+                                (AUTOMATIC) when the recompute-template trigger handler fires
+                                on objects governed by this template. Each value is a camelCase
+                                PartialProcessingOptionsType field name. Phases absent from this
+                                list are SKIP. Takes precedence over the system-config setting.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:indexed>false</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                </xsd:sequence>
+            </xsd:complexType>
+            <xsd:complexType name="UserExtensionType">
+                <xsd:annotation>
+                    <xsd:appinfo>
+                        <a:extension ref="c:UserType"/>
+                    </xsd:appinfo>
+                </xsd:annotation>
+                <xsd:sequence>
+                    <xsd:element minOccurs="0" name="lcmLastProcessed" type="xsd:dateTime">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Timestamp of the most recent LCM trigger handler execution
+                                on this object. Set by LastProcessedTriggerHandler.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:indexed>true</a:indexed>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                    <xsd:element maxOccurs="unbounded" minOccurs="0" name="delimitedValues" type="tns:DelimitedValueType">
+                        <xsd:annotation>
+                            <xsd:documentation>
+                                Time-bounded attribute/value entries. Each entry carries
+                                its own validity window; the LCM trigger handler projects
+                                the currently-valid subset onto regular focus properties.
+                            </xsd:documentation>
+                            <xsd:appinfo>
+                                <a:displayName>Delimited Values</a:displayName>
+                                <a:indexed>false</a:indexed>
+                                <a:container/>
+                            </xsd:appinfo>
+                        </xsd:annotation>
+                    </xsd:element>
+                </xsd:sequence>
+            </xsd:complexType>
+        </xsd:schema>
+    </definition>
+</schema>

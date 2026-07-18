@@ -80,6 +80,15 @@ public final class MidpointRestClient {
         return send(request, "GET " + restType + "/" + oid);
     }
 
+    /** {@code GET {type}} → an {@code ObjectListType} of all objects of that type (used to read schemas). */
+    public String listObjects(String restType) throws IOException {
+        HttpRequest request = baseRequest(restCollectionUri(restType))
+                .header("Accept", "application/xml")
+                .GET()
+                .build();
+        return send(request, "GET " + restType);
+    }
+
     /** {@code PATCH {type}/{oid}} with an {@code objectModification} body. */
     public void patchObject(String restType, String oid, String modificationXml) throws IOException {
         HttpRequest request = baseRequest(objectUri(restType, oid))
