@@ -14,10 +14,25 @@ import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectFactory;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType;
 
-/** Renders a computed delta for humans and for the REST PATCH: {@code ObjectModificationType} XML or a summary. */
+/** Renders a computed delta for humans and for the REST PATCH: {@code ObjectModificationType} XML/JSON or a summary. */
 final class DeltaOutput {
 
     private DeltaOutput() {
+    }
+
+    /** Render the delta in the requested {@code --format} (xml | json | summary). */
+    static String render(PrismContext prismContext, ObjectDelta<? extends Objectable> delta, String format)
+            throws SchemaException {
+        switch (format.toLowerCase()) {
+            case "xml":
+                return toModificationXml(prismContext, delta);
+            case "json":
+                return toModificationJson(prismContext, delta);
+            case "summary":
+                return toSummary(delta);
+            default:
+                throw new IllegalArgumentException("--format must be xml|json|summary, got: " + format);
+        }
     }
 
     /** The {@code objectModification} XML that midPoint's REST {@code PATCH} consumes. */
@@ -25,6 +40,13 @@ final class DeltaOutput {
             throws SchemaException {
         ObjectModificationType modification = DeltaConvertor.toObjectModificationType(delta);
         return prismContext.xmlSerializer().serializeRealValue(modification, ObjectFactory.F_OBJECT_MODIFICATION);
+    }
+
+    /** The same {@code objectModification} as JSON (midPoint's REST {@code PATCH} also accepts JSON). */
+    static String toModificationJson(PrismContext prismContext, ObjectDelta<? extends Objectable> delta)
+            throws SchemaException {
+        ObjectModificationType modification = DeltaConvertor.toObjectModificationType(delta);
+        return prismContext.jsonSerializer().serializeRealValue(modification, ObjectFactory.F_OBJECT_MODIFICATION);
     }
 
     /** A human-readable, one-line-per-change list (or "No differences."). */

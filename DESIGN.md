@@ -124,8 +124,10 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 
 ## Output & exit codes (CI-friendly)
 
-- stdout: `ObjectModificationType` XML (default), or `--format summary` for a human-readable list of
-  changed paths.
+- `--format xml` (default) / `json` emit the `ObjectModificationType` (both consumable by REST `PATCH`);
+  `summary` is a human-readable changed-path list. Output goes to stdout, or to `-o <file>`.
+- The desired (and offline live) object may be read from stdin by passing `-` as the path.
+- `--debug` / `-v` raises the log level to DEBUG on stderr for troubleshooting (stdout stays the payload).
 - Exit-code contract (lets CI gate on drift without parsing output):
   - `diff` and `apply --dry-run`: `0` = no differences · `1` = differences found / would change · `2` = error.
   - `apply` (real write): `0` = success (applied, created, already in sync, or user-declined) · `2` = error.

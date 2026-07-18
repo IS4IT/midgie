@@ -27,8 +27,8 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [ ] **Merge natural-keys footgun** — pair-and-edit-in-place can mutate accrued values; make the risk visible per-delta or refuse by default.
 
 ## E. I/O ergonomics
-- [ ] **stdin/stdout plumbing** — read desired from `-`, write with `-o <file>`, add `--format json` (midPoint REST also accepts JSON PATCH bodies).
-- [ ] **`--debug` / `-v`** to raise the logback level for troubleshooting.
+- [x] **stdin/stdout plumbing** — desired (and offline live) read from `-`; write with `-o <file>`; `--format json` alongside xml/summary.
+- [x] **`--debug` / `-v`** raises the log level to DEBUG on stderr.
 - [ ] **`--no-live-schema`** — every `--host` call does `GET /schemas`; opt-out for speed or when the user lacks schema-read.
 
 ## F. Packaging / docs / release

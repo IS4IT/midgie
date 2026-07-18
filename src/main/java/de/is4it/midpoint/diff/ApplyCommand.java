@@ -75,12 +75,23 @@ public class ApplyCommand implements Callable<Integer> {
             description = "Suppress status and advisory messages; keep the delta output, errors, and exit code.")
     boolean quiet;
 
-    @Option(names = "--format", paramLabel = "xml|summary", defaultValue = "xml",
-            description = "Dry-run output format. xml: ObjectModificationType. summary: changed-path list.")
+    @Option(names = {"--debug", "-v"},
+            description = "Raise the log level to DEBUG (framework logs on stderr) for troubleshooting.")
+    boolean debug;
+
+    @Option(names = "--format", paramLabel = "xml|json|summary", defaultValue = "xml",
+            description = "Dry-run output format. xml/json: ObjectModificationType. summary: changed-path list.")
     String format;
+
+    @Option(names = {"--output", "-o"}, paramLabel = "FILE",
+            description = "Write the dry-run delta to FILE instead of stdout.")
+    File output;
 
     @Override
     public Integer call() {
+        if (debug) {
+            Logging.enableDebug();
+        }
         StrategyOptions.Resolved strategy = strategyOptions.resolve();
         if (strategy == null) {
             return EXIT_ERROR;
@@ -99,7 +110,7 @@ public class ApplyCommand implements Callable<Integer> {
             if (!quiet) {
                 VersionSupport.warnIfMismatch(prismContext, client);
             }
-            PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
+            PrismObject<? extends Objectable> desired = Io.parseObject(prismContext, desiredFile);
             LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);
 
             String liveXml = fetch(client, target);
@@ -155,16 +166,14 @@ public class ApplyCommand implements Callable<Integer> {
         }
 
         int changes = result.delta().getModifications().size();
-        String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
         if (dryRun) {
-            // The delta is dry-run's payload — printed even under --quiet (redirect stdout to silence it).
-            System.out.println("summary".equalsIgnoreCase(format)
-                    ? DeltaOutput.toSummary(result.delta())
-                    : modificationXml);
+            // The delta is dry-run's payload — written even under --quiet (redirect stdout to silence it).
+            Io.writePayload(output, DeltaOutput.render(prismContext, result.delta(), format));
             note("midpoint-diff: dry run — " + changes + " change(s) NOT applied to "
                     + target.restType + "/" + target.oid + ".");
             return 1; // would change
         }
+        String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
 
         // Show what will change (stderr, so stdout stays the status line) then confirm.
         note("midpoint-diff: will apply " + changes + " change(s) to " + target.restType + "/" + target.oid + ":");

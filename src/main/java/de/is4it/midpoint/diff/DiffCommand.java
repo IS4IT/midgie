@@ -54,16 +54,27 @@ public class DiffCommand implements Callable<Integer> {
 
     // --- Output ---
 
-    @Option(names = "--format", paramLabel = "xml|summary", defaultValue = "xml",
-            description = "xml: ObjectModificationType. summary: human-readable changed-path list.")
+    @Option(names = "--format", paramLabel = "xml|json|summary", defaultValue = "xml",
+            description = "xml/json: ObjectModificationType. summary: human-readable changed-path list.")
     String format;
+
+    @Option(names = {"--output", "-o"}, paramLabel = "FILE",
+            description = "Write the delta to FILE instead of stdout.")
+    File output;
 
     @Option(names = {"--quiet", "-q"},
             description = "Suppress advisory notes/warnings; keep the delta output, errors, and exit code.")
     boolean quiet;
 
+    @Option(names = {"--debug", "-v"},
+            description = "Raise the log level to DEBUG (framework logs on stderr) for troubleshooting.")
+    boolean debug;
+
     @Override
     public Integer call() {
+        if (debug) {
+            Logging.enableDebug();
+        }
         StrategyOptions.Resolved strategy = strategyOptions.resolve();
         if (strategy == null) {
             return EXIT_ERROR;
@@ -93,10 +104,10 @@ public class DiffCommand implements Callable<Integer> {
                 VersionSupport.warnIfMismatch(prismContext, client);
             }
 
-            PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
+            PrismObject<? extends Objectable> desired = Io.parseObject(prismContext, desiredFile);
             PrismObject<? extends Objectable> current = live
                     ? fetchLive(prismContext, client, desired)
-                    : prismContext.parseObject(liveFile);
+                    : Io.parseObject(prismContext, liveFile);
 
             DiffEngine.DiffResult result = new DiffEngine(prismContext)
                     .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
@@ -109,12 +120,7 @@ public class DiffCommand implements Callable<Integer> {
                 }
             }
 
-            if ("summary".equalsIgnoreCase(format)) {
-                System.out.println(DeltaOutput.toSummary(result.delta()));
-            } else {
-                System.out.println(DeltaOutput.toModificationXml(prismContext, result.delta()));
-            }
-
+            Io.writePayload(output, DeltaOutput.render(prismContext, result.delta(), format));
             return result.hasDrift() ? 1 : 0;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
