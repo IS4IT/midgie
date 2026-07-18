@@ -4,10 +4,10 @@ Hardening and polish for `midpoint-diff`. None of these are bugs — the tool is
 `diff`, `diff --host`, `apply` with create/patch/idempotency, and two-layer extension schema). Priority
 is value × how exposed the gap is. ⭐ marks a good first cluster (small, independent, high-value).
 
-## A. Safety on `apply` (it mutates a live server)
-- [ ] ⭐ **Confirm before applying** — prompt when stdout is a TTY; `--yes`/`-y` to bypass. `apply` PATCHes with no prompt today.
-- [ ] **Show the delta before applying** — echo the change summary to stderr so the operator sees which fields change, not just "Applied N change(s)".
-- [ ] **`--create-if-absent` strips operational cruft** — a desired file copied from a live GET carries metadata/operational items that get POSTed as-is on create; strip or warn.
+## A. Safety on `apply` (it mutates a live server) — done
+- [x] ⭐ **Confirm before applying** — prompts interactively; `--yes`/`-y` bypasses; refuses in a non-interactive session without `--yes`.
+- [x] **Show the delta before applying** — the change summary is echoed to stderr before the prompt.
+- [x] **`--create-if-absent` strips operational cruft** — `createBody` runs `removeOperationalItems()` before POST, so metadata/operational items copied from a live GET are not sent.
 
 ## B. CI / exit-code semantics
 - [ ] ⭐ **`--dry-run` exits 1 on drift / 0 in sync** — currently always 0, so CI can't gate on "would this change anything?".

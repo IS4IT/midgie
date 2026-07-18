@@ -66,10 +66,11 @@ class LiveIntegrationTest {
     @Test
     void applyCreatesPatchesAndIsIdempotentOverRest(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteTestUser(); // isolate from the other test's use of the shared OID
 
-        // 1) create-if-absent -> POST creates the object
+        // 1) create-if-absent -> POST creates the object (--yes: the test runs non-interactively)
         File v1 = writeUser(dir, "v1", "IT User One");
-        CliResult create = run("apply", v1.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent");
+        CliResult create = run("apply", v1.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
         assertEquals(0, create.exit, create.err);
         assertTrue(create.out.contains("Created"), "expected 'Created', got: " + create.out);
         assertTrue(client.getObject("users", TEST_OID).contains("IT User One"), "server should hold the created user");
@@ -81,15 +82,33 @@ class LiveIntegrationTest {
         assertTrue(diff.out.contains("replace fullName"), "expected 'replace fullName', got: " + diff.out);
 
         // 3) apply -> PATCH the change
-        CliResult apply = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD);
+        CliResult apply = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--yes");
         assertEquals(0, apply.exit, apply.err);
         assertTrue(apply.out.contains("Applied"), "expected 'Applied', got: " + apply.out);
         assertTrue(client.getObject("users", TEST_OID).contains("IT User Two"), "server should hold the patched value");
 
-        // 4) re-apply the same desired state -> idempotent no-op (no PATCH)
+        // 4) re-apply the same desired state -> idempotent no-op (no PATCH). No --yes needed: a no-op
+        //    never reaches the confirmation.
         CliResult again = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD);
         assertEquals(0, again.exit, again.err);
         assertTrue(again.out.contains("No changes"), "re-apply must be a no-op, got: " + again.out);
+    }
+
+    @Test
+    void applyWithoutYesRefusesInNonInteractiveSession(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteTestUser();
+
+        // Create the user (with --yes), then try to apply a change WITHOUT --yes. The test JVM has no
+        // console, so apply must refuse (exit 2) and leave the value untouched.
+        run("apply", writeUser(dir, "a", "Refuse One").getPath(),
+                "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+
+        CliResult refused = run("apply", writeUser(dir, "b", "Refuse Two").getPath(),
+                "--host", HOST, "-u", USER, "-p", PASSWORD);
+        assertEquals(2, refused.exit, refused.out + refused.err);
+        assertTrue(refused.err.contains("--yes"), "should point the user at --yes, got: " + refused.err);
+        assertTrue(client.getObject("users", TEST_OID).contains("Refuse One"), "value must be unchanged");
     }
 
     @Test

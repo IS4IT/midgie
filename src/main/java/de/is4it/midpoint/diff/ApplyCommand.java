@@ -5,14 +5,15 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.io.Console;
 import java.io.File;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
+import java.io.IOException;
 import java.util.concurrent.Callable;
 
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.util.exception.SchemaException;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -21,12 +22,14 @@ import picocli.CommandLine.Parameters;
 
 /**
  * The {@code apply} subcommand: reconcile a running midPoint object to the desired state. It fetches the
- * current object over REST, computes the minimal itemDelta (same engine as {@code diff}), and
- * {@code PATCH}es it. With {@code --create-if-absent}, a missing object is created via {@code POST}.
+ * current object over REST, computes the minimal itemDelta (same engine as {@code diff}), prints what
+ * would change, and — after confirmation — {@code PATCH}es it. With {@code --create-if-absent}, a missing
+ * object is created via {@code POST} (operational/metadata items stripped first).
  *
- * <p>Idempotent: when the object already matches the desired state the delta is empty and nothing is
- * sent. Exit codes: {@code 0} = success (applied, created, or already in sync), {@code 2} = error.
- * {@code --dry-run} computes and prints the delta without sending it.
+ * <p>Because {@code apply} mutates a live server, it confirms before writing: it prompts interactively,
+ * or, in a non-interactive session, refuses unless {@code --yes} is given. {@code --dry-run} prints the
+ * delta and changes nothing (no prompt). Idempotent: when the object already matches, nothing is sent.
+ * Exit codes: {@code 0} = success (applied, created, in sync, or user-declined), {@code 2} = error.
  */
 @Command(
         name = "apply",
@@ -36,6 +39,9 @@ import picocli.CommandLine.Parameters;
 public class ApplyCommand implements Callable<Integer> {
 
     private static final int EXIT_ERROR = 2;
+
+    /** Outcome of the pre-write confirmation. */
+    enum Confirmation { PROCEED, ABORTED, NON_INTERACTIVE }
 
     @Parameters(index = "0", paramLabel = "DESIRED", description = "Desired-state object XML.")
     File desiredFile;
@@ -56,6 +62,10 @@ public class ApplyCommand implements Callable<Integer> {
     @Option(names = "--dry-run",
             description = "Compute and print the delta but do not send it.")
     boolean dryRun;
+
+    @Option(names = {"--yes", "-y"},
+            description = "Apply without the interactive confirmation prompt (required in non-interactive use).")
+    boolean assumeYes;
 
     @Option(names = "--format", paramLabel = "xml|summary", defaultValue = "xml",
             description = "Dry-run output format. xml: ObjectModificationType. summary: changed-path list.")
@@ -78,43 +88,13 @@ public class ApplyCommand implements Callable<Integer> {
 
         try {
             PrismContext prismContext = schemaOptions.buildContext(client);
-
             PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
             LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);
 
-            String liveXml = fetchOrCreate(client, target);
-            if (liveXml == null) {
-                return 0; // created (or would-create under dry-run); nothing more to reconcile
-            }
-
-            PrismObject<? extends Objectable> current = prismContext.parseObject(liveXml);
-            DiffEngine.DiffResult result = new DiffEngine(prismContext)
-                    .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
-
-            for (String path : result.mergeFallbackPaths()) {
-                System.err.println("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
-                        + "merge does not apply there, so it was left as replace.");
-            }
-
-            if (!result.hasDrift()) {
-                System.out.println("No changes: " + target.restType + "/" + target.oid + " already matches desired.");
-                return 0;
-            }
-
-            int changes = result.delta().getModifications().size();
-            if (dryRun) {
-                System.out.println("summary".equalsIgnoreCase(format)
-                        ? DeltaOutput.toSummary(result.delta())
-                        : DeltaOutput.toModificationXml(prismContext, result.delta()));
-                System.err.println("midpoint-diff: dry run — " + changes + " change(s) NOT applied to "
-                        + target.restType + "/" + target.oid + ".");
-                return 0;
-            }
-
-            client.patchObject(target.restType, target.oid,
-                    DeltaOutput.toModificationXml(prismContext, result.delta()));
-            System.out.println("Applied " + changes + " change(s) to " + target.restType + "/" + target.oid + ".");
-            return 0;
+            String liveXml = fetch(client, target);
+            return (liveXml == null)
+                    ? applyCreate(prismContext, client, target, desired)
+                    : applyPatch(prismContext, client, target, desired, strategy, liveXml);
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midpoint-diff: " + message);
@@ -122,32 +102,122 @@ public class ApplyCommand implements Callable<Integer> {
         }
     }
 
-    /**
-     * GET the current object, or handle a 404: create it (POST) when {@code --create-if-absent}, else fail.
-     *
-     * @return the live object XML to diff, or {@code null} when the object was created (nothing to diff)
-     */
-    private String fetchOrCreate(MidpointRestClient client, LiveTarget target) throws Exception {
+    /** Object is absent (GET 404): create it from the desired object, if allowed and confirmed. */
+    private Integer applyCreate(PrismContext prismContext, MidpointRestClient client, LiveTarget target,
+            PrismObject<? extends Objectable> desired) throws Exception {
+        if (!createIfAbsent) {
+            System.err.println("midpoint-diff: " + target.restType + "/" + target.oid
+                    + " does not exist. Pass --create-if-absent to create it.");
+            return EXIT_ERROR;
+        }
+        System.err.println("midpoint-diff: " + target.restType + "/" + target.oid
+                + " does not exist; will create it from " + desiredFile.getName() + ".");
+        if (dryRun) {
+            System.err.println("midpoint-diff: dry run — nothing created.");
+            return 0;
+        }
+        Integer stop = confirmOrExit("Create " + target.restType + "/" + target.oid + "?");
+        if (stop != null) {
+            return stop;
+        }
+        String createdOid = client.createObject(target.restType, createBody(prismContext, desired));
+        System.out.println("Created " + target.restType + "/"
+                + (createdOid != null ? createdOid : target.oid) + ".");
+        return 0;
+    }
+
+    /** Object exists: diff, show the change, and PATCH it (after confirmation). */
+    private Integer applyPatch(PrismContext prismContext, MidpointRestClient client, LiveTarget target,
+            PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy, String liveXml)
+            throws Exception {
+        PrismObject<? extends Objectable> current = prismContext.parseObject(liveXml);
+        DiffEngine.DiffResult result = new DiffEngine(prismContext)
+                .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
+
+        for (String path : result.mergeFallbackPaths()) {
+            System.err.println("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
+                    + "merge does not apply there, so it was left as replace.");
+        }
+
+        if (!result.hasDrift()) {
+            System.out.println("No changes: " + target.restType + "/" + target.oid + " already matches desired.");
+            return 0;
+        }
+
+        int changes = result.delta().getModifications().size();
+        String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
+        if (dryRun) {
+            System.out.println("summary".equalsIgnoreCase(format)
+                    ? DeltaOutput.toSummary(result.delta())
+                    : modificationXml);
+            System.err.println("midpoint-diff: dry run — " + changes + " change(s) NOT applied to "
+                    + target.restType + "/" + target.oid + ".");
+            return 0;
+        }
+
+        // Show what will change (stderr, so stdout stays the status line) then confirm.
+        System.err.println("midpoint-diff: will apply " + changes + " change(s) to "
+                + target.restType + "/" + target.oid + ":");
+        for (String line : DeltaOutput.toSummary(result.delta()).split("\n")) {
+            System.err.println("  " + line);
+        }
+        Integer stop = confirmOrExit("Apply " + changes + " change(s) to " + target.restType + "/" + target.oid + "?");
+        if (stop != null) {
+            return stop;
+        }
+
+        client.patchObject(target.restType, target.oid, modificationXml);
+        System.out.println("Applied " + changes + " change(s) to " + target.restType + "/" + target.oid + ".");
+        return 0;
+    }
+
+    /** GET the object, or {@code null} on a 404. Other REST failures propagate. */
+    private static String fetch(MidpointRestClient client, LiveTarget target) throws IOException {
         try {
             return client.getObject(target.restType, target.oid);
         } catch (MidpointRestClient.RestException e) {
-            if (!e.isNotFound()) {
-                throw e;
-            }
-            if (!createIfAbsent) {
-                throw new IllegalStateException(target.restType + "/" + target.oid
-                        + " does not exist. Pass --create-if-absent to create it.");
-            }
-            String desiredXml = Files.readString(desiredFile.toPath(), StandardCharsets.UTF_8);
-            if (dryRun) {
-                System.err.println("midpoint-diff: dry run — would create " + target.restType + "/"
-                        + target.oid + " (object absent).");
+            if (e.isNotFound()) {
                 return null;
             }
-            String createdOid = client.createObject(target.restType, desiredXml);
-            System.out.println("Created " + target.restType + "/"
-                    + (createdOid != null ? createdOid : target.oid) + ".");
-            return null;
+            throw e;
         }
+    }
+
+    /** Serialize the desired object for a create POST, stripping operational/metadata items midPoint owns. */
+    static String createBody(PrismContext prismContext, PrismObject<? extends Objectable> desired)
+            throws SchemaException {
+        desired.getValue().removeOperationalItems();
+        return prismContext.xmlSerializer().serialize(desired);
+    }
+
+    /** Prompt/decide whether to write. Returns {@code null} to proceed, or the exit code to return. */
+    private Integer confirmOrExit(String prompt) {
+        Console console = System.console();
+        boolean interactive = console != null;
+        String answer = (!assumeYes && interactive) ? console.readLine("%s [y/N] ", prompt) : null;
+        switch (decideConfirmation(assumeYes, interactive, answer)) {
+            case PROCEED:
+                return null;
+            case ABORTED:
+                System.err.println("midpoint-diff: aborted — nothing was applied.");
+                return 0;
+            case NON_INTERACTIVE:
+            default:
+                System.err.println("midpoint-diff: refusing to write without confirmation in a non-interactive "
+                        + "session; re-run with --yes to proceed.");
+                return EXIT_ERROR;
+        }
+    }
+
+    /** Pure confirmation decision (no I/O), so it can be unit-tested. */
+    static Confirmation decideConfirmation(boolean autoYes, boolean interactive, String answer) {
+        if (autoYes) {
+            return Confirmation.PROCEED;
+        }
+        if (!interactive) {
+            return Confirmation.NON_INTERACTIVE;
+        }
+        String normalized = (answer == null) ? "" : answer.trim().toLowerCase();
+        return (normalized.equals("y") || normalized.equals("yes")) ? Confirmation.PROCEED : Confirmation.ABORTED;
     }
 }

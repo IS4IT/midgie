@@ -68,7 +68,9 @@ the midPoint source tree.
   current object (type + OID read from the desired file if not given), diff, emit itemDelta.
 - `midpoint-diff apply <desired.xml> --host … [--create-if-absent]` → diff then
   `PATCH /ws/rest/{type}/{oid}`; on a GET-404 with `--create-if-absent`, `POST /ws/rest/{type}` the whole
-  object. This is the reconciler.
+  object (operational/metadata items stripped first). This is the reconciler. Because it writes, it shows
+  the pending change and confirms first: it prompts interactively, or refuses in a non-interactive session
+  unless `--yes`/`-y` is given. `--dry-run` prints the delta and changes nothing.
 
 ## Strategy flags
 
