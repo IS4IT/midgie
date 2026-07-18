@@ -104,6 +104,15 @@ public final class MidpointRestClient {
         send(request, "PATCH " + restType + "/" + oid);
     }
 
+    /** {@code DELETE {type}/{oid}}. Throws {@link RestException} (404-aware) on failure. */
+    public void deleteObject(String restType, String oid) throws IOException {
+        HttpRequest request = baseRequest(objectUri(restType, oid))
+                .header("Accept", "application/xml")
+                .DELETE()
+                .build();
+        send(request, "DELETE " + restType + "/" + oid);
+    }
+
     /** {@code POST {type}} with a full object body (create). Returns the new OID from Location if present. */
     public String createObject(String restType, String objectXml) throws IOException {
         HttpRequest request = baseRequest(restCollectionUri(restType))

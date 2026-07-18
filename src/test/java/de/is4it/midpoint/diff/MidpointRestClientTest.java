@@ -92,6 +92,14 @@ class MidpointRestClientTest {
         assertEquals("new-oid-123", oid, "OID must be taken from the Location header tail");
     }
 
+    @Test
+    void deleteSendsDeleteMethod() throws Exception {
+        client.deleteObject("users", "aaa");
+
+        assertEquals("DELETE", lastMethod);
+        assertEquals("/midpoint/ws/rest/users/aaa", lastPath);
+    }
+
     // --- stub server ---
 
     private void handle(HttpExchange exchange) throws IOException {
@@ -108,7 +116,7 @@ class MidpointRestClientTest {
             exchange.getResponseHeaders().add("Location",
                     "http://127.0.0.1/midpoint/ws/rest/users/new-oid-123");
             respond(exchange, 201, "");
-        } else if ("PATCH".equals(lastMethod)) {
+        } else if ("PATCH".equals(lastMethod) || "DELETE".equals(lastMethod)) {
             respond(exchange, 204, "");
         } else {
             respond(exchange, 200, "<user><name>from-server</name></user>");

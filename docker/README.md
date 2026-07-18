@@ -59,12 +59,30 @@ the connection while midPoint finishes starting — retry until the `<user>` com
 
 ## Using it with midpoint-diff
 
-Save that `<user>` document as `live.xml`, edit a field in a copy (`desired.xml`), and diff
-offline today:
+Point the live modes straight at the rig — they GET/PATCH over REST for you:
 
 ```bash
-java -jar target/midpoint-diff.jar diff desired.xml live.xml
+# diff a desired object against the live one
+java -jar target/midpoint-diff.jar diff desired.xml \
+  --host http://localhost:12080/midpoint -u administrator -p T3stPw890uio
+
+# reconcile it (PATCH; create if absent)
+java -jar target/midpoint-diff.jar apply desired.xml \
+  --host http://localhost:12080/midpoint -u administrator -p T3stPw890uio --create-if-absent
 ```
 
-When `diff --host` lands it will do the GET for you against
-`http://localhost:12080/midpoint`.
+Or diff two local files offline (no server): `java -jar target/midpoint-diff.jar diff desired.xml live.xml`.
+
+## Live integration tests
+
+`LiveIntegrationTest` drives the real CLI over REST against this rig (create-if-absent → diff → apply →
+idempotent re-apply, plus a no-drift check), covering the live paths the offline unit tests cannot. It is
+**self-gating**: when the rig is unreachable the tests skip, so `mvn test` stays green without docker.
+
+```bash
+docker compose -f docker/docker-compose.yml up -d   # rig up  -> live tests run
+mvn test                                            # rig down -> they report Skipped
+```
+
+Connection defaults match `docker/.env`; override with `-Dmpdiff.it.host=…`, `-Dmpdiff.it.user=…`,
+`-Dmpdiff.it.password=…`. The tests use one throwaway user (`zz-it-user`), deleted before and after the run.
