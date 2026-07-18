@@ -1,9 +1,10 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
 # Test rig: a real midPoint server for exercising midpoint-diff over REST
 # (the future `diff --host` / `apply` live modes).
 #
-# Adapted from ../connector-sap/docker/docker-compose.yml (itself from
-# Evolveum/midpoint-docker), stripped down to just the midPoint + PostgreSQL
-# stack — no connector bundle, no JCo, no deploy script.
 #
 # IMPORTANT: the midPoint image tag (MP_VER) must match <midpoint.version> in
 # pom.xml. midpoint-diff bundles the compile-time base schema for that version,

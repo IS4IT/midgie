@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
+  Copyright (c) 2026 IS4IT
+
+  SPDX-License-Identifier: EUPL-1.2
+-->
+<!--
   Keep framework logs on STDERR at WARN so the CLI's result (the itemDelta XML) is the ONLY thing on
   STDOUT and stays pipeable. Raise to DEBUG here (or via a -D override) when diagnosing prism/schema.
 -->

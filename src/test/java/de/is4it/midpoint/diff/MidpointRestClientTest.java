@@ -1,4 +1,9 @@
-package net.haeger.midpoint.diff;
+/*
+ * Copyright (c) 2026 IS4IT
+ *
+ * SPDX-License-Identifier: EUPL-1.2
+ */
+package de.is4it.midpoint.diff;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
