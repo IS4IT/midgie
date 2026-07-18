@@ -87,6 +87,17 @@
         </resources>
 
         <plugins>
+            <!-- Pin the properties-file filtering encoding (silences the resources-plugin warning
+                 introduced by filtering build-info.properties). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.4.0</version>
+                <configuration>
+                    <propertiesEncoding>UTF-8</propertiesEncoding>
+                </configuration>
+            </plugin>
+
             <!-- Fat JAR. NOTE: prism/JAXB ship XSD catalogs + ServiceLoader files under
                  META-INF; if the shaded jar misbehaves at runtime, add the matching
                  AppendingTransformer entries (see CLAUDE.md "shade caveat"). -->
