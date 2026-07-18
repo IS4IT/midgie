@@ -12,6 +12,7 @@ Files:
  CLAUDE.md
  docker/README.md
  examples/*.xml
- src/test/resources/lcm-extension-schema.xml
+ src/test/resources/*
+ src/test/resources/schema/*
 Copyright: 2026 IS4IT
 License: EUPL-1.2

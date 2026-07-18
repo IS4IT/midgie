@@ -6,7 +6,6 @@
 package de.is4it.midpoint.diff;
 
 import java.io.File;
-import java.util.Map;
 
 import javax.xml.datatype.XMLGregorianCalendar;
 
@@ -14,9 +13,7 @@ import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
-import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -24,26 +21,36 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Verifies runtime extension-schema registration ({@code --schema} file mode): after registering the
- * LCM extension schema, a custom {@code extension} attribute is schema-<em>typed</em> and diffs
- * correctly (rather than being kept as a raw, untyped value).
+ * Verifies runtime extension-schema registration via {@link SchemaOptions#buildContext}. Both input
+ * formats are exercised — {@code --schema} with an exported {@code SchemaType} XML, and {@code --schema-dir}
+ * with a raw {@code .xsd} (alongside a wrong-format file that must be warned about and skipped). In each
+ * case a custom {@code extension} attribute must resolve to its declared type (dateTime ->
+ * XMLGregorianCalendar) rather than staying a raw, untyped value.
  */
 class SchemaExtensionTest {
 
     private static final String LCM_NS = "http://is4it.de/midpoint/v1/aieLCM";
 
-    private static PrismContext prismContext;
+    @Test
+    void schemaFlagAcceptsSchemaTypeXml() throws Exception {
+        SchemaOptions options = new SchemaOptions();
+        options.schemaFiles = new File[] { new File("src/test/resources/lcm-extension-schema.xml") };
 
-    @BeforeAll
-    static void bootstrapWithExtensionSchema() throws Exception {
-        prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
-        PrismObject<?> schemaObject = prismContext.parseObject(new File("src/test/resources/lcm-extension-schema.xml"));
-        SchemaSupport.register(prismContext,
-                Map.of("lcm", SchemaSupport.schemaElement("lcm", schemaObject.asObjectable())));
+        assertLcmAttributeResolves(options.buildContext(null));
     }
 
     @Test
-    void registeredSchemaTypesAndDiffsACustomExtensionAttribute() throws Exception {
+    void schemaDirAcceptsRawXsdAndSkipsWrongFormat() throws Exception {
+        // The directory holds lcm.xsd (a raw XSD) plus notaschema.xml (a RoleType, not a SchemaType),
+        // which must be warned about and skipped without derailing the load.
+        SchemaOptions options = new SchemaOptions();
+        options.schemaDir = new File("src/test/resources/schema");
+
+        assertLcmAttributeResolves(options.buildContext(null));
+    }
+
+    /** Diff two users differing only in the custom extension attribute and assert it resolves as dateTime. */
+    private static void assertLcmAttributeResolves(PrismContext prismContext) throws Exception {
         PrismObject<?> desired = prismContext.parseObject(userWithLcm("2026-02-02T00:00:00.000Z"));
         PrismObject<?> live = prismContext.parseObject(userWithLcm("2026-01-01T00:00:00.000Z"));
 
@@ -57,8 +64,8 @@ class SchemaExtensionTest {
                 "delta must target the custom extension attribute, got " + mod.getPath());
         assertNotNull(mod.getValuesToReplace(), "must be a replace");
 
-        // The clincher: without the registered schema the value would be a raw String; with it, the
-        // dateTime type resolves to XMLGregorianCalendar.
+        // Without the registered schema the value would be a raw String; with it the dateTime type
+        // resolves to XMLGregorianCalendar.
         Object value = mod.getValuesToReplace().iterator().next().getRealValue();
         assertTrue(value instanceof XMLGregorianCalendar,
                 "extension attribute must be schema-typed as dateTime, got " + value.getClass().getName());

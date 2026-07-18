@@ -109,12 +109,14 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   supplied as XML. The bundled jar version (`midpoint.version` in `pom.xml`) must match the target's major
   line. This is why a fat JAR is version-specific (ninja and midPoint Studio are too).
 - **Extension** schema (custom `extension` attributes, custom `SchemaType` objects) is **runtime**:
-  - *File mode:* `--schema-dir <dir>` of extension XSDs → the `MidPointPrismContextFactory(File)` ctor;
-    and/or `--schema <exported SchemaType xml>` (repeatable) registered via
-    `schemaRegistry.registerDynamicSchemaExtensions(...)` — the same call midPoint's
-    `repo-common/SchemaCache.java` (:81, :89) makes at startup.
+  - *File mode:* `--schema <file>` (repeatable) and/or `--schema-dir <dir>`. Both accept either format,
+    chosen by extension: a `.xsd` is a raw XSD, a `.xml` is an exported `SchemaType` object (its embedded
+    `<xsd:schema>` is used). Other extensions — and `.xsd`/`.xml` files not in the expected format — are
+    warned about and skipped. Everything collected is registered via
+    `schemaRegistry.registerDynamicSchemaExtensions(...)` + `prismContext.reload()` — the same call
+    midPoint's `repo-common/SchemaCache.java` (:81, :89) makes at startup.
   - *Live mode:* read the `SchemaType` objects off the server (`--host/--user/--password`) and register
-    them the same way.
+    them the same way (best-effort — a read failure warns and falls back to base schema).
   - Note: `--host` supplies *extensions* only. The base jar is always needed locally, because the tool
     parses both objects into `PrismObject`s locally to run the diff.
 
