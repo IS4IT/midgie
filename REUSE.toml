@@ -1,0 +1,17 @@
+version = 1
+SPDX-PackageName = "midpoint-diff"
+
+[[annotations]]
+path = [".gitignore", "docker/.gitignore", "README.md", "DESIGN.md", "CLAUDE.md", "TODO.md", "docker/README.md", "docker/tls/README.md", "docker/tls/desired.xml", "examples/**.xml", "src/test/resources/**", "src/test/resources/schema/**", "src/test/resources/golden/**", "src/test/resources/tls/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 IS4IT"
+SPDX-License-Identifier = "EUPL-1.2"
+
+# The root LICENSE is the verbatim EUPL text (© the European Union), kept for GitHub's licence
+# detection; the canonical copy for tooling is LICENSES/EUPL-1.2.txt. It carries no inline header
+# — the EU's licence text is not ours to stamp — so its metadata is declared here.
+[[annotations]]
+path = "LICENSE"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "European Union 2007, 2016"
+SPDX-License-Identifier = "EUPL-1.2"

@@ -191,5 +191,5 @@ every push and pull request.
 ## License
 
 [EUPL-1.2](LICENSE). This tool links midPoint's schema library (EUPL-1.2), so a derived work must remain
-EUPL-compatible — it cannot be relicensed as MIT/Apache. Per-file `SPDX-License-Identifier` headers and a
-[`.reuse/dep5`](.reuse/dep5) make the project [REUSE](https://reuse.software/)-compliant.
+EUPL-compatible — it cannot be relicensed as MIT/Apache. Per-file `SPDX-License-Identifier` headers plus a
+[`REUSE.toml`](REUSE.toml) make the project [REUSE](https://reuse.software/)-compliant.
