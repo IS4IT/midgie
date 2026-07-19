@@ -34,15 +34,22 @@ midpoint-diff apply desired.xml --host https://mp.example/midpoint --user admini
 See [`DESIGN.md`](DESIGN.md) for the strategy flags (`--scope`, `--multivalue`, `--equivalence`),
 the two-layer schema handling (`--schema-dir` / `--schema`), and CI-friendly exit codes.
 
-## Build
+## Build & run
 
 ```bash
 mvn -q package
-java -jar target/midpoint-diff.jar --help
+bin/midpoint-diff --help            # launcher (recommended)
+java -jar target/midpoint-diff.jar --help   # or run the JAR directly
 ```
 
-Requires JDK 17. Dependencies (midPoint schema + prism) resolve from Evolveum's Nexus, configured in
+Requires JDK 17+. Dependencies (midPoint schema + prism) resolve from Evolveum's Nexus, configured in
 `pom.xml`.
+
+The `bin/midpoint-diff` launcher finds the JAR (override with `MIDPOINT_DIFF_JAR`) and, on **JDK 23+**,
+adds `--sun-misc-unsafe-memory-access=allow` to silence the JEP 498 `sun.misc.Unsafe` warnings that
+classgraph (a transitive prism dependency) prints during startup. These go straight to the native stderr,
+so they can only be suppressed with that launch flag. Running the JAR directly? Set
+`JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
 
 ## Versioning
 

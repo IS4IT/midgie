@@ -172,6 +172,15 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 - Maven, Java 17, fat JAR via `maven-shade-plugin` (needs a JVM; GraalVM native is impractical given
   prism's reflection/JAXB). Dependencies: `com.evolveum.midpoint.infra:schema` (pulls prism), picocli,
   JUnit 5; live/apply use the JDK 11+ `java.net.http` client — no extra dependency.
+- **Launcher `bin/midpoint-diff`.** On JDK 23+, classgraph (a transitive prism dependency) calls the
+  terminally-deprecated `sun.misc.Unsafe::invokeCleaner` to unmap memory-mapped schema jars during prism
+  bootstrap, which prints JEP 498 warnings. Those go to the *native* stderr (fd 2), bypassing `System.err`,
+  so they cannot be filtered in-process — the only suppression is the launch flag
+  `--sun-misc-unsafe-memory-access=allow`, which can't live in a `-jar` manifest. The launcher adds it, but
+  **only when the running JVM is major ≥ 23** (the flag is unknown to JDK ≤ 22, which does not emit the
+  warning). Running `java -jar` directly instead? Set `JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
+  Forward-looking: once a JDK defaults this to `deny`, the flag becomes *required* to run at all (the Unsafe
+  call would throw) until prism ships a classgraph that no longer uses it.
 - **License: EUPL-1.2.** The tool links `midpoint-schema`, which is EUPL-1.2 (the standalone prism lib is
   Apache-2.0, but the midPoint schema definitions you need for object-aware diff are EUPL). A derived work
   must be EUPL-compatible — it cannot be MIT/Apache. Confirm the exact module license before publishing.

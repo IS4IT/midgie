@@ -36,7 +36,8 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [ ] ⭐ **Update the root `README.md`** — it still says *"early scaffold, the diff engine is being implemented"*; rewrite with real usage + the full flag reference.
 - [x] **Dynamic version** — `--version` reads the pom `project.version` from the filtered `build-info.properties` (no more hardcoded `0.1.0`) and also prints the bundled midPoint schema line, via a picocli `VersionProvider`.
 - [ ] **CI workflow** — GitHub Actions running `mvn test` (offline-green); optionally provision the rig for the live tests.
-- [ ] **CHANGELOG + a tagged release; suppress/document the classgraph `Unsafe` startup warnings.**
+- [ ] **CHANGELOG + a tagged release.**
+- [x] **Classgraph `Unsafe` startup warnings** — the `bin/midpoint-diff` launcher adds `--sun-misc-unsafe-memory-access=allow` on JDK 23+ (the flag is unknown to JDK ≤ 22, which doesn't warn). The warnings go to the native stderr, bypassing `System.err`, so an in-process filter is impossible — verified empirically. Direct-JAR users: `JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
 
 ## G. Test coverage gaps — done
 - [x] **Command-layer offline tests** — `CliTest` drives the real CLI offline: missing LIVE, `--host` vs LIVE exclusion, bad `--scope`/`--equivalence`/`--multivalue`/`--path`/`--format` → exit 2, `apply` without `--host`/password → exit 2, plus drift/no-drift exit codes.
