@@ -27,6 +27,9 @@ two-file mode is also useful on its own for drift detection, migration deltas, a
 
 ## Install
 
+A prebuilt fat JAR is attached to each [release](https://github.com/IS4IT/midpoint-diff/releases). To build
+from source instead:
+
 ```bash
 mvn -q package                       # builds target/midpoint-diff.jar (a fat JAR)
 bin/midpoint-diff --help             # launcher (recommended)

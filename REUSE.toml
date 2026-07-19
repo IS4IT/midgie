@@ -2,7 +2,7 @@ version = 1
 SPDX-PackageName = "midpoint-diff"
 
 [[annotations]]
-path = [".gitignore", "docker/.gitignore", "README.md", "DESIGN.md", "CLAUDE.md", "TODO.md", "docker/README.md", "docker/tls/README.md", "docker/tls/desired.xml", "examples/**.xml", "src/test/resources/**", "src/test/resources/schema/**", "src/test/resources/golden/**", "src/test/resources/tls/**"]
+path = [".gitignore", "docker/.gitignore", "README.md", "DESIGN.md", "CLAUDE.md", "TODO.md", "CHANGELOG.md", "docker/README.md", "docker/tls/README.md", "docker/tls/desired.xml", "examples/**.xml", "src/test/resources/**", "src/test/resources/schema/**", "src/test/resources/golden/**", "src/test/resources/tls/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 IS4IT"
 SPDX-License-Identifier = "EUPL-1.2"

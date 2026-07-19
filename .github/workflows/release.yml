@@ -1,0 +1,68 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+# Release: pushing a version tag (e.g. v0.1.0) builds the fat JAR stamped with the tag's version and
+# publishes a GitHub Release with the JAR attached and notes taken from CHANGELOG.md. The pom stays on
+# -SNAPSHOT; the tag is the single source of truth for the release version, applied with versions:set.
+#
+# To cut a release: update CHANGELOG.md (move Unreleased -> the new version), then:
+#   git tag -a v0.1.0 -m "midpoint-diff 0.1.0" && git push origin v0.1.0
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'      # v0.1.0
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # pre-releases, e.g. v0.1.0-rc1
+
+permissions:
+  contents: write   # create the GitHub Release
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Derive version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Stamp the release version into the build
+        run: >
+          mvn -B -ntp org.codehaus.mojo:versions-maven-plugin:2.16.2:set
+          -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+
+      - name: Build & test
+        run: mvn -B -ntp verify
+
+      - name: Name the artifact with the version
+        run: cp target/midpoint-diff.jar "midpoint-diff-${VERSION}.jar"
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { flag = 1; next }
+            flag && (/^## \[/ || /^\[[^]]*\]: /) { exit }
+            flag { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "See [CHANGELOG.md](CHANGELOG.md)." > release-notes.md
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: midpoint-diff ${{ env.VERSION }}
+          body_path: release-notes.md
+          files: midpoint-diff-${{ env.VERSION }}.jar
+          fail_on_unmatched_files: true
