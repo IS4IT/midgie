@@ -33,7 +33,7 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] **`--no-live-schema`** — skips the live `GET /schemas` read (speed, or when the account lacks schema-read); extension items then need `--schema`/`--schema-dir` or they diff as raw.
 
 ## F. Packaging / docs / release
-- [ ] ⭐ **Update the root `README.md`** — it still says *"early scaffold, the diff engine is being implemented"*; rewrite with real usage + the full flag reference.
+- [x] ⭐ **Update the root `README.md`** — rewritten: install (launcher + JAR), the three modes, the CI exit-code contract, a grouped flag reference (strategy/connection/schema/output+apply), env vars, safety guards, schema layers, version coupling, and testing.
 - [x] **Dynamic version** — `--version` reads the pom `project.version` from the filtered `build-info.properties` (no more hardcoded `0.1.0`) and also prints the bundled midPoint schema line, via a picocli `VersionProvider`.
 - [ ] **CI workflow** — GitHub Actions running `mvn test` (offline-green); optionally provision the rig for the live tests.
 - [ ] **CHANGELOG + a tagged release.**
