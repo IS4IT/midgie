@@ -18,12 +18,14 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
 /**
- * The {@code diff} subcommand: compute the minimal itemDelta between a desired object and the current
- * one and emit the {@link com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType}
- * XML that midPoint's REST {@code PATCH} consumes.
+ * The {@code diff} subcommand: compute the minimal itemDelta between two states of the <b>same</b>
+ * object — its desired state and its current state — and emit the
+ * {@link com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType} XML that
+ * midPoint's REST {@code PATCH} consumes. This is not a comparison of two different objects: both inputs
+ * are the same object (same OID) at two points in time, and the delta transforms current &rarr; desired.
  *
- * <p>The current object comes either from a local LIVE file (offline mode) or, with {@code --host},
- * from a running midPoint over REST. Either way the diff itself runs locally via {@link DiffEngine}.
+ * <p>The current-state object comes either from a local CURRENT file (offline mode) or, with {@code --host},
+ * fetched from a running midPoint over REST. Either way the diff itself runs locally via {@link DiffEngine}.
  * Exit codes: {@code 0} = no differences, {@code 1} = differences found (drift), {@code 2} = error.
  */
 @Command(
@@ -37,12 +39,13 @@ public class DiffCommand implements Callable<Integer> {
     /** Exit code signalling a usage/runtime error, distinct from the drift codes 0/1. */
     private static final int EXIT_ERROR = 2;
 
-    @Parameters(index = "0", paramLabel = "DESIRED", description = "Desired-state object XML.")
+    @Parameters(index = "0", paramLabel = "DESIRED", description = "The object as you want it (desired state).")
     File desiredFile;
 
-    @Parameters(index = "1", arity = "0..1", paramLabel = "LIVE",
-            description = "Live/current object XML (offline mode). Omit when using --host.")
-    File liveFile;
+    @Parameters(index = "1", arity = "0..1", paramLabel = "CURRENT",
+            description = "The same object as it is now (current state), as a local XML file. "
+                    + "Omit when using --host, which fetches the current state from the server.")
+    File currentFile;
 
     @Mixin
     StrategyOptions strategyOptions;
@@ -81,19 +84,19 @@ public class DiffCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
 
-        // A LIVE file means offline; an explicit --host means live. A host inherited only from
-        // MIDPOINT_URL is a fallback that a LIVE file overrides (so an env var doesn't break file diffs).
+        // A CURRENT file means offline; an explicit --host means live. A host inherited only from
+        // MIDPOINT_URL is a fallback that a CURRENT file overrides (so an env var doesn't break file diffs).
         boolean live;
-        if (liveFile != null) {
+        if (currentFile != null) {
             if (connectionOptions.isExplicitHost()) {
-                System.err.println("midpoint-diff: provide either a LIVE file or --host, not both.");
+                System.err.println("midpoint-diff: provide either a CURRENT file or --host, not both.");
                 return EXIT_ERROR;
             }
             live = false;
         } else if (connectionOptions.isLive()) {
             live = true;
         } else {
-            System.err.println("midpoint-diff: offline diff needs a LIVE file, "
+            System.err.println("midpoint-diff: offline diff needs a CURRENT file, "
                     + "or set --host (or MIDPOINT_URL) for live mode.");
             return EXIT_ERROR;
         }
@@ -115,7 +118,7 @@ public class DiffCommand implements Callable<Integer> {
             PrismObject<? extends Objectable> desired = Io.parseObject(prismContext, desiredFile);
             PrismObject<? extends Objectable> current = live
                     ? fetchLive(prismContext, client, desired)
-                    : Io.parseObject(prismContext, liveFile);
+                    : Io.parseObject(prismContext, currentFile);
 
             DiffEngine.DiffResult result = new DiffEngine(prismContext)
                     .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);

@@ -1,8 +1,14 @@
 # midpoint-diff
 
 A schema-aware diff tool for [midPoint](https://evolveum.com/midpoint/). It computes the **minimal
-`itemDelta`** between two objects and emits the `ObjectModificationType` XML that midPoint's REST `PATCH`
-endpoint consumes — a `kubectl diff`/`apply` for midPoint config.
+`itemDelta`** between two versions of a **single object** and emits the `ObjectModificationType` XML that
+midPoint's REST `PATCH` endpoint consumes — a `kubectl diff`/`apply` for midPoint config.
+
+> **It compares one object with itself, not two different objects.** Both inputs are the *same* object
+> (same OID) in two states: the **desired** state (how you want it) and the **current** state (how it is
+> now). The computed delta transforms current → desired — exactly like `git diff` between two revisions of
+> one file, not a comparison of two unrelated files. The tool enforces this: if both inputs carry an OID
+> and the OIDs differ, it refuses to run.
 
 It is a thin wrapper around midPoint's own `PrismObject.diff`, so the diff is schema-correct: containers,
 multi-valued items, PolyStrings, references, and metadata are compared exactly the way midPoint compares
@@ -35,28 +41,34 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 
 ## Modes
 
-```bash
-# Offline: diff two object files -> itemDelta on stdout (exit 1 if they differ)
-bin/midpoint-diff diff desired.xml live.xml
+Both subcommands take the object's **desired** state first. Its **current** state — the *same* object as it
+is now — is either a second file (offline) or fetched from a running server by OID with `--host`:
 
-# Live: diff a desired object against the one currently in a running midPoint
+```bash
+# Offline: diff the desired object against a saved copy of its current state
+bin/midpoint-diff diff desired.xml current.xml        # -> itemDelta on stdout (exit 1 if they differ)
+
+# Live: diff the desired object against its current state on a running midPoint (fetched by OID)
 bin/midpoint-diff diff desired.xml --host https://mp.example/midpoint --user administrator
 
-# Apply: compute and PATCH the minimal change, after confirmation (create the object if absent)
+# Apply: PATCH the minimal change into that same object, after confirmation (create it if absent)
 bin/midpoint-diff apply desired.xml --host https://mp.example/midpoint --user administrator --create-if-absent
 ```
 
-- **`diff`** emits the `ObjectModificationType`. The current object comes from a local `LIVE` file
-  (offline) or, with `--host`, from a `GET` over REST. Pass `-` as a path to read from stdin.
-- **`apply`** fetches the live object, computes the delta, prints what would change, and — after
-  confirmation — `PATCH`es it. It is idempotent (nothing is sent when already in sync) and, with
-  `--create-if-absent`, `POST`s a missing object (operational/metadata items stripped first). `--dry-run`
-  changes nothing and just reports the delta; `--yes`/`-y` skips the prompt (required in non-interactive
-  use).
+`DESIRED` and `CURRENT` are the same object at two points in time. In live mode the current state is
+fetched by OID — the `oid` in the desired object, or `--oid`. Pass `-` for either path to read from stdin.
 
-An explicit `LIVE` file means offline; `--host` (or `MIDPOINT_URL`) means live. A `LIVE` file **and**
+- **`diff`** emits the `ObjectModificationType`. The current state comes from a local `CURRENT` file
+  (offline) or, with `--host`, from a `GET` over REST.
+- **`apply`** fetches the object's current state, computes the delta, prints what would change, and — after
+  confirmation — `PATCH`es it. It is idempotent (nothing is sent when already in sync) and, with
+  `--create-if-absent`, `POST`s the object if it does not exist yet (operational/metadata items stripped
+  first). `--dry-run` changes nothing and just reports the delta; `--yes`/`-y` skips the prompt (required
+  in non-interactive use).
+
+An explicit `CURRENT` file means offline; `--host` (or `MIDPOINT_URL`) means live. A `CURRENT` file **and**
 `--host` together is an error; a host inherited only from `MIDPOINT_URL` is a fallback that an explicit
-`LIVE` file overrides, so an env var never breaks a file diff.
+`CURRENT` file overrides, so an env var never breaks a file diff.
 
 ## Exit codes
 
@@ -133,9 +145,10 @@ a clean union).
 - **Protected/encrypted values** — `ProtectedStringType` deltas (e.g. `credentials/password/value`) are
   dropped from the delta and their paths reported: the ciphertext re-encrypts on every fetch, so diffing it
   yields spurious deltas *and* would leak the secret. Rotate credentials through midPoint's own API.
-- **Type/OID cross-check** — the diff refuses two objects of different types, or two objects that both
-  carry an OID when the OIDs differ, so you cannot accidentally diff the wrong object. A desired object
-  with no OID is an unbound template and is allowed.
+- **Type/OID cross-check** — enforces the "same object" contract: the diff refuses inputs of different
+  types, or inputs that both carry an OID when the OIDs differ, so you cannot accidentally diff the wrong
+  object. A desired object with no OID is an unbound template and is allowed (the current object's OID
+  governs).
 - **Accrued in-place merge edits** — see `--allow-inplace-merge` above; refused by default.
 - **Base-schema version coupling** — the bundled `midpoint-schema` jar is the *compile-time* object model,
   so it must match the target midPoint's major line. In live mode the tool warns if the server's version

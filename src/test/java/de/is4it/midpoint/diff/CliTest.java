@@ -28,16 +28,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CliTest {
 
     private static final String A = "examples/a.xml"; // desired: "Desired description"
-    private static final String B = "examples/b.xml"; // live:    "Current description"
+    private static final String B = "examples/b.xml"; // current: "Current description"
     private static final String DEAD_HOST = "http://localhost:1/midpoint";
 
     // --- usage / validation errors -> exit 2 (these fail fast, before any prism context or network) ---
 
     @Test
-    void missingLiveFileIsAUsageError() {
+    void missingCurrentFileIsAUsageError() {
         Result r = run("diff", A);
         assertEquals(2, r.exit);
-        assertTrue(r.err.contains("LIVE"), r.err);
+        assertTrue(r.err.contains("CURRENT"), r.err);
     }
 
     @Test

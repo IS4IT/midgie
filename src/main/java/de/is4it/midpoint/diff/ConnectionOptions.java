@@ -16,7 +16,7 @@ import picocli.CommandLine.Option;
 
 /**
  * Shared live-mode connection flags for the {@code diff} and {@code apply} subcommands. When a host is
- * set the command talks to a running midPoint over REST instead of reading a local LIVE file.
+ * set the command talks to a running midPoint over REST instead of reading a local CURRENT file.
  *
  * <p>Host/user/password default from the {@code MIDPOINT_URL} / {@code MIDPOINT_USER} /
  * {@code MIDPOINT_PASSWORD} environment variables. The password is resolved without putting it on the
