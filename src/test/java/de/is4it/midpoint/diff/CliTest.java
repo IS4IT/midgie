@@ -6,10 +6,14 @@
 package de.is4it.midpoint.diff;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import picocli.CommandLine;
 
@@ -98,6 +102,54 @@ class CliTest {
         Result r = run("diff", A, B, "--format", "bogus");
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("--format"), r.err);
+    }
+
+    // --- accrued-in-place merge guard (D5) ---
+
+    @Test
+    void mergeUnderNaturalKeysRefusesAccruedInPlaceEdit(@TempDir Path dir) throws Exception {
+        String[] files = accruedMergeScenario(dir);
+        Result r = run("diff", files[0], files[1], "--path", "assignment=merge", "--equivalence", "natural-keys");
+        assertEquals(2, r.exit, r.err);
+        assertTrue(r.err.contains("refusing to merge"), r.err);
+    }
+
+    @Test
+    void allowInplaceMergeProceedsWithWarning(@TempDir Path dir) throws Exception {
+        String[] files = accruedMergeScenario(dir);
+        Result r = run("diff", files[0], files[1], "--path", "assignment=merge",
+                "--equivalence", "natural-keys", "--allow-inplace-merge", "--format", "summary");
+        assertEquals(1, r.exit, r.err);
+        assertTrue(r.err.contains("accrued"), r.err);
+    }
+
+    @Test
+    void realValueMergeIsNotRefused(@TempDir Path dir) throws Exception {
+        // Same inputs under the default real-value strategy: a clean union (add the new value, keep the
+        // accrued one), so nothing is edited in place and the run is not refused.
+        String[] files = accruedMergeScenario(dir);
+        Result r = run("diff", files[0], files[1], "--path", "assignment=merge", "--format", "summary");
+        assertEquals(1, r.exit, r.err);
+    }
+
+    /** {desired, live} paths: live has an accrued assignment[2]; desired swaps in a new managed assignment[3]. */
+    private static String[] accruedMergeScenario(Path dir) throws IOException {
+        Path desired = dir.resolve("desired.xml");
+        Path live = dir.resolve("live.xml");
+        Files.writeString(desired, user(assignment("1", "role-1"), assignment("3", "role-3")), StandardCharsets.UTF_8);
+        Files.writeString(live, user(assignment("1", "role-1"), assignment("2", "role-2")), StandardCharsets.UTF_8);
+        return new String[] {desired.toString(), live.toString()};
+    }
+
+    private static String user(String... assignments) {
+        return "<user xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"22222222-2222-2222-2222-222222222222\">\n"
+                + "  <name>jack</name>\n" + String.join("", assignments) + "</user>";
+    }
+
+    private static String assignment(String id, String targetOid) {
+        return "  <assignment id=\"" + id + "\"><targetRef oid=\"" + targetOid + "\" type=\"c:RoleType\"/></assignment>\n";
     }
 
     // --- CLI harness ---

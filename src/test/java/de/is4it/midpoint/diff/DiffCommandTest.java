@@ -234,6 +234,41 @@ class DiffCommandTest {
     }
 
     @Test
+    void mergeFlagsInPlaceEditOfAccruedValue(@TempDir Path dir) throws Exception {
+        // live carries an accrued assignment[2]; desired replaces it with a new managed assignment[3].
+        // Under natural-keys prism pairs the leftover accrued id=2 with the desired id=3 and edits it in
+        // place (assignment/2/targetRef) — merge cannot preserve id=2, so the accrued value is overwritten.
+        File live = write(dir, "live.xml", user(assignment("1", "role-1"), assignment("2", "role-2")));
+        File desired = write(dir, "desired.xml", user(assignment("1", "role-1"), assignment("3", "role-3")));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS,
+                DiffEngine.Scope.PRESENT, mergeAssignments());
+
+        assertFalse(result.accruedInPlaceEditPaths().isEmpty(),
+                "the pair-and-edit of the accrued assignment[2] must be flagged");
+        assertTrue(result.accruedInPlaceEditPaths().get(0).contains("assignment"),
+                "flagged path should point at the assignment: " + result.accruedInPlaceEditPaths());
+    }
+
+    @Test
+    void mergeDoesNotFlagInPlaceEditOfManagedValue(@TempDir Path dir) throws Exception {
+        // assignment[2] is present in BOTH live and desired (managed); only its targetRef changed. That is a
+        // legitimate in-place update of a value the desired state owns, not an accrued-value footgun.
+        File live = write(dir, "live.xml", user(assignment("1", "role-1"), assignment("2", "role-2")));
+        File desired = write(dir, "desired.xml", user(assignment("1", "role-1"), assignment("2", "role-9")));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS,
+                DiffEngine.Scope.PRESENT, mergeAssignments());
+
+        assertTrue(result.hasDrift(), "the managed targetRef change must still produce a delta");
+        assertTrue(result.accruedInPlaceEditPaths().isEmpty(),
+                "an in-place edit of a value present in desired is managed, not accrued: "
+                        + result.accruedInPlaceEditPaths());
+    }
+
+    @Test
     void diffRefusesObjectsWithDifferentOids(@TempDir Path dir) throws Exception {
         File desired = write(dir, "desired.xml", roleOid("aaaaaaaa-0000-0000-0000-000000000001", "x"));
         File live = write(dir, "live.xml", roleOid("bbbbbbbb-0000-0000-0000-000000000002", "y"));
@@ -266,6 +301,12 @@ class DiffCommandTest {
 
     private static DiffEngine engine() {
         return new DiffEngine(prismContext);
+    }
+
+    /** Merge just the {@code assignment} container (per-path override), leaving everything else on replace. */
+    private static DiffEngine.MultiValueStrategy mergeAssignments() {
+        return DiffEngine.MultiValueStrategy.of(false,
+                List.of(new DiffEngine.MultiValueStrategy.PathRule(ItemPath.fromString("assignment"), true)));
     }
 
     private static ItemDelta<?, ?> single(DiffEngine.DiffResult result) {

@@ -42,17 +42,25 @@ public final class StrategyOptions {
             description = "Value-equivalence strategy, loosest to strictest. See parseEquivalence() for what each considers.")
     String equivalence;
 
+    @Option(names = "--allow-inplace-merge",
+            description = "Proceed even when a merge would edit an accrued (live-only) value in place instead "
+                    + "of preserving it (can happen under --equivalence natural-keys). Off by default: the "
+                    + "run is refused so accrued state is not silently overwritten.")
+    boolean allowInplaceMerge;
+
     /** Parsed, validated strategy set consumed by {@link DiffEngine}. */
     public static final class Resolved {
         final DiffEngine.Scope scope;
         final ParameterizedEquivalenceStrategy equivalence;
         final DiffEngine.MultiValueStrategy multiValue;
+        final boolean allowInplaceMerge;
 
         Resolved(DiffEngine.Scope scope, ParameterizedEquivalenceStrategy equivalence,
-                DiffEngine.MultiValueStrategy multiValue) {
+                DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge) {
             this.scope = scope;
             this.equivalence = equivalence;
             this.multiValue = multiValue;
+            this.allowInplaceMerge = allowInplaceMerge;
         }
     }
 
@@ -70,15 +78,11 @@ public final class StrategyOptions {
         if (multiValue == null) {
             return null;
         }
-        if (multiValue.isMergeActive() && strategy != EquivalenceStrategy.REAL_VALUE) {
-            // Not fatal: allow exploring merge under other strategies, but warn — id-considering
-            // strategies pair values and edit them in place, so accrued values may be mutated
-            // instead of preserved (see DiffEngine.applyMerge).
-            System.err.println("midpoint-diff: warning: merge is designed for --equivalence real-value "
-                    + "(id-agnostic content matching); with --equivalence " + equivalence
-                    + " values may be paired and edited in place instead of cleanly added/kept. Proceeding.");
-        }
-        return new Resolved(scopeValue, strategy, multiValue);
+        // A blanket "merge + non-real-value" warning used to fire here, but it cried wolf: an id-considering
+        // strategy only harms accrued state when the diff actually pairs a live-only value and edits it in
+        // place. DiffEngine now detects that precisely per delta (DiffResult.accruedInPlaceEditPaths); the
+        // command layer refuses those unless --allow-inplace-merge is set.
+        return new Resolved(scopeValue, strategy, multiValue, allowInplaceMerge);
     }
 
     private DiffEngine.Scope parseScope() {
@@ -146,6 +150,17 @@ public final class StrategyOptions {
                         + equivalence);
                 return null;
         }
+    }
+
+    /**
+     * The shared refusal message for accrued in-place edits (see
+     * {@link DiffEngine.DiffResult#accruedInPlaceEditPaths()}). Printed by both {@code diff} and {@code apply}
+     * before they emit or write a delta that would overwrite accrued state.
+     */
+    static String accruedInPlaceRefusal(List<String> paths) {
+        return "midpoint-diff: refusing to merge: it would edit accrued (live-only) value(s) in place instead "
+                + "of preserving them, silently overwriting them at " + String.join(", ", paths)
+                + ". Use --equivalence real-value for a clean union, or --allow-inplace-merge to proceed anyway.";
     }
 
     /** Parse {@code --multivalue} plus any {@code --path <itemPath>=merge|replace} overrides. Null on error. */

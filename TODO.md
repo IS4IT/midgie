@@ -25,7 +25,7 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] ⭐ **Round-trip core test** — `roundTripDeltaAppliesToLiveYieldingDesired` computes the delta, `applyTo()`s it to a clone of the live object, and asserts the result equals desired (midPoint's `TestParseDiffPatch` invariant).
 - [x] **PolyString / reference diffing** — `polyStringAndReferenceDoNotChurn`: no drift on an expanded-vs-shorthand PolyString name or a `targetRef` under a different container id; real drift on a changed name/ref.
 - [x] **Type/OID cross-check** — `DiffEngine.diff` throws if desired and live both carry an OID and they differ (already refused mismatched types); a desired template without an OID is still allowed.
-- [ ] **Merge natural-keys footgun** — pair-and-edit-in-place can mutate accrued values; make the risk visible per-delta or refuse by default.
+- [x] **Merge natural-keys footgun** — `DiffEngine` now detects per delta when a merge would edit an accrued (live-only) value in place (an id/natural-key-considering strategy pairs it with a desired value and produces a deep in-place edit merge can't preserve). Both `diff` and `apply` **refuse by default** (exit 2) with the offending paths; `--allow-inplace-merge` downgrades to a warning and proceeds. An in-place edit of a value that *is* in desired (managed) is not flagged. Replaces the old imprecise up-front "merge + non-real-value" warning.
 
 ## E. I/O ergonomics
 - [x] **stdin/stdout plumbing** — desired (and offline live) read from `-`; write with `-o <file>`; `--format json` alongside xml/summary.

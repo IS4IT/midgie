@@ -11,8 +11,13 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
+import javax.xml.namespace.QName;
+
+import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.ItemDefinition;
 import com.evolveum.midpoint.prism.Objectable;
+import com.evolveum.midpoint.prism.PrismContainer;
+import com.evolveum.midpoint.prism.PrismContainerValue;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.PrismValue;
@@ -128,7 +133,14 @@ public final class DiffEngine {
         // credential API, not a blind PATCH of stale ciphertext.
         List<String> protectedSkipped = stripProtectedValues(delta);
 
-        return new DiffResult(delta, mergeFallbacks, protectedSkipped);
+        // Merge promises accrued (live-only) values survive. Under an id/natural-key-considering strategy,
+        // prism can pair a live-only value with a desired value and edit it in place (a deep delta merge
+        // cannot express as a union), which silently overwrites the accrued value. Report those paths so
+        // the command layer can refuse by default. Empty for a clean real-value union of accrued values.
+        List<String> accruedInPlaceEdits = multiValue.isMergeActive()
+                ? findAccruedInPlaceEdits(delta, desired, multiValue) : List.of();
+
+        return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits);
     }
 
     private static <O extends Objectable> ObjectDelta<O> reconcile(
@@ -198,6 +210,61 @@ public final class DiffEngine {
     }
 
     /**
+     * Find modifications that edit an accrued (live-only) container value in place under a merge-designated
+     * container. When merge is combined with an id- or natural-key-considering strategy, prism may pair a
+     * live-only value with a desired value and emit a deep in-place edit — e.g. {@code assignment/2/targetRef}
+     * — instead of a clean whole-value add/delete. {@code applyMerge} operates on the container path and
+     * never sees such a deep edit, so the accrued value is silently overwritten rather than preserved.
+     *
+     * <p>The signature is a path that descends into a merge container via a container-id segment (name path
+     * before the first id = the container; the id = the value being edited) whose id is <em>not</em> present
+     * in the desired object. An in-place edit of a value that <em>is</em> in desired is a legitimate managed
+     * update (the user's desired state carries that value), so it is not reported.
+     *
+     * @return the paths of accrued in-place edits — empty for a clean real-value union
+     */
+    private static List<String> findAccruedInPlaceEdits(ObjectDelta<?> delta, PrismObject<?> desired,
+            MultiValueStrategy multiValue) {
+        List<String> flagged = new ArrayList<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            List<QName> containerNames = new ArrayList<>();
+            Long valueId = null;
+            for (Object segment : mod.getPath().getSegments()) {
+                if (ItemPath.isId(segment)) {
+                    valueId = ItemPath.toId(segment);
+                    break;
+                }
+                if (!ItemPath.isName(segment)) {
+                    break;
+                }
+                containerNames.add(ItemPath.toName(segment));
+            }
+            if (valueId == null || containerNames.isEmpty()) {
+                continue; // no container-id segment: a clean whole-value add/delete, not a paired in-place edit
+            }
+            ItemPath containerPath = ItemPath.create(containerNames.toArray());
+            if (multiValue.isMerge(containerPath) && !desiredHasContainerValue(desired, containerPath, valueId)) {
+                flagged.add(mod.getPath().toString());
+            }
+        }
+        return flagged;
+    }
+
+    /** Whether the desired object carries a container value with {@code valueId} at {@code containerPath}. */
+    private static boolean desiredHasContainerValue(PrismObject<?> desired, ItemPath containerPath, Long valueId) {
+        Item<?, ?> item = desired.findItem(containerPath);
+        if (!(item instanceof PrismContainer<?> container)) {
+            return false; // the whole container is absent from desired, so the value is live-only (accrued)
+        }
+        for (PrismContainerValue<?> value : container.getValues()) {
+            if (valueId.equals(value.getId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Turn the add/delete deltas of merge-designated paths into merge (union) deltas: keep the additions
      * but stop deleting live-only values, so accrued runtime state survives. Because the diff runs under
      * a real-value strategy, values are matched by content — a value that appears as a delete is a
@@ -238,20 +305,22 @@ public final class DiffEngine {
     }
 
     /**
-     * The outcome of a diff: the delta plus any paths where merge had to fall back to replace, and any
-     * protected/encrypted paths that were skipped.
+     * The outcome of a diff: the delta plus any paths where merge had to fall back to replace, any
+     * protected/encrypted paths that were skipped, and any accrued values a merge would edit in place.
      */
     public static final class DiffResult {
 
         private final ObjectDelta<? extends Objectable> delta;
         private final List<String> mergeFallbackPaths;
         private final List<String> protectedSkippedPaths;
+        private final List<String> accruedInPlaceEditPaths;
 
         DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths,
-                List<String> protectedSkippedPaths) {
+                List<String> protectedSkippedPaths, List<String> accruedInPlaceEditPaths) {
             this.delta = delta;
             this.mergeFallbackPaths = List.copyOf(mergeFallbackPaths);
             this.protectedSkippedPaths = List.copyOf(protectedSkippedPaths);
+            this.accruedInPlaceEditPaths = List.copyOf(accruedInPlaceEditPaths);
         }
 
         public ObjectDelta<? extends Objectable> delta() {
@@ -266,6 +335,14 @@ public final class DiffEngine {
         /** Paths of protected/encrypted values that were dropped from the delta (see {@code stripProtectedValues}). */
         public List<String> protectedSkippedPaths() {
             return protectedSkippedPaths;
+        }
+
+        /**
+         * Paths where a merge would edit an accrued (live-only) value in place rather than preserve it
+         * (see {@code findAccruedInPlaceEdits}). Non-empty only under an id/natural-key-considering strategy.
+         */
+        public List<String> accruedInPlaceEditPaths() {
+            return accruedInPlaceEditPaths;
         }
 
         public boolean hasDrift() {

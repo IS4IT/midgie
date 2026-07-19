@@ -70,6 +70,10 @@ the midPoint source tree.
   rotation; a real password change goes through its own API, not a blind PATCH of stale ciphertext.
   (Detection is by schema type or a protected real value; a protected value nested inside a larger
   added/deleted container is not walked — rare, and noted in the code.)
+- *Accrued in-place merge edits* — when `merge` runs under an id/natural-key-considering strategy, prism can
+  pair an accrued (live-only) value with a desired value and edit it in place rather than doing a clean
+  add-and-keep; merge cannot preserve it. Detected per delta and refused by default (`--allow-inplace-merge`
+  to proceed). See "Strategy flags".
 
 ## Commands / modes (layered)
 
@@ -122,9 +126,14 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   - *data* — full parsed data incl. metadata and exact ids; ignores only serialization noise (prefixes).
   - *literal* — as *data*, but ns prefixes matter too (≈ comparing raw XML).
 
-  `merge` combined with any non-`real-value` strategy is allowed (for exploration) but **warns** on stderr:
-  the id-considering strategies pair values and edit them in place, so accrued values may be mutated
-  instead of preserved. Use `real-value` for a clean, id-agnostic union.
+  `merge` is designed for `real-value` (clean, id-agnostic union). It is still allowed under the other
+  strategies for exploration, but an id/natural-key-considering strategy can pair a live-only (accrued)
+  value with a desired value and emit a deep **in-place edit** (e.g. `assignment/2/targetRef`) that merge
+  cannot express as a union — so the accrued value is silently overwritten. The engine detects that
+  **per delta** (`DiffResult.accruedInPlaceEditPaths`, comparing the edited container-id against the desired
+  object) and both `diff` and `apply` **refuse by default** (exit 2), naming the offending paths.
+  `--allow-inplace-merge` downgrades the refusal to a warning and proceeds. An in-place edit of a value that
+  *is* present in desired is a legitimate managed update and is not flagged.
 
 ## Schema (two layers, two knobs)
 

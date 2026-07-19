@@ -156,6 +156,12 @@ public class ApplyCommand implements Callable<Integer> {
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
                 .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
 
+        // Refuse (by default) before writing anything if the merge would overwrite an accrued value in place.
+        if (!result.accruedInPlaceEditPaths().isEmpty() && !strategy.allowInplaceMerge) {
+            System.err.println(StrategyOptions.accruedInPlaceRefusal(result.accruedInPlaceEditPaths()));
+            return EXIT_ERROR;
+        }
+
         for (String path : result.mergeFallbackPaths()) {
             note("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
                     + "merge does not apply there, so it was left as replace.");
@@ -163,6 +169,10 @@ public class ApplyCommand implements Callable<Integer> {
         for (String path : result.protectedSkippedPaths()) {
             note("midpoint-diff: note: skipped protected value at '" + path
                     + "' — ciphertext changes on every fetch and is not safely diffable.");
+        }
+        for (String path : result.accruedInPlaceEditPaths()) {
+            note("midpoint-diff: warning: '" + path + "' edits an accrued (live-only) value in place; "
+                    + "merge cannot preserve it, so it will be overwritten (proceeding under --allow-inplace-merge).");
         }
 
         if (!result.hasDrift()) {
