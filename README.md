@@ -1,5 +1,8 @@
 # midpoint-diff
 
+[![CI](https://github.com/IS4IT/midpoint-diff/actions/workflows/ci.yml/badge.svg)](https://github.com/IS4IT/midpoint-diff/actions/workflows/ci.yml)
+[![REUSE status](https://api.reuse.software/badge/github.com/IS4IT/midpoint-diff)](https://api.reuse.software/info/github.com/IS4IT/midpoint-diff)
+
 A schema-aware diff tool for [midPoint](https://evolveum.com/midpoint/). It computes the **minimal
 `itemDelta`** between two versions of a **single object** and emits the `ObjectModificationType` XML that
 midPoint's REST `PATCH` endpoint consumes — a `kubectl diff`/`apply` for midPoint config.
@@ -180,6 +183,10 @@ mvn -q test                 # offline unit/command tests (no server needed)
 A Docker Compose rig under `docker/` brings up a real midPoint for the live integration tests (gated on the
 rig being up), and `docker/tls/` adds an nginx TLS proxy + private CA to exercise `--cacert`/`--insecure`
 end to end. See [`docker/README.md`](docker/README.md) and [`docker/tls/README.md`](docker/tls/README.md).
+
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `mvn verify` on JDK 17 and 21
+(the rig-gated live tests self-skip) plus a [REUSE](https://reuse.software/) licence-compliance lint on
+every push and pull request.
 
 ## License
 

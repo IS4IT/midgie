@@ -35,7 +35,7 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 ## F. Packaging / docs / release
 - [x] ⭐ **Update the root `README.md`** — rewritten: install (launcher + JAR), the three modes, the CI exit-code contract, a grouped flag reference (strategy/connection/schema/output+apply), env vars, safety guards, schema layers, version coupling, and testing.
 - [x] **Dynamic version** — `--version` reads the pom `project.version` from the filtered `build-info.properties` (no more hardcoded `0.1.0`) and also prints the bundled midPoint schema line, via a picocli `VersionProvider`.
-- [ ] **CI workflow** — GitHub Actions running `mvn test` (offline-green); optionally provision the rig for the live tests.
+- [x] **CI workflow** — `.github/workflows/ci.yml`: `mvn verify` on JDK 17 + 21 (Maven-cached; rig-gated live tests self-skip) plus a REUSE compliance lint (`fsfe/reuse-action`), on push/PR to `main`. README carries CI + REUSE badges.
 - [ ] **CHANGELOG + a tagged release.**
 - [x] **Classgraph `Unsafe` startup warnings** — the `bin/midpoint-diff` launcher adds `--sun-misc-unsafe-memory-access=allow` on JDK 23+ (the flag is unknown to JDK ≤ 22, which doesn't warn). The warnings go to the native stderr, bypassing `System.err`, so an in-process filter is impossible — verified empirically. Direct-JAR users: `JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
 
