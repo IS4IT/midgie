@@ -8,17 +8,21 @@ package de.is4it.midpoint.diff;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
+import com.evolveum.midpoint.prism.ItemDefinition;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
 import com.evolveum.midpoint.prism.path.ItemName;
 import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.util.exception.SchemaException;
+import com.evolveum.prism.xml.ns._public.types_3.ProtectedStringType;
 
 /**
  * The offline diff core: parse two midPoint objects and compute the minimal {@link ObjectDelta}
@@ -93,6 +97,16 @@ public final class DiffEngine {
                     + liveType.getSimpleName() + ", desired is " + desiredType.getSimpleName());
         }
 
+        // Guard against diffing the wrong object: if both sides carry an OID and they differ, this is
+        // almost certainly a mistake (wrong --oid, wrong file), and a delta would rewrite one object into
+        // another. A desired object with no OID (an unbound template) is fine — the live OID governs.
+        String desiredOid = desired.getOid();
+        String liveOid = live.getOid();
+        if (desiredOid != null && liveOid != null && !desiredOid.equals(liveOid)) {
+            throw new SchemaException("Cannot diff different objects: desired oid " + desiredOid
+                    + " does not match live oid " + liveOid + ".");
+        }
+
         // before.diff(after) => delta that, applied to `before`, yields `after`. before = live,
         // after = desired, so the delta reconciles the live object to the desired state. REAL_VALUE
         // matches container/property values by content (ignoring PCV ids), which yields clean whole-value
@@ -106,7 +120,15 @@ public final class DiffEngine {
         if (scope == Scope.PRESENT) {
             retainItemsPresentIn(delta, desired);
         }
-        return new DiffResult(delta, mergeFallbacks);
+
+        // Protected/encrypted values (ProtectedStringType) re-encrypt on every fetch, so the ciphertext
+        // differs each time even when the cleartext is identical. Diffing them yields spurious deltas and
+        // would leak the ciphertext into the emitted PATCH, so drop those item deltas entirely and report
+        // the paths. midPoint owns password rotation; a genuine password change must go through its own
+        // credential API, not a blind PATCH of stale ciphertext.
+        List<String> protectedSkipped = stripProtectedValues(delta);
+
+        return new DiffResult(delta, mergeFallbacks, protectedSkipped);
     }
 
     private static <O extends Objectable> ObjectDelta<O> reconcile(
@@ -130,6 +152,49 @@ public final class DiffEngine {
             }
         }
         toRemove.forEach(delta::removeModification);
+    }
+
+    /**
+     * Drop item deltas that touch a {@link ProtectedStringType} value and return their paths. An item is
+     * protected either by its schema definition (type is {@code ProtectedStringType}, e.g.
+     * {@code credentials/password/value}) or by carrying a protected real value directly (a fallback for
+     * when no definition is attached). Nested protected values inside a larger added/deleted container
+     * (e.g. a password buried in an added assignment) are not detected here; those are rare and would need
+     * a deep value walk — call this out in the docs rather than pretend it is handled.
+     */
+    private static List<String> stripProtectedValues(ObjectDelta<?> delta) {
+        List<String> skipped = new ArrayList<>();
+        List<ItemDelta<?, ?>> toRemove = new ArrayList<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            if (isProtected(mod)) {
+                toRemove.add(mod);
+                skipped.add(mod.getPath().toString());
+            }
+        }
+        toRemove.forEach(delta::removeModification);
+        return skipped;
+    }
+
+    private static boolean isProtected(ItemDelta<?, ?> mod) {
+        ItemDefinition<?> definition = mod.getDefinition();
+        if (definition != null && ProtectedStringType.COMPLEX_TYPE.equals(definition.getTypeName())) {
+            return true;
+        }
+        return hasProtectedValue(mod.getValuesToReplace())
+                || hasProtectedValue(mod.getValuesToAdd())
+                || hasProtectedValue(mod.getValuesToDelete());
+    }
+
+    private static boolean hasProtectedValue(Collection<? extends PrismValue> values) {
+        if (values == null) {
+            return false;
+        }
+        for (PrismValue value : values) {
+            if (value.getRealValue() instanceof ProtectedStringType) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -172,15 +237,21 @@ public final class DiffEngine {
         return fallbacks;
     }
 
-    /** The outcome of a diff: the delta plus any paths where merge had to fall back to replace. */
+    /**
+     * The outcome of a diff: the delta plus any paths where merge had to fall back to replace, and any
+     * protected/encrypted paths that were skipped.
+     */
     public static final class DiffResult {
 
         private final ObjectDelta<? extends Objectable> delta;
         private final List<String> mergeFallbackPaths;
+        private final List<String> protectedSkippedPaths;
 
-        DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths) {
+        DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths,
+                List<String> protectedSkippedPaths) {
             this.delta = delta;
             this.mergeFallbackPaths = List.copyOf(mergeFallbackPaths);
+            this.protectedSkippedPaths = List.copyOf(protectedSkippedPaths);
         }
 
         public ObjectDelta<? extends Objectable> delta() {
@@ -190,6 +261,11 @@ public final class DiffEngine {
         /** Paths of merge-requested items that could only be expressed as a replace (see {@code applyMerge}). */
         public List<String> mergeFallbackPaths() {
             return mergeFallbackPaths;
+        }
+
+        /** Paths of protected/encrypted values that were dropped from the delta (see {@code stripProtectedValues}). */
+        public List<String> protectedSkippedPaths() {
+            return protectedSkippedPaths;
         }
 
         public boolean hasDrift() {

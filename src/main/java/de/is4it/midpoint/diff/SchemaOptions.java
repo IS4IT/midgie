@@ -36,7 +36,7 @@ import picocli.CommandLine.Option;
  *       {@code .xml} is an exported {@code SchemaType} object (its embedded {@code <xsd:schema>} is
  *       used). Files of another extension, or {@code .xsd}/{@code .xml} files that are not in the
  *       expected format, are warned about and skipped. In live mode the {@code SchemaType} objects on
- *       the server are read and registered too.</li>
+ *       the server are read and registered too, unless {@code --no-live-schema} opts out.</li>
  * </ul>
  */
 public final class SchemaOptions {
@@ -50,6 +50,11 @@ public final class SchemaOptions {
     @Option(names = "--schema", paramLabel = "FILE",
             description = "Extension schema file: .xsd raw XSD or .xml exported SchemaType. Repeatable.")
     File[] schemaFiles;
+
+    @Option(names = "--no-live-schema",
+            description = "Skip the live GET /schemas read (faster, or when the account lacks schema-read). "
+                    + "Objects using extension items then need --schema/--schema-dir, or they diff as raw.")
+    boolean noLiveSchema;
 
     /**
      * Build the prism context (base schema) and register extension schema from {@code --schema-dir},
@@ -69,7 +74,7 @@ public final class SchemaOptions {
                 addFile(prismContext, "--schema " + file.getName(), file, schemas);
             }
         }
-        if (liveClient != null) {
+        if (liveClient != null && !noLiveSchema) {
             collectLiveSchemas(prismContext, liveClient, schemas);
         }
 

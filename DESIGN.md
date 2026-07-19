@@ -59,6 +59,18 @@ prism itself (`com.evolveum.midpoint.prism.*`: `PrismObject`, `PrismContext`, `O
 `EquivalenceStrategy`) is an **external** library pulled transitively by `midpoint-schema`; it is not in
 the midPoint source tree.
 
+**Safety guards** applied around that core (`DiffEngine`):
+- *Type / OID cross-check* — the diff refuses two objects of different compile-time types, and (new) two
+  objects that both carry an OID when the OIDs differ, so a wrong `--oid` or wrong file cannot silently
+  produce a delta that rewrites one object into another. A desired object with no OID is an unbound
+  template and is allowed (the live OID governs).
+- *Protected/encrypted values* — `ProtectedStringType` item deltas (e.g. `credentials/password/value`) are
+  dropped from the delta and their paths reported on stderr: the ciphertext re-encrypts on every fetch, so
+  diffing it yields spurious deltas *and* would leak the secret into the PATCH. midPoint owns credential
+  rotation; a real password change goes through its own API, not a blind PATCH of stale ciphertext.
+  (Detection is by schema type or a protected real value; a protected value nested inside a larger
+  added/deleted container is not walked — rare, and noted in the code.)
+
 ## Commands / modes (layered)
 
 **v1 = the offline core.** Live and apply are thin adapters added in a second increment.
@@ -128,7 +140,9 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
     `schemaRegistry.registerDynamicSchemaExtensions(...)` + `prismContext.reload()` — the same call
     midPoint's `repo-common/SchemaCache.java` (:81, :89) makes at startup.
   - *Live mode:* read the `SchemaType` objects off the server (`--host/--user/--password`) and register
-    them the same way (best-effort — a read failure warns and falls back to base schema).
+    them the same way (best-effort — a read failure warns and falls back to base schema). `--no-live-schema`
+    skips this `GET /schemas` read (faster, or for accounts without schema-read); extension items then need
+    `--schema`/`--schema-dir` or they diff as raw.
   - Note: `--host` supplies *extensions* only. The base jar is always needed locally, because the tool
     parses both objects into `PrismObject`s locally to run the diff.
 

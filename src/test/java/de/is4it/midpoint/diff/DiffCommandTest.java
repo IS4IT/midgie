@@ -15,12 +15,16 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
+import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
+import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
 import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.schema.DeltaConvertor;
 import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
+import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectFactory;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.AssignmentType;
@@ -28,6 +32,7 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.AssignmentType;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -148,6 +153,115 @@ class DiffCommandTest {
                 "data must surface the metadata difference");
     }
 
+    @Test
+    void protectedValuesAreSkippedAndReported(@TempDir Path dir) throws Exception {
+        // Two users identical except for the password ciphertext/clearValue. midPoint re-encrypts on every
+        // fetch, so this "difference" is noise — the engine must drop it and report the path, not emit a
+        // delta that would leak the secret.
+        File desired = write(dir, "desired.xml", userWithPassword("new-secret"));
+        File live = write(dir, "live.xml", userWithPassword("old-secret"));
+
+        DiffEngine.DiffResult result = engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll());
+
+        assertFalse(result.hasDrift(), "the only difference is a protected value, which must be skipped");
+        assertEquals(1, result.protectedSkippedPaths().size(), "the protected path must be reported");
+        assertTrue(result.protectedSkippedPaths().get(0).contains("password"),
+                "reported path should point at the password: " + result.protectedSkippedPaths());
+    }
+
+    @Test
+    void roundTripDeltaAppliesToLiveYieldingDesired(@TempDir Path dir) throws Exception {
+        // midPoint's own TestParseDiffPatch invariant: live.diff(desired) applied to live must yield desired.
+        // Use full scope so every difference (a changed managed item and a removed live-only item) is in the
+        // delta, then apply it locally and assert the result equals desired.
+        File desiredFile = write(dir, "desired.xml", role("Desired description"));
+        File liveFile = write(dir, "live.xml",
+                role("Current description", "  <subtype>accrued-at-runtime</subtype>\n"));
+
+        PrismObject<? extends Objectable> desired = prismContext.parseObject(desiredFile);
+        PrismObject<? extends Objectable> live = prismContext.parseObject(liveFile);
+
+        DiffEngine.DiffResult result = engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.FULL,
+                DiffEngine.MultiValueStrategy.replaceAll());
+
+        @SuppressWarnings("rawtypes")
+        PrismObject reconciled = live.clone();
+        ((ObjectDelta) result.delta()).applyTo(reconciled);
+        assertTrue(desired.equivalent(reconciled),
+                "applying the delta to the live object must reproduce the desired object");
+    }
+
+    @Test
+    void polyStringAndReferenceDoNotChurn(@TempDir Path dir) throws Exception {
+        // The live object arrives from REST with a fully-expanded PolyString name (orig+norm) and an
+        // assignment carrying a container id; the desired file uses the shorthand name and a different id.
+        // Neither the PolyString form nor the container id is a real difference, so there must be no drift.
+        File live = write(dir, "live.xml",
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                        + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                        + " oid=\"11111111-1111-1111-1111-111111111111\">\n"
+                        + "  <name><orig>Example Role</orig><norm>example role</norm></name>\n"
+                        + "  <assignment id=\"7\"><targetRef oid=\"role-1\" type=\"c:RoleType\"/></assignment>\n"
+                        + "</role>");
+        File same = write(dir, "same.xml",
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                        + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                        + " oid=\"11111111-1111-1111-1111-111111111111\">\n"
+                        + "  <name>Example Role</name>\n"
+                        + "  <assignment id=\"99\"><targetRef oid=\"role-1\" type=\"c:RoleType\"/></assignment>\n"
+                        + "</role>");
+
+        assertFalse(engine().diff(same, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.FULL,
+                        DiffEngine.MultiValueStrategy.replaceAll()).hasDrift(),
+                "equal PolyString (shorthand vs expanded) and same targetRef under a different id must not churn");
+
+        // A genuinely different name and a different targetRef must both surface.
+        File changed = write(dir, "changed.xml",
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                        + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                        + " oid=\"11111111-1111-1111-1111-111111111111\">\n"
+                        + "  <name>Renamed Role</name>\n"
+                        + "  <assignment id=\"7\"><targetRef oid=\"role-9\" type=\"c:RoleType\"/></assignment>\n"
+                        + "</role>");
+        DiffEngine.DiffResult drift = engine().diff(changed, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll());
+        assertTrue(drift.hasDrift(), "a changed name and targetRef must produce a delta");
+        assertTrue(touchesItem(drift, "name"), "the name change must be in the delta");
+        assertTrue(touchesItem(drift, "assignment"), "the targetRef change must be in the delta");
+    }
+
+    @Test
+    void diffRefusesObjectsWithDifferentOids(@TempDir Path dir) throws Exception {
+        File desired = write(dir, "desired.xml", roleOid("aaaaaaaa-0000-0000-0000-000000000001", "x"));
+        File live = write(dir, "live.xml", roleOid("bbbbbbbb-0000-0000-0000-000000000002", "y"));
+
+        SchemaException ex = assertThrows(SchemaException.class, () -> engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll()));
+        assertTrue(ex.getMessage().contains("does not match live oid"),
+                "the mismatch message must name both oids: " + ex.getMessage());
+    }
+
+    @Test
+    void diffAllowsDesiredTemplateWithoutOid(@TempDir Path dir) throws Exception {
+        // A desired object with no OID is an unbound template; the live OID governs, so it diffs normally.
+        File desired = write(dir, "desired.xml",
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\">\n"
+                        + "  <name>Example Role</name>\n"
+                        + "  <description>Desired description</description>\n"
+                        + "</role>");
+        File live = write(dir, "live.xml", role("Current description"));
+
+        DiffEngine.DiffResult result = engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll());
+        assertTrue(result.hasDrift(), "a template without OID must still diff against the live object");
+        assertTrue(touchesItem(result, "description"), "the description change must surface");
+    }
+
     // --- helpers ---
 
     private static DiffEngine engine() {
@@ -170,6 +284,28 @@ class DiffCommandTest {
 
     private static String role(String description) {
         return role(description, "");
+    }
+
+    private static String roleOid(String oid, String description) {
+        return "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"" + oid + "\">\n"
+                + "  <name>Example Role</name>\n"
+                + "  <description>" + description + "</description>\n"
+                + "</role>";
+    }
+
+    private static String userWithPassword(String clearValue) {
+        return "<user xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"22222222-2222-2222-2222-222222222222\">\n"
+                + "  <name>jack</name>\n"
+                + "  <credentials>\n"
+                + "    <password>\n"
+                + "      <value>\n"
+                + "        <clearValue>" + clearValue + "</clearValue>\n"
+                + "      </value>\n"
+                + "    </password>\n"
+                + "  </credentials>\n"
+                + "</user>";
     }
 
     private static String role(String description, String extra) {

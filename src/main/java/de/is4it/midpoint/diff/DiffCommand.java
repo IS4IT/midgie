@@ -126,6 +126,10 @@ public class DiffCommand implements Callable<Integer> {
                     System.err.println("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
                             + "merge does not apply there, so it was left as replace.");
                 }
+                for (String path : result.protectedSkippedPaths()) {
+                    System.err.println("midpoint-diff: note: skipped protected value at '" + path
+                            + "' — ciphertext changes on every fetch and is not safely diffable.");
+                }
             }
 
             Io.writePayload(output, DeltaOutput.render(prismContext, result.delta(), format));

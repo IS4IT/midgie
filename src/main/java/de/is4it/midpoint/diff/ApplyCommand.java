@@ -160,6 +160,10 @@ public class ApplyCommand implements Callable<Integer> {
             note("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
                     + "merge does not apply there, so it was left as replace.");
         }
+        for (String path : result.protectedSkippedPaths()) {
+            note("midpoint-diff: note: skipped protected value at '" + path
+                    + "' — ciphertext changes on every fetch and is not safely diffable.");
+        }
 
         if (!result.hasDrift()) {
             status("No changes: " + target.restType + "/" + target.oid + " already matches desired.");

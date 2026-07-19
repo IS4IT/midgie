@@ -21,16 +21,16 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] **Real TLS verification** — `--cacert <FILE>` verifies the server against a CA cert; `--insecure` now also bypasses hostname mismatch. Verified end-to-end by the `docker/tls/` rig (nginx TLS proxy + private CA + a client container running the smoke tests).
 
 ## D. Correctness edges (each also wants a test)
-- [ ] ⭐ **Protected/encrypted values** — `<protectedString>` ciphertext differs on every fetch → spurious deltas *and* secrets in the output. Decide policy: ignore protected strings, or warn loudly.
-- [ ] ⭐ **Round-trip core test** — compute the delta, `applyTo()` it to the live object locally, assert it equals desired (midPoint's own `TestParseDiffPatch` pattern). Strongest confidence the emitted PATCH is correct.
-- [ ] **PolyString / reference diffing** — verify no churn on `fullName` (orig/norm) and `targetRef` (filter/relation); add fixtures.
-- [ ] **Type/OID cross-check** between the desired file and the fetched live object, so you can't diff the wrong object.
+- [x] ⭐ **Protected/encrypted values** — `ProtectedStringType` item deltas are dropped from the delta (ciphertext re-encrypts on every fetch → spurious deltas *and* a secret leak) and the skipped paths are reported on stderr. Detection is by schema type (`credentials/password/value`) or a protected real value; nested protected values inside a larger added container are not walked (rare — documented in `DiffEngine`).
+- [x] ⭐ **Round-trip core test** — `roundTripDeltaAppliesToLiveYieldingDesired` computes the delta, `applyTo()`s it to a clone of the live object, and asserts the result equals desired (midPoint's `TestParseDiffPatch` invariant).
+- [x] **PolyString / reference diffing** — `polyStringAndReferenceDoNotChurn`: no drift on an expanded-vs-shorthand PolyString name or a `targetRef` under a different container id; real drift on a changed name/ref.
+- [x] **Type/OID cross-check** — `DiffEngine.diff` throws if desired and live both carry an OID and they differ (already refused mismatched types); a desired template without an OID is still allowed.
 - [ ] **Merge natural-keys footgun** — pair-and-edit-in-place can mutate accrued values; make the risk visible per-delta or refuse by default.
 
 ## E. I/O ergonomics
 - [x] **stdin/stdout plumbing** — desired (and offline live) read from `-`; write with `-o <file>`; `--format json` alongside xml/summary.
 - [x] **`--debug` / `-v`** raises the log level to DEBUG on stderr.
-- [ ] **`--no-live-schema`** — every `--host` call does `GET /schemas`; opt-out for speed or when the user lacks schema-read.
+- [x] **`--no-live-schema`** — skips the live `GET /schemas` read (speed, or when the account lacks schema-read); extension items then need `--schema`/`--schema-dir` or they diff as raw.
 
 ## F. Packaging / docs / release
 - [ ] ⭐ **Update the root `README.md`** — it still says *"early scaffold, the diff engine is being implemented"*; rewrite with real usage + the full flag reference.
