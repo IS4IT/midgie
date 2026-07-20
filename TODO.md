@@ -42,3 +42,34 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 ## G. Test coverage gaps — done
 - [x] **Command-layer offline tests** — `CliTest` drives the real CLI offline: missing LIVE, `--host` vs LIVE exclusion, bad `--scope`/`--equivalence`/`--multivalue`/`--path`/`--format` → exit 2, `apply` without `--host`/password → exit 2, plus drift/no-drift exit codes.
 - [x] **Golden-file test** (`GoldenOutputTest`) pins the exact `ObjectModificationType` XML; equivalence metadata-sensitivity added to `DiffCommandTest` (`scope=full` delete already covered there).
+
+## H. `deploy` — apply a whole folder tree in dependency order (planned, not started)
+
+A new subcommand that discovers desired-state object XML under one or more paths, sorts by dependency, and
+applies each via the existing engine — **one JVM bootstrap** for the whole tree (a shell loop calling the
+tool per file would pay the ~1.5 s prism bootstrap each time). **Structure-agnostic**: objects are found by
+content, so the config tree can use any folder layout. Full design in DESIGN.md → "deploy — apply a folder
+tree (planned)". Reuses schema registration, `DiffEngine`, and the REST/creds/TLS/retry mixins; the new
+parts are discovery, a reference-visitor, the topo-sort + retry loop, and the plan/`--apply-plan` modes.
+
+- [ ] ⭐ **Discovery (by content)** — recurse the paths; register `SchemaType` files first (so extension
+  attrs resolve), then parse the rest as `PrismObject`s. Skip non-object XML with a warning; a duplicate OID
+  across files is an error.
+- [ ] ⭐ **Dependency sort** — build the graph from each object's outbound `ObjectReferenceType` OIDs (prism
+  reference-visitor); edge A→B when B is in the set; `SchemaType` first; Kahn topo-sort; break cycles
+  arbitrarily (lazy OID resolution + the retry pass cover them); warn on cycles.
+- [ ] ⭐ **Apply loop** — reuse `apply` per object in sorted order. Uniform default `--scope present
+  --create-if-absent` fits the whole tree; per-object overrides via a `glob → flags` file. Print per-object
+  result (created/patched/in-sync/failed) + a summary; honour `--quiet`.
+- [ ] **Retry-until-stable** — re-apply the failed set until no progress (catches by-name/filter/expression
+  refs the static graph can't see), then fail non-zero on anything stuck.
+- [ ] **Plan / intermediate deltas** — `--dry-run` prints the ordered plan and changes nothing (exit 1 on
+  drift); `--plan -o <dir>` writes ordered, numbered per-object itemDeltas for review; `deploy --apply-plan
+  <dir>` PATCHes them in order (a small "apply a saved `ObjectModificationType`" mode).
+- [ ] **Tests** — unit: sort correctness (schema→resource→role→user, a cycle, external refs ignored),
+  discovery skips non-objects, duplicate-OID error. Integration (`docker/` rig): deploy a small tree, assert
+  order + idempotent re-run (all in-sync, exit 0).
+
+> **Naming:** once `deploy` lands, the tool does more than "diff". A broader name is under consideration
+> (TBD — `midOps` was floated, not settled). Keep `midpoint-diff` until the name is decided; the rename is
+> mechanical (repo/artifactId/binary/launcher/main class/package/docs/CI) and can be a single commit.

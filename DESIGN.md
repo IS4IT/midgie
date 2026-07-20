@@ -187,10 +187,11 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 
 ## How a promotion pipeline consumes it
 
-The promoter is a thin folder-loop: walk `config/**` in order (schema → objects → seed → modifications,
-base then env), env-template each file, invoke the CLI per object (`apply --host … --create-if-absent`).
-Ordering + templating live in the loop; delta computation lives in the CLI. Packaged as a Kubernetes Job
-on the midPoint image, that loop is "item #2" of the midpoint-k8s delivery plan.
+That folder-loop is now planned as the in-tool **`deploy` subcommand** (see "deploy — apply a folder tree
+(planned)" below), so it runs in one JVM with a schema-aware dependency sort instead of an external
+per-file loop that re-pays the prism bootstrap each time. Env-specific value templating stays a pipeline
+pre-step (render the tree, then `deploy` it). Packaged as a Kubernetes Job on the midPoint image, `deploy`
+is "item #2" of the midpoint-k8s delivery plan.
 
 ## Build order (recommended)
 
@@ -214,3 +215,60 @@ on the midPoint image, that loop is "item #2" of the midpoint-k8s delivery plan.
 5. *Live/apply (increment 2+3):* against a running midPoint, `apply` a one-field change to
    `administrator` → only `fullName` changes, assignments/metadata intact; re-run → no-op (idempotent).
    `--create-if-absent` on a fresh OID creates once, then no-ops.
+
+## deploy — apply a folder tree (planned)
+
+> **Status: designed, not built.** See TODO.md section H. Adding `deploy` means the tool does more than
+> "diff" — a broader name is under consideration (TBD; `midOps` was floated but **not** settled). Keep the
+> current name until decided; the rename would be a separate, mechanical commit.
+
+Apply a whole tree of desired-state object XML to a live server, in dependency order, reusing the
+`diff`/`apply` engine — **one JVM bootstrap** for the whole run. midPoint's prism bootstrap costs ~1.5 s,
+so a shell loop invoking the tool once per file would pay that per object; an in-process subcommand pays
+it once and can sort with prism's precise reference walk instead of a text heuristic. **Structure-
+agnostic**: objects are discovered by content, so the config repo can use any folder layout the team likes.
+
+`midpoint-diff deploy <path...> --host <url> [creds/TLS/retry — the same mixins as diff/apply] [flags]`
+(paths are files or directories, walked recursively).
+
+**Pipeline (one JVM):**
+1. **Discover (content-based).** Recurse the paths. Register `SchemaType` files first — reuse the
+   `--schema` path — so extension attributes resolve, then parse the remaining files as `PrismObject`s.
+   Non-object XML is skipped with a warning; the same OID in two files is an error.
+2. **Dependency sort.** Node = object (by OID). Edge A→B when A carries an `ObjectReferenceType` OID for B
+   **and** B is in the discovered set (references to objects *not* in the set are assumed pre-existing and
+   ignored for ordering). Extract references with a prism reference-visitor (every `PrismReferenceValue`
+   with a non-null OID). `SchemaType` sorts first. Kahn topological sort; **cycles** (mutual role
+   inducements, org trees) are broken arbitrarily and left to midPoint's lazy OID resolution + the retry
+   pass — warn when a cycle is detected.
+3. **Apply in order.** Reuse the existing apply path per object. The uniform default
+   **`--scope present --create-if-absent`** fits the whole tree: present-only touches just what you
+   authored (so a partial `SystemConfiguration`/`administrator` is safe), and create-if-absent is a no-op
+   on objects that already exist. Per-object overrides (`--scope full`, `--multivalue merge`, …) via a
+   small `glob → flags` overrides file.
+4. **Retry-until-stable.** Re-apply the failed set until there are no failures or no progress — catches
+   ordering the static graph can't see (references by name, by search filter, or inside script
+   expressions). Report anything still stuck and exit non-zero.
+
+**Direct apply vs. intermediate deltas (both required):**
+- `deploy <paths> --host …` — discover, sort, apply directly.
+- `… --dry-run` — compute the ordered plan, print it, change nothing; exit `1` on drift (CI gate).
+- `… --plan -o <dir>` — write the ordered, numbered per-object itemDeltas to `<dir>` for review; then
+  `deploy --apply-plan <dir> --host …` PATCHes them in order (adds a small "apply a saved
+  `ObjectModificationType` to its OID" mode). Plain `deploy` **recomputes** the delta at apply time (safer
+  against live drift since the plan was written); `--apply-plan` executes exactly what was reviewed.
+
+**Reuse vs. new.** *Reused:* schema registration (`SchemaOptions`), the diff/apply engine (`DiffEngine`),
+the REST client and the creds/TLS/retry/host option mixins. *New (pure Java, a few classes):* recursive
+content-based discovery, the reference-visitor, the topological sort + retry loop, the overrides file, and
+the `--apply-plan` mode.
+
+**Observability.** Print the computed order (with edges/reasons under `--debug`), a per-object result line
+(created / patched / in-sync / failed), and a summary; `--quiet` for pipelines.
+
+**Verification.** Unit: sort correctness (schema→resource→role→user; a cycle; external refs ignored),
+discovery skips non-objects, duplicate-OID error. Integration (the `docker/` rig): deploy a small tree to
+a live midPoint, assert the apply order and an **idempotent re-run** (second run all in-sync, exit 0).
+
+**Consumer.** This is the promoter for the midpoint-k8s delivery pipeline: the chart's config-apply Job
+becomes `midpoint-diff deploy /config --host <route> --user … --password-file …`, run after `helm upgrade`.
