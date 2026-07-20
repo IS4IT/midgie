@@ -41,8 +41,6 @@ import picocli.CommandLine.Option;
  */
 public final class SchemaOptions {
 
-    private static final String XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema";
-
     @Option(names = "--schema-dir", paramLabel = "DIR",
             description = "Directory of extension schemas (.xsd raw XSD, .xml exported SchemaType); other files ignored.")
     File schemaDir;
@@ -63,8 +61,26 @@ public final class SchemaOptions {
      */
     public PrismContext buildContext(MidpointRestClient liveClient)
             throws SchemaException, SAXException, IOException {
-        PrismContext prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
+        PrismContext prismContext = newBaseContext();
+        SchemaSupport.register(prismContext, collectSchemas(prismContext, liveClient));
+        return prismContext;
+    }
 
+    /** A fresh prism context carrying only the compiled-in base schema (no runtime extensions yet). */
+    static PrismContext newBaseContext() throws SchemaException, SAXException, IOException {
+        return new MidPointPrismContextFactory().createInitializedPrismContext();
+    }
+
+    /**
+     * Collect — but do <em>not</em> register — the runtime extension schema from {@code --schema-dir},
+     * {@code --schema}, and (when {@code liveClient} is non-null and {@code --no-live-schema} is off) the
+     * server, as a {@code description -> <xsd:schema>} map. Split out from {@link #buildContext} so a caller
+     * that has extra schema to add (e.g. {@code deploy}'s tree-discovered schemas) can merge everything and
+     * register once — prism's {@code registerDynamicSchemaExtensions} <em>replaces</em> the dynamic set, so
+     * all extension schema must go in a single call.
+     */
+    Map<String, Element> collectSchemas(PrismContext prismContext, MidpointRestClient liveClient)
+            throws SchemaException {
         Map<String, Element> schemas = new LinkedHashMap<>();
         if (schemaDir != null) {
             addFromDirectory(prismContext, schemaDir, schemas);
@@ -77,9 +93,7 @@ public final class SchemaOptions {
         if (liveClient != null && !noLiveSchema) {
             collectLiveSchemas(prismContext, liveClient, schemas);
         }
-
-        SchemaSupport.register(prismContext, schemas);
-        return prismContext;
+        return schemas;
     }
 
     private static void addFromDirectory(PrismContext prismContext, File dir, Map<String, Element> schemas)
@@ -106,7 +120,7 @@ public final class SchemaOptions {
         try {
             if (lower.endsWith(".xsd")) {
                 Element root = DOMUtil.parseFile(file).getDocumentElement();
-                if (!isXsdSchema(root)) {
+                if (!SchemaSupport.isXsdSchema(root)) {
                     warnSkip(file, "its root element is not <xsd:schema>");
                     return;
                 }
@@ -120,12 +134,6 @@ public final class SchemaOptions {
         } catch (Exception e) {
             warnSkip(file, e.getMessage());
         }
-    }
-
-    private static boolean isXsdSchema(Element root) {
-        return root != null
-                && "schema".equals(root.getLocalName())
-                && XSD_NAMESPACE.equals(root.getNamespaceURI());
     }
 
     private static void warnSkip(File file, String reason) {

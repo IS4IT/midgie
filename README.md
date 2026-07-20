@@ -76,6 +76,17 @@ An explicit `CURRENT` file means offline; `--host` (or `MIDPOINT_URL`) means liv
 `--host` together is an error; a host inherited only from `MIDPOINT_URL` is a fallback that an explicit
 `CURRENT` file overrides, so an env var never breaks a file diff.
 
+## deploy (preview)
+
+`deploy` walks a folder tree of desired-state object XML, sorts it by dependency, and prints the resulting apply order. It is **read-only** for now — offline by default, and `--host` only *reads* the server's extension schema; nothing is written yet (the create/patch apply loop is the next increment).
+
+```bash
+bin/midpoint-diff deploy config/          # print the dependency-ordered apply plan (offline)
+bin/midpoint-diff deploy config/ --host https://mp.example/midpoint --user administrator   # also read live schema
+```
+
+The order is two-tier: extension **schemas** first (raw `.xsd` inputs and exported `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered so extension attributes resolve), then **objects** (sorted by their reference OIDs). Objects are identified by OID, or by type+name when they carry no OID, so several files may declare *fragments* of one object — each applied individually. A genuine contradiction between fragments (a different type under one OID, or a single-valued item set to two values) is an error; same-object non-overlapping fragments are fine. Exit `0` when discovered + sorted, `2` on error. Full design in [`DESIGN.md`](DESIGN.md#deploy--apply-a-folder-tree).
+
 ## Exit codes
 
 The contract lets CI gate on drift without parsing output:

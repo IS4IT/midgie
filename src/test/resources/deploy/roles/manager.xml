@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Manager induces End User, so it depends on (sorts after) enduser.xml. -->
+<role xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      oid="11111111-0000-0000-0d00-000000000002">
+    <name>Manager</name>
+    <inducement>
+        <targetRef oid="11111111-0000-0000-0d00-000000000001" type="c:RoleType"/>
+    </inducement>
+</role>

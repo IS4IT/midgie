@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A second fragment of the SAME Manager role (same OID), declaring a non-overlapping item. Both files
+     are applied individually; discovery groups them into one object for ordering. -->
+<role xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      oid="11111111-0000-0000-0d00-000000000002">
+    <name>Manager</name>
+    <description>Line-manager entitlements (ACL fragment).</description>
+</role>

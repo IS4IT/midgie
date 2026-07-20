@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Deploy fixture: an extension schema that <xsd:import>s the base schema's namespace, so it must
+     sort AFTER base-schema in the schema tier. -->
+<schema xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+        xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+        oid="44444444-0000-0000-0d00-000000000002">
+    <name>deploy-lcm-schema</name>
+    <definition>
+        <xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                    xmlns:base="http://is4it.de/midpoint/v1/deployBase"
+                    elementFormDefault="qualified"
+                    targetNamespace="http://is4it.de/midpoint/v1/deployLcm">
+            <xsd:import namespace="http://is4it.de/midpoint/v1/deployBase"/>
+            <xsd:complexType name="LcmThingType">
+                <xsd:sequence>
+                    <xsd:element name="base" type="base:BaseThingType"/>
+                </xsd:sequence>
+            </xsd:complexType>
+        </xsd:schema>
+    </definition>
+</schema>

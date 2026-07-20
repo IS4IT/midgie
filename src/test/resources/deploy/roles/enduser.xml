@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<role xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      oid="11111111-0000-0000-0d00-000000000001">
+    <name>End User</name>
+    <description>Base entitlements for every user.</description>
+</role>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ajones is assigned Manager: depends on it. References Root only indirectly (not in own refs). -->
+<user xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      oid="33333333-0000-0000-0d00-000000000002">
+    <name>ajones</name>
+    <fullName>Alan Jones</fullName>
+    <assignment>
+        <targetRef oid="11111111-0000-0000-0d00-000000000002" type="c:RoleType"/>
+    </assignment>
+</user>

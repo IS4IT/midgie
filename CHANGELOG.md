@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`deploy` (preview)** — a new read-only subcommand that discovers a folder tree of desired-state object XML and prints the dependency-ordered apply plan. Two tiers: extension schemas first (raw `.xsd` inputs and exported `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered so extension attributes resolve), then objects (sorted by their reference OIDs). Objects are identified by OID or, when OID-less, by type+name, so several files may declare fragments of one object; a genuine contradiction between fragments (a different type under one OID, or a single-valued item with two values) is rejected. Offline by default, or `--host` to read the server's extension schema read-only — nothing is written. The create/patch apply loop, retry, and `--plan`/`--apply-plan` modes are still to come.
+
 ## [0.1.0] - 2026-07-19
 
 First release. A standalone, schema-aware CLI that computes the minimal `itemDelta` between the desired and

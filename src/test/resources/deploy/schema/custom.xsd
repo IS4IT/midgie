@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Deploy fixture: a raw .xsd. Registered as local schema input (so objects parse), but NOT a
+     deployable apply unit — you cannot PATCH a bare XSD. -->
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+            elementFormDefault="qualified"
+            targetNamespace="http://is4it.de/midpoint/v1/deployCustom">
+    <xsd:complexType name="CustomThingType">
+        <xsd:sequence>
+            <xsd:element name="note" type="xsd:string"/>
+        </xsd:sequence>
+    </xsd:complexType>
+</xsd:schema>

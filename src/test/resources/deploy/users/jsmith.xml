@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- jsmith is assigned Manager and sits under Root: depends on both. -->
+<user xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+      oid="33333333-0000-0000-0d00-000000000001">
+    <name>jsmith</name>
+    <fullName>Jane Smith</fullName>
+    <assignment>
+        <targetRef oid="11111111-0000-0000-0d00-000000000002" type="c:RoleType"/>
+    </assignment>
+    <parentOrgRef oid="22222222-0000-0000-0d00-000000000001" type="c:OrgType"/>
+</user>
