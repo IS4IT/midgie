@@ -161,6 +161,29 @@ class DeployCliTest {
         assertTrue(r.err.contains("no midPoint objects"), r.err);
     }
 
+    // --- apply-mode flag guards (offline, no writes) ---
+
+    @Test
+    void applyFlagsWithoutHostAreAnError() {
+        Result r = run("deploy", TREE, "--create-if-absent");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--host"), r.err);
+    }
+
+    @Test
+    void dryRunWithoutHostIsAnError() {
+        Result r = run("deploy", TREE, "--dry-run");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--host"), r.err);
+    }
+
+    @Test
+    void yesAndConfirmEachApplyAreMutuallyExclusive() {
+        Result r = run("deploy", TREE, "--yes", "--confirm-each-apply");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("not both"), r.err);
+    }
+
     // --- fixtures & harness ---
 
     private static String role(String oid, String name, String extra) {

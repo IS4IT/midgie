@@ -7,7 +7,6 @@ package de.is4it.midpoint.diff;
 
 import java.io.Console;
 import java.io.File;
-import java.io.IOException;
 import java.util.concurrent.Callable;
 
 import com.evolveum.midpoint.prism.Objectable;
@@ -114,10 +113,11 @@ public class ApplyCommand implements Callable<Integer> {
             PrismObject<? extends Objectable> desired = Io.parseObject(prismContext, desiredFile);
             LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);
 
-            String liveXml = fetch(client, target);
-            return (liveXml == null)
+            PrismObject<? extends Objectable> current =
+                    LiveLookup.byOid(prismContext, client, desired.getCompileTimeClass(), target.restType, target.oid);
+            return (current == null)
                     ? applyCreate(prismContext, client, target, desired)
-                    : applyPatch(prismContext, client, target, desired, strategy, liveXml);
+                    : applyPatch(prismContext, client, target, desired, strategy, current);
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midpoint-diff: " + message);
@@ -150,9 +150,9 @@ public class ApplyCommand implements Callable<Integer> {
 
     /** Object exists: diff, show the change, and PATCH it (after confirmation). */
     private Integer applyPatch(PrismContext prismContext, MidpointRestClient client, LiveTarget target,
-            PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy, String liveXml)
+            PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy,
+            PrismObject<? extends Objectable> current)
             throws Exception {
-        PrismObject<? extends Objectable> current = prismContext.parseObject(liveXml);
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
                 .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
 
@@ -203,18 +203,6 @@ public class ApplyCommand implements Callable<Integer> {
         client.patchObject(target.restType, target.oid, modificationXml);
         status("Applied " + changes + " change(s) to " + target.restType + "/" + target.oid + ".");
         return 0;
-    }
-
-    /** GET the object, or {@code null} on a 404. Other REST failures propagate. */
-    private static String fetch(MidpointRestClient client, LiveTarget target) throws IOException {
-        try {
-            return client.getObject(target.restType, target.oid);
-        } catch (MidpointRestClient.RestException e) {
-            if (e.isNotFound()) {
-                return null;
-            }
-            throw e;
-        }
     }
 
     /** Serialize the desired object for a create POST, stripping operational/metadata items midPoint owns. */

@@ -151,6 +151,20 @@ public final class MidpointRestClient {
         return send(request, "GET " + restType);
     }
 
+    /**
+     * {@code POST {type}/search} with a {@code <query>} body → an {@code ObjectListType} of the matches.
+     * A read, but midPoint models search as a POST; the caller (which holds the {@link PrismContext})
+     * builds the query XML and parses the response, keeping this class REST-only.
+     */
+    public String searchObjects(String restType, String queryXml) throws IOException {
+        HttpRequest request = baseRequest(URI.create(restBase + "/" + restType + "/search"))
+                .header("Content-Type", "application/xml")
+                .header("Accept", "application/xml")
+                .POST(HttpRequest.BodyPublishers.ofString(queryXml, StandardCharsets.UTF_8))
+                .build();
+        return send(request, "POST " + restType + "/search");
+    }
+
     /** {@code PATCH {type}/{oid}} with an {@code objectModification} body. */
     public void patchObject(String restType, String oid, String modificationXml) throws IOException {
         HttpRequest request = baseRequest(objectUri(restType, oid))

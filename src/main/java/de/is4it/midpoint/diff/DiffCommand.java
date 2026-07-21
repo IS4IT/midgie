@@ -11,6 +11,7 @@ import java.util.concurrent.Callable;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.util.exception.SchemaException;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -159,7 +160,12 @@ public class DiffCommand implements Callable<Integer> {
             PrismContext prismContext, MidpointRestClient client, PrismObject<? extends Objectable> desired)
             throws Exception {
         LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);
-        String liveXml = client.getObject(target.restType, target.oid);
-        return prismContext.parseObject(liveXml);
+        PrismObject<? extends Objectable> current =
+                LiveLookup.byOid(prismContext, client, desired.getCompileTimeClass(), target.restType, target.oid);
+        if (current == null) {
+            throw new SchemaException("Object " + target.restType + "/" + target.oid
+                    + " does not exist on the server.");
+        }
+        return current;
     }
 }

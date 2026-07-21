@@ -76,16 +76,19 @@ An explicit `CURRENT` file means offline; `--host` (or `MIDPOINT_URL`) means liv
 `--host` together is an error; a host inherited only from `MIDPOINT_URL` is a fallback that an explicit
 `CURRENT` file overrides, so an env var never breaks a file diff.
 
-## deploy (preview)
+## deploy
 
-`deploy` walks a folder tree of desired-state object XML, sorts it by dependency, and prints the resulting apply order. It is **read-only** for now — offline by default, and `--host` only *reads* the server's extension schema; nothing is written yet (the create/patch apply loop is the next increment).
+`deploy` walks a folder tree of desired-state object XML, sorts it by dependency, and either prints the apply order (offline) or reconciles it against a live server (`--host`).
 
 ```bash
-bin/midpoint-diff deploy config/          # print the dependency-ordered apply plan (offline)
-bin/midpoint-diff deploy config/ --host https://mp.example/midpoint --user administrator   # also read live schema
+bin/midpoint-diff deploy config/          # offline: print the dependency-ordered apply plan
+bin/midpoint-diff deploy config/ --host https://mp.example/midpoint --user administrator --dry-run   # preview the changes
+bin/midpoint-diff deploy config/ --host https://mp.example/midpoint --user administrator --create-if-absent --yes   # apply
 ```
 
-The order is two-tier: extension **schemas** first (raw `.xsd` inputs and exported `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered so extension attributes resolve), then **objects** (sorted by their reference OIDs). Objects are identified by OID, or by type+name when they carry no OID, so several files may declare *fragments* of one object — each applied individually. A genuine contradiction between fragments (a different type under one OID, or a single-valued item set to two values) is an error; same-object non-overlapping fragments are fine. Exit `0` when discovered + sorted, `2` on error. Full design in [`DESIGN.md`](DESIGN.md#deploy--apply-a-folder-tree).
+The order is two-tier: extension **schemas** first (raw `.xsd` inputs and exported `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered so extension attributes resolve), then **objects** (sorted by their reference OIDs). Objects are identified by OID, or by type+name when they carry no OID, so several files may declare *fragments* of one object — each applied individually. A genuine contradiction between fragments (a different type under one OID, or a single-valued item set to two values) is an error; same-object non-overlapping fragments are fine.
+
+With `--host`, each unit is reconciled file-by-file in that order — look up the current object by a search (so a missing object doesn't 404), diff the fragment (`--scope present`), then `PATCH`, or `POST` to create with `--create-if-absent` (an OID-less object is reconciled by type+name with `--apply-on-match`). It is sequential, so a role is created before the user that references it, and re-running is idempotent. Writing is gated: a single confirmation prompt by default (`--yes` to bypass, `--confirm-each-apply` to prompt per change, `--dry-run` to preview without writing; a non-interactive session without `--yes` refuses). Exit codes: offline `0`/`2`; apply `0` (all created/patched/in-sync/skipped or declined) / `2` (any unit failed); `--dry-run` `0` in-sync / `1` would change something / `2` error. Retry-until-stable and the `--plan`/`--apply-plan` saved-delta modes are not built yet. Full design in [`DESIGN.md`](DESIGN.md#deploy--apply-a-folder-tree).
 
 ## Exit codes
 

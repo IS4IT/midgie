@@ -128,6 +128,17 @@ class MidpointRestClientTest {
     }
 
     @Test
+    void searchPostsQueryToSearchEndpoint() throws Exception {
+        String body = client.searchObjects("users", "<query><filter/></query>");
+
+        assertEquals("POST", lastMethod);
+        assertEquals("/midpoint/ws/rest/users/search", lastPath, "search is POST {type}/search");
+        assertEquals("application/xml", lastContentType);
+        assertEquals("<query><filter/></query>", lastBody);
+        assertTrue(body.contains("found-oid"), body);
+    }
+
+    @Test
     void deleteSendsDeleteMethod() throws Exception {
         client.deleteObject("users", "aaa");
 
@@ -217,6 +228,8 @@ class MidpointRestClientTest {
             respond(exchange, 401, "unauthorized");
         } else if (lastPath.endsWith("/users/forbidden")) {
             respond(exchange, 403, "forbidden");
+        } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users/search")) {
+            respond(exchange, 200, "<objectList><object oid=\"found-oid\"/></objectList>");
         } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users")) {
             exchange.getResponseHeaders().add("Location",
                     "http://127.0.0.1/midpoint/ws/rest/users/new-oid-123");

@@ -46,8 +46,16 @@ class LiveIntegrationTest {
     private static final String USER = System.getProperty("mpdiff.it.user", "administrator");
     private static final String PASSWORD = System.getProperty("mpdiff.it.password", "T3stPw890uio");
 
+    private static final String NS = "http://midpoint.evolveum.com/xml/ns/public/common/common-3";
     private static final String ADMIN_OID = "00000000-0000-0000-0000-000000000002";
     private static final String TEST_OID = "a17e57e5-0000-0000-0000-000000000001";
+
+    // Throwaway objects for the deploy tests (deleted before/after; user first so the role is unreferenced).
+    private static final String DEPLOY_ROLE_OID = "a17e57e5-0000-0000-0000-0000000000d1";
+    private static final String DEPLOY_USER_OID = "a17e57e5-0000-0000-0000-0000000000d2";
+    private static final String DEPLOY_MATCH_OID = "a17e57e5-0000-0000-0000-0000000000d3";
+    // An OID-less role, created by the server with a random OID; cleaned up by name.
+    private static final String COMBO_NAME = "zz-it-combo-role";
 
     private static MidpointRestClient client;
     private static boolean rigUp;
@@ -58,6 +66,7 @@ class LiveIntegrationTest {
         rigUp = reachable();
         if (rigUp) {
             deleteTestUser(); // start from a known-clean state
+            deleteDeployObjects();
         }
     }
 
@@ -65,6 +74,7 @@ class LiveIntegrationTest {
     static void cleanup() {
         if (rigUp) {
             deleteTestUser();
+            deleteDeployObjects();
         }
     }
 
@@ -178,6 +188,97 @@ class LiveIntegrationTest {
                         + VersionSupport.compileTimeVersion() + " (the rig is pinned to the same MP_VER)");
     }
 
+    @Test
+    void deployCreatesInDependencyOrderThenIsIdempotent(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        writeDeployTree(dir);
+
+        // create-if-absent --yes -> POSTs the role, then the user that assigns it, in that order.
+        CliResult create = run("deploy", dir.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--create-if-absent", "--yes");
+        assertEquals(0, create.exit, create.err);
+        assertTrue(create.out.contains("created"), "expected 'created' lines, got: " + create.out);
+        int roleAt = create.out.indexOf("IT Deploy Role");
+        int userAt = create.out.indexOf("zz-it-deploy-user");
+        assertTrue(roleAt >= 0 && userAt >= 0 && roleAt < userAt,
+                "the referenced role must be created before the user:\n" + create.out);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains("IT Deploy Role"));
+        assertTrue(client.getObject("users", DEPLOY_USER_OID).contains("zz-it-deploy-user"));
+
+        // Re-run as a dry-run -> everything already matches -> in-sync, exit 0 (idempotent).
+        CliResult dry = run("deploy", dir.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--create-if-absent", "--dry-run");
+        assertEquals(0, dry.exit, dry.out + dry.err);
+        assertTrue(dry.out.contains("in-sync"), "re-deploy must be a no-op, got: " + dry.out);
+    }
+
+    @Test
+    void deployWithoutYesRefusesInNonInteractiveSession(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        writeDeployTree(dir);
+
+        // No --yes and no console -> deploy must refuse after the preview and write nothing.
+        CliResult refused = run("deploy", dir.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--create-if-absent");
+        assertEquals(2, refused.exit, refused.out + refused.err);
+        assertTrue(refused.err.contains("--yes"), "should point the user at --yes, got: " + refused.err);
+        assertFalse(exists("roles", DEPLOY_ROLE_OID), "nothing may be created without confirmation");
+    }
+
+    @Test
+    void deployApplyOnMatchPatchesAnOidlessObjectByName(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+
+        // Seed a role with a known OID and name.
+        Path seed = java.nio.file.Files.createDirectories(dir.resolve("seed"));
+        Files.writeString(seed.resolve("role.xml"), role(DEPLOY_MATCH_OID, "AOM Role", "orig"), StandardCharsets.UTF_8);
+        run("deploy", seed.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+
+        // Deploy an OID-less fragment with the SAME name and a changed description; --apply-on-match finds
+        // it by name and PATCHes it.
+        Path aom = java.nio.file.Files.createDirectories(dir.resolve("aom"));
+        Files.writeString(aom.resolve("role.xml"), role(null, "AOM Role", "changed"), StandardCharsets.UTF_8);
+        CliResult patched = run("deploy", aom.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--apply-on-match", "--yes");
+        assertEquals(0, patched.exit, patched.err);
+        assertTrue(patched.out.contains("patched"), "apply-on-match should patch the match, got: " + patched.out);
+        assertTrue(client.getObject("roles", DEPLOY_MATCH_OID).contains("changed"),
+                "the matched role should carry the new description");
+    }
+
+    @Test
+    void deployApplyOnMatchWithCreateIfAbsentCreatesThenMatches(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteByName("roles", COMBO_NAME);
+
+        Path tree = java.nio.file.Files.createDirectories(dir.resolve("combo"));
+        Files.writeString(tree.resolve("role.xml"), role(null, COMBO_NAME, "v1"), StandardCharsets.UTF_8);
+
+        // No match yet: --apply-on-match finds nothing, --create-if-absent then POSTs it.
+        CliResult created = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--apply-on-match", "--create-if-absent", "--yes");
+        assertEquals(0, created.exit, created.err);
+        assertTrue(created.out.contains("created"), "no match -> create, got: " + created.out);
+
+        // Re-run identical: --apply-on-match now finds it by name -> in-sync (no duplicate created).
+        CliResult resynced = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--apply-on-match", "--create-if-absent", "--yes");
+        assertEquals(0, resynced.exit, resynced.err);
+        assertTrue(resynced.out.contains("in-sync"), "re-run must match, not create again, got: " + resynced.out);
+
+        // Change the fragment: match -> patch.
+        Files.writeString(tree.resolve("role.xml"), role(null, COMBO_NAME, "v2"), StandardCharsets.UTF_8);
+        CliResult patched = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--apply-on-match", "--create-if-absent", "--yes");
+        assertEquals(0, patched.exit, patched.err);
+        assertTrue(patched.out.contains("patched"), "changed fragment -> patch, got: " + patched.out);
+
+        deleteByName("roles", COMBO_NAME);
+    }
+
     // --- helpers ---
 
     private static boolean reachable() {
@@ -204,6 +305,66 @@ class LiveIntegrationTest {
         } catch (Exception ignored) {
             // absent (404) or rig down — nothing to clean up
         }
+    }
+
+    private static void deleteDeployObjects() {
+        tryDelete("users", DEPLOY_USER_OID);
+        tryDelete("roles", DEPLOY_ROLE_OID);
+        tryDelete("roles", DEPLOY_MATCH_OID);
+        deleteByName("roles", COMBO_NAME);
+    }
+
+    private static void tryDelete(String type, String oid) {
+        try {
+            client.deleteObject(type, oid);
+        } catch (Exception ignored) {
+            // absent (404) or rig down
+        }
+    }
+
+    /** Delete every object of {@code type} whose name matches — for cleaning up server-assigned OIDs. */
+    private static void deleteByName(String type, String name) {
+        try {
+            String query = "<query xmlns=\"http://prism.evolveum.com/xml/ns/public/query-3\">"
+                    + "<filter><equal><path>name</path><value>" + name + "</value></equal></filter></query>";
+            String list = client.searchObjects(type, query);
+            java.util.regex.Matcher matcher =
+                    java.util.regex.Pattern.compile("oid=\"([0-9a-fA-F-]{36})\"").matcher(list);
+            while (matcher.find()) {
+                tryDelete(type, matcher.group(1));
+            }
+        } catch (Exception ignored) {
+            // search unsupported / rig down — nothing to clean up
+        }
+    }
+
+    private static boolean exists(String type, String oid) {
+        try {
+            client.getObject(type, oid);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static void writeDeployTree(Path dir) throws IOException {
+        Path roles = java.nio.file.Files.createDirectories(dir.resolve("roles"));
+        Path users = java.nio.file.Files.createDirectories(dir.resolve("users"));
+        Files.writeString(roles.resolve("base.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", null),
+                StandardCharsets.UTF_8);
+        Files.writeString(users.resolve("member.xml"),
+                "<user xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\" oid=\"" + DEPLOY_USER_OID + "\">\n"
+                        + "  <name>zz-it-deploy-user</name>\n"
+                        + "  <assignment><targetRef oid=\"" + DEPLOY_ROLE_OID + "\" type=\"c:RoleType\"/></assignment>\n"
+                        + "</user>",
+                StandardCharsets.UTF_8);
+    }
+
+    private static String role(String oid, String name, String description) {
+        return "<role xmlns=\"" + NS + "\"" + (oid != null ? " oid=\"" + oid + "\"" : "") + ">\n"
+                + "  <name>" + name + "</name>\n"
+                + (description != null ? "  <description>" + description + "</description>\n" : "")
+                + "</role>";
     }
 
     private static File writeUser(Path dir, String tag, String fullName) throws IOException {
