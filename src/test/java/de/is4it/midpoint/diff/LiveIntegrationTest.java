@@ -279,6 +279,56 @@ class LiveIntegrationTest {
         deleteByName("roles", COMBO_NAME);
     }
 
+    @Test
+    void deployPlanThenApplyPlanRoundTrips(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = dir.resolve("tree");
+        writeDeployTree(tree);
+        Path plan = dir.resolve("plan");
+
+        // --plan writes create files for the fresh tree and touches nothing on the server (exit 1 = would change).
+        CliResult planned = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--create-if-absent", "--plan", plan.toString());
+        assertEquals(1, planned.exit, planned.err);
+        assertFalse(exists("roles", DEPLOY_ROLE_OID), "--plan must not write to the server");
+        assertTrue(Files.list(plan).anyMatch(p -> p.toString().endsWith(".create.xml")), "expected create files");
+
+        // --apply-plan replays them: the role (lower sequence) is POSTed before the user that assigns it.
+        CliResult applied = run("deploy", "--apply-plan", plan.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        assertEquals(0, applied.exit, applied.err);
+        assertTrue(exists("roles", DEPLOY_ROLE_OID) && exists("users", DEPLOY_USER_OID), "both objects created");
+
+        // Re-plan now that they exist -> nothing to change -> exit 0.
+        CliResult again = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--create-if-absent", "--plan", dir.resolve("plan2").toString());
+        assertEquals(0, again.exit, again.out + again.err);
+    }
+
+    @Test
+    void deployOverridesChangeThePerPathStrategy(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+
+        // Seed a role that carries a description.
+        Path seed = java.nio.file.Files.createDirectories(dir.resolve("seed"));
+        Files.writeString(seed.resolve("r.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", "seeded"), StandardCharsets.UTF_8);
+        run("deploy", seed.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+
+        // Desired state omits the description. Under the default --scope present it is left alone (in-sync).
+        Path tree = java.nio.file.Files.createDirectories(dir.resolve("tree").resolve("roles"));
+        Files.writeString(tree.resolve("r.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", null), StandardCharsets.UTF_8);
+        CliResult present = run("deploy", dir.resolve("tree").toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        assertEquals(0, present.exit, present.out + present.err);
+
+        // An override forcing --scope full on that path makes it a full replace -> the description drifts -> exit 1.
+        Path overrides = dir.resolve("ov.txt");
+        Files.writeString(overrides, "**/roles/*.xml = --scope full\n", StandardCharsets.UTF_8);
+        CliResult full = run("deploy", dir.resolve("tree").toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--overrides", overrides.toString(), "--dry-run");
+        assertEquals(1, full.exit, full.out + full.err);
+    }
+
     // --- helpers ---
 
     private static boolean reachable() {

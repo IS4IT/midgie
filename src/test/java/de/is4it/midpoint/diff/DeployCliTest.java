@@ -184,6 +184,27 @@ class DeployCliTest {
         assertTrue(r.err.contains("not both"), r.err);
     }
 
+    @Test
+    void noPathAndNoApplyPlanIsAnError() {
+        Result r = run("deploy");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("PATH"), r.err);
+    }
+
+    @Test
+    void planAndApplyPlanAreMutuallyExclusive() {
+        Result r = run("deploy", TREE, "--plan", "out", "--apply-plan", "in");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("not both"), r.err);
+    }
+
+    @Test
+    void planWithoutHostIsAnError() {
+        Result r = run("deploy", TREE, "--plan", "out");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--host"), r.err);
+    }
+
     // --- fixtures & harness ---
 
     private static String role(String oid, String name, String extra) {

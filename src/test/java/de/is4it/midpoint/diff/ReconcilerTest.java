@@ -70,7 +70,7 @@ class ReconcilerTest {
     @Test
     void presentButDifferentPlansAPatch() throws Exception {
         searchResponse = objectList(role(OID, "Manager", "old"));
-        Reconciler.Outcome outcome = reconciler(false, false).plan(desired(role(OID, "Manager", "new")));
+        Reconciler.Outcome outcome = plan(false, false, role(OID, "Manager", "new"));
         assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
         assertTrue(outcome.changes > 0);
     }
@@ -78,41 +78,42 @@ class ReconcilerTest {
     @Test
     void presentAndEqualIsInSync() throws Exception {
         searchResponse = objectList(role(OID, "Manager", "same"));
-        Reconciler.Outcome outcome = reconciler(false, false).plan(desired(role(OID, "Manager", "same")));
+        Reconciler.Outcome outcome = plan(false, false, role(OID, "Manager", "same"));
         assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
     }
 
     @Test
     void absentWithCreateIfAbsentPlansACreate() throws Exception {
-        Reconciler.Outcome outcome = reconciler(true, false).plan(desired(role(OID, "Manager", "x")));
+        Reconciler.Outcome outcome = plan(true, false, role(OID, "Manager", "x"));
         assertEquals(Reconciler.Action.CREATE, outcome.action);
     }
 
     @Test
     void absentWithoutCreateIfAbsentFails() throws Exception {
-        Reconciler.Outcome outcome = reconciler(false, false).plan(desired(role(OID, "Manager", "x")));
+        Reconciler.Outcome outcome = plan(false, false, role(OID, "Manager", "x"));
         assertEquals(Reconciler.Action.FAIL, outcome.action);
         assertTrue(outcome.detail.contains("create-if-absent"), outcome.detail);
     }
 
     @Test
     void oidlessDefaultsToSkip() throws Exception {
-        Reconciler.Outcome outcome = reconciler(false, false).plan(desired(role(null, "Manager", "x")));
+        Reconciler.Outcome outcome = plan(false, false, role(null, "Manager", "x"));
         assertEquals(Reconciler.Action.SKIP, outcome.action);
         assertTrue(outcome.detail.contains("no oid"), outcome.detail);
     }
 
     @Test
     void oidlessWithCreateIfAbsentPlansACreate() throws Exception {
-        Reconciler.Outcome outcome = reconciler(true, false).plan(desired(role(null, "Manager", "x")));
+        Reconciler.Outcome outcome = plan(true, false, role(null, "Manager", "x"));
         assertEquals(Reconciler.Action.CREATE, outcome.action);
     }
 
     // --- helpers ---
 
-    private Reconciler reconciler(boolean createIfAbsent, boolean applyOnMatch) {
+    private Reconciler.Outcome plan(boolean createIfAbsent, boolean applyOnMatch, String xml) throws Exception {
         MidpointRestClient client = new MidpointRestClient(host, "administrator", "s3cret", false);
-        return new Reconciler(prismContext, client, strategy(), createIfAbsent, applyOnMatch);
+        Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, applyOnMatch);
+        return reconciler.plan(desired(xml), strategy());
     }
 
     private static StrategyOptions.Resolved strategy() {

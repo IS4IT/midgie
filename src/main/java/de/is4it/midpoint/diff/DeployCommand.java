@@ -10,12 +10,11 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 
@@ -24,6 +23,8 @@ import org.w3c.dom.Element;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.util.exception.SchemaException;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -34,20 +35,19 @@ import picocli.CommandLine.Parameters;
  * The {@code deploy} subcommand: discover a tree of desired-state object XML, sort it by dependency, and
  * either print the apply order (offline) or reconcile each unit against a live server ({@code --host}).
  *
- * <p>The order is two-tier. First the extension <b>schemas</b> (discovered {@code .xsd} inputs and
- * deployable {@code SchemaType} objects), sorted among themselves by {@code <xsd:import>} dependency and
- * registered so objects that use extension attributes parse. Then the <b>objects</b>, grouped by identity
- * (OID, else type+name — several files may be fragments of one object) and sorted by their outbound
- * reference OIDs.
+ * <p>The order is two-tier: extension <b>schemas</b> (sorted by {@code <xsd:import>} dependency and
+ * registered so objects using extension attributes parse), then <b>objects</b> (grouped by identity —
+ * OID, else type+name — and sorted by outbound reference OIDs).
  *
- * <p>With {@code --host} each unit is reconciled file-by-file (GET → diff the fragment {@code --scope
- * present} → PATCH, or POST to create with {@code --create-if-absent}), in that order, so a role is
- * created before the user that references it. Writing is gated: a single up-front confirmation by default
- * ({@code --yes} to bypass, {@code --confirm-each-apply} to prompt per change, {@code --dry-run} to preview
- * without writing). Retry-until-stable and the plan/apply-plan modes are a later increment.
+ * <p>With {@code --host} each unit is reconciled file-by-file (look up current state, diff the fragment
+ * {@code --scope present}, PATCH, or POST to create with {@code --create-if-absent}), in that order, so a
+ * role is created before the user that references it. {@code --retry} re-applies the failed set until it
+ * stabilises; {@code --plan <dir>} writes the changes as reviewable files and {@code --apply-plan <dir>}
+ * replays them verbatim; {@code --overrides <file>} varies the diff strategy per path. Writing is gated:
+ * a single up-front confirmation by default ({@code --yes}, {@code --confirm-each-apply}, {@code --dry-run}).
  *
- * <p>Exit codes: offline (print the plan) {@code 0}/{@code 2}. Apply {@code 0} (all created/patched/in-sync
- * /skipped or declined) / {@code 2} (any unit failed, or a setup error). {@code --dry-run} {@code 0}
+ * <p>Exit codes: offline {@code 0}/{@code 2}. Apply {@code 0} (all created/patched/in-sync/skipped or
+ * declined) / {@code 2} (any unit stuck, or a setup error). {@code --dry-run}/{@code --plan} {@code 0}
  * in-sync / {@code 1} would change something / {@code 2} error.
  */
 @Command(
@@ -59,8 +59,9 @@ import picocli.CommandLine.Parameters;
 public class DeployCommand implements Callable<Integer> {
 
     private static final int EXIT_ERROR = 2;
+    private static final int MAX_RETRY_ROUNDS = 20;
 
-    @Parameters(index = "0..*", arity = "1..*", paramLabel = "PATH",
+    @Parameters(index = "0..*", arity = "0..*", paramLabel = "PATH",
             description = "Files or directories of desired-state object XML, walked recursively.")
     List<File> paths;
 
@@ -93,6 +94,22 @@ public class DeployCommand implements Callable<Integer> {
             description = "For an OID-less object, search the server by type+name and PATCH the single match (else skip/create).")
     boolean applyOnMatch;
 
+    @Option(names = "--retry",
+            description = "After the apply pass, re-apply the failed units until a round makes no progress (catches by-name refs).")
+    boolean retry;
+
+    @Option(names = "--plan", paramLabel = "DIR",
+            description = "Write the ordered per-object changes (create/patch files) to DIR instead of applying. Needs --host.")
+    File planDir;
+
+    @Option(names = "--apply-plan", paramLabel = "DIR",
+            description = "Replay a plan directory written by --plan (POST creates, PATCH patches, in order). Needs --host.")
+    File applyPlanDir;
+
+    @Option(names = "--overrides", paramLabel = "FILE",
+            description = "Per-path diff-strategy overrides ('glob = <strategy flags>' lines); first match wins.")
+    File overridesFile;
+
     @Option(names = {"--quiet", "-q"},
             description = "Suppress the plan/status output and notes; keep errors, failures, and the exit code.")
     boolean quiet;
@@ -100,6 +117,10 @@ public class DeployCommand implements Callable<Integer> {
     @Option(names = {"--debug", "-v"},
             description = "Raise the log level to DEBUG (framework logs on stderr) for troubleshooting.")
     boolean debug;
+
+    // Resolved once per run.
+    private StrategyOptions.Resolved globalStrategy;
+    private Overrides overrides;
 
     @Override
     public Integer call() {
@@ -110,18 +131,27 @@ public class DeployCommand implements Callable<Integer> {
             System.err.println("midpoint-diff: use either --yes or --confirm-each-apply, not both.");
             return EXIT_ERROR;
         }
+        if (planDir != null && applyPlanDir != null) {
+            System.err.println("midpoint-diff: use either --plan or --apply-plan, not both.");
+            return EXIT_ERROR;
+        }
         boolean live = connectionOptions.isLive();
-        if (!live && (dryRun || assumeYes || confirmEachApply || createIfAbsent || applyOnMatch)) {
-            System.err.println("midpoint-diff: --dry-run/--yes/--confirm-each-apply/--create-if-absent/--apply-on-match "
-                    + "need --host; without a host, deploy only prints the plan.");
+        boolean writeFlags = dryRun || assumeYes || confirmEachApply || createIfAbsent || applyOnMatch
+                || retry || planDir != null || applyPlanDir != null || overridesFile != null;
+        if (!live && writeFlags) {
+            System.err.println("midpoint-diff: --dry-run/--yes/--create-if-absent/--apply-on-match/--retry/"
+                    + "--plan/--apply-plan/--overrides need --host; without a host, deploy only prints the plan.");
+            return EXIT_ERROR;
+        }
+        if (applyPlanDir == null && (paths == null || paths.isEmpty())) {
+            System.err.println("midpoint-diff: provide at least one PATH, or --apply-plan <dir>.");
             return EXIT_ERROR;
         }
 
-        StrategyOptions.Resolved strategy = null;
         MidpointRestClient client = null;
         if (live) {
-            strategy = strategyOptions.resolve();
-            if (strategy == null) {
+            globalStrategy = strategyOptions.resolve();
+            if (globalStrategy == null) {
                 return EXIT_ERROR;
             }
             client = connectionOptions.newClient();
@@ -131,6 +161,10 @@ public class DeployCommand implements Callable<Integer> {
         }
 
         try {
+            if (applyPlanDir != null) {
+                return runApplyPlan(client);
+            }
+
             PrismContext prismContext = SchemaOptions.newBaseContext();
             if (live && !quiet) {
                 VersionSupport.warnIfMismatch(prismContext, client);
@@ -168,13 +202,19 @@ public class DeployCommand implements Callable<Integer> {
             }
 
             emitWarnings(localSchemas, schemaOrder, objectOrder, warnings);
-            Reconciler reconciler = new Reconciler(prismContext, client, strategy, createIfAbsent, applyOnMatch);
-            return runApply(reconciler, flatten(schemaOrder, objectOrder));
+            overrides = (overridesFile != null) ? Overrides.load(overridesFile, globalStrategy) : null;
+            Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, applyOnMatch);
+            List<Fragment> units = flatten(schemaOrder, objectOrder);
+            return (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midpoint-diff: " + message);
             return EXIT_ERROR;
         }
+    }
+
+    private StrategyOptions.Resolved strategyFor(Fragment unit) {
+        return (overrides != null) ? overrides.strategyFor(unit.sourceFile()) : globalStrategy;
     }
 
     /** Parse the candidate object files (schema is now registered); skip anything that isn't an object. */
@@ -267,26 +307,29 @@ public class DeployCommand implements Callable<Integer> {
         }
         Tally applied = pass(reconciler, units, false, confirmEachApply);
         emitSummary(applied, false);
-        return applied.failed > 0 ? EXIT_ERROR : 0;
+        List<Fragment> failed = applied.failedUnits;
+        if (retry && !failed.isEmpty()) {
+            failed = retryUntilStable(failed,
+                    remaining -> pass(reconciler, remaining, false, confirmEachApply).failedUnits);
+        }
+        return failed.isEmpty() ? 0 : EXIT_ERROR;
     }
 
     /**
-     * Reconcile every unit in order. When {@code preview} is set, nothing is written (used by
-     * {@code --dry-run} and the up-front confirmation). {@code perUnitPrompt} asks before each write.
-     * A transport-level failure (auth, connection) aborts; a per-object rejection is recorded and the run
-     * continues (best-effort).
+     * Reconcile every unit in order. When {@code preview} is set, nothing is written. A transport-level
+     * failure (auth, connection) aborts; a per-object rejection is recorded and the run continues.
      */
     private Tally pass(Reconciler reconciler, List<Fragment> units, boolean preview, boolean perUnitPrompt)
             throws Exception {
         Tally tally = new Tally();
-        Set<String> wouldCreate = new HashSet<>();
+        Map<String, Boolean> wouldCreate = new HashMap<>();
         for (Fragment unit : units) {
             try {
-                Reconciler.Outcome outcome = reconciler.plan(unit.object());
+                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
 
                 // In a preview, a later fragment of an object an earlier fragment would create reads as a patch.
                 boolean afterCreate = preview && outcome.action == Reconciler.Action.CREATE
-                        && outcome.oid != null && !wouldCreate.add(outcome.oid);
+                        && outcome.oid != null && wouldCreate.put(outcome.oid, true) != null;
                 Reconciler.Action action = afterCreate ? Reconciler.Action.PATCH : outcome.action;
 
                 if (!preview && perUnitPrompt
@@ -306,6 +349,7 @@ public class DeployCommand implements Callable<Integer> {
                     throw e;
                 }
                 tally.failed++;
+                tally.failedUnits.add(unit);
                 reportUnit(unit, preview ? "error" : "failed", safe(e.getMessage()), true);
             }
         }
@@ -336,20 +380,188 @@ public class DeployCommand implements Callable<Integer> {
             case FAIL:
             default:
                 tally.failed++;
+                tally.failedUnits.add(unit);
                 reportUnit(unit, preview ? "error" : "failed", safe(outcome.detail), true);
                 break;
         }
     }
 
+    // --- plan (write reviewable files, no server writes) ---
+
+    private Integer runPlan(Reconciler reconciler, List<Fragment> units) throws Exception {
+        if (PlanStore.hasPlanFiles(planDir)) {
+            System.err.println("midpoint-diff: --plan directory " + planDir
+                    + " already contains plan files; use an empty (or new) directory.");
+            return EXIT_ERROR;
+        }
+        Map<String, PrismObject<? extends Objectable>> projected = new HashMap<>();
+        Tally tally = new Tally();
+        int seq = 0;
+        for (Fragment unit : units) {
+            seq++;
+            PrismObject<? extends Objectable> desired = unit.object();
+            String key = unit.identityKey();
+            Reconciler.Outcome outcome = projected.containsKey(key)
+                    ? reconciler.planAgainst(desired, projected.get(key), strategyFor(unit))
+                    : reconciler.plan(desired, strategyFor(unit));
+
+            switch (outcome.action) {
+                case CREATE:
+                    PlanStore.write(planDir, seq, outcome.restType, outcome.oid, unit.name(),
+                            PlanStore.Kind.CREATE, outcome.createBody);
+                    projected.put(key, desired.clone());
+                    tally.created++;
+                    reportUnit(unit, "would-create", "", false);
+                    break;
+                case PATCH:
+                    PlanStore.write(planDir, seq, outcome.restType, outcome.oid, unit.name(),
+                            PlanStore.Kind.PATCH, outcome.modificationXml);
+                    if (projected.containsKey(key)) {
+                        projected.put(key, applyDelta(projected.get(key), outcome.delta));
+                    }
+                    tally.patched++;
+                    reportUnit(unit, "would-patch", outcome.changes + " change(s)", false);
+                    break;
+                case IN_SYNC:
+                    tally.inSync++;
+                    reportUnit(unit, "in-sync", "", false);
+                    break;
+                case SKIP:
+                    tally.skipped++;
+                    reportUnit(unit, "skip", safe(outcome.detail), false);
+                    break;
+                case FAIL:
+                default:
+                    tally.failed++;
+                    reportUnit(unit, "error", safe(outcome.detail), true);
+                    break;
+            }
+        }
+        emitSummary(tally, true);
+        if (tally.changed() > 0) {
+            status("Wrote " + tally.changed() + " plan file(s) to " + planDir + ".");
+        }
+        if (tally.failed > 0) {
+            return EXIT_ERROR;
+        }
+        return tally.changed() > 0 ? 1 : 0;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo needs the delta's own object type; matched by construction
+    private static PrismObject<? extends Objectable> applyDelta(PrismObject<? extends Objectable> base,
+            ObjectDelta delta) throws SchemaException {
+        PrismObject clone = base.clone();
+        delta.applyTo(clone);
+        return clone;
+    }
+
+    // --- apply-plan (replay saved files verbatim) ---
+
+    private Integer runApplyPlan(MidpointRestClient client) throws Exception {
+        List<PlanStore.Entry> entries = PlanStore.read(applyPlanDir);
+        if (entries.isEmpty()) {
+            System.err.println("midpoint-diff: no plan files (*.create.xml / *.patch.xml) in " + applyPlanDir + ".");
+            return EXIT_ERROR;
+        }
+        if (dryRun) {
+            for (PlanStore.Entry entry : entries) {
+                reportEntry(entry, entry.kind == PlanStore.Kind.CREATE ? "would-create" : "would-patch", "", false);
+            }
+            status("Plan: " + entries.size() + " change(s) would be applied from " + applyPlanDir + ".");
+            return 1;
+        }
+        if (confirmEachApply && System.console() == null) {
+            System.err.println("midpoint-diff: --confirm-each-apply needs an interactive session; use --yes.");
+            return EXIT_ERROR;
+        }
+        if (!assumeYes && !confirmEachApply) {
+            for (PlanStore.Entry entry : entries) {
+                reportEntry(entry, entry.kind == PlanStore.Kind.CREATE ? "would-create" : "would-patch", "", false);
+            }
+            Integer stop = confirmOnce(entries.size());
+            if (stop != null) {
+                return stop;
+            }
+        }
+        List<PlanStore.Entry> failed = applyEntries(client, entries, confirmEachApply);
+        if (retry && !failed.isEmpty()) {
+            failed = retryUntilStable(failed, remaining -> applyEntries(client, remaining, confirmEachApply));
+        }
+        status("Done: " + (entries.size() - failed.size()) + " applied, " + failed.size() + " failed.");
+        return failed.isEmpty() ? 0 : EXIT_ERROR;
+    }
+
+    private List<PlanStore.Entry> applyEntries(MidpointRestClient client, List<PlanStore.Entry> entries,
+            boolean perUnitPrompt) throws Exception {
+        List<PlanStore.Entry> failed = new ArrayList<>();
+        for (PlanStore.Entry entry : entries) {
+            try {
+                if (perUnitPrompt && !promptEntry(entry)) {
+                    reportEntry(entry, "skipped", "declined", false);
+                    continue;
+                }
+                if (entry.kind == PlanStore.Kind.CREATE) {
+                    client.createObject(entry.restType, entry.body);
+                    reportEntry(entry, "created", "", false);
+                } else {
+                    client.patchObject(entry.restType, entry.oid, entry.body);
+                    reportEntry(entry, "patched", "", false);
+                }
+            } catch (Exception e) {
+                if (isFatal(e)) {
+                    throw e;
+                }
+                failed.add(entry);
+                reportEntry(entry, "failed", safe(e.getMessage()), true);
+            }
+        }
+        return failed;
+    }
+
+    // --- retry ---
+
+    /** Re-apply the failed items round after round until one makes no progress; returns what is still stuck. */
+    private <T> List<T> retryUntilStable(List<T> failed, RetryPass<T> pass) throws Exception {
+        int round = 1;
+        while (!failed.isEmpty() && round <= MAX_RETRY_ROUNDS) {
+            int before = failed.size();
+            note("retry round " + round + ": re-applying " + before + " failed unit(s)...");
+            failed = pass.apply(failed);
+            if (failed.size() >= before) {
+                break; // no progress
+            }
+            round++;
+        }
+        if (!failed.isEmpty()) {
+            note(failed.size() + " unit(s) still failing after retry — giving up.");
+        }
+        return failed;
+    }
+
+    /** A retry pass: apply a list of still-failing items and return the ones that failed again. */
+    private interface RetryPass<T> {
+        List<T> apply(List<T> items) throws Exception;
+    }
+
+    // --- confirmation ---
+
     private boolean promptEach(Reconciler.Action action, Reconciler.Outcome outcome) {
+        String verb = (action == Reconciler.Action.CREATE)
+                ? "Create" : "Apply " + outcome.changes + " change(s) to";
+        return promptYes(verb + " " + outcome.restType + "/" + (outcome.oid != null ? outcome.oid : "(new)"));
+    }
+
+    private boolean promptEntry(PlanStore.Entry entry) {
+        String verb = (entry.kind == PlanStore.Kind.CREATE) ? "Create" : "Patch";
+        return promptYes(verb + " " + entry.restType + "/" + entry.oid);
+    }
+
+    private boolean promptYes(String prompt) {
         Console console = System.console();
         if (console == null) {
             return false;
         }
-        String verb = (action == Reconciler.Action.CREATE)
-                ? "Create" : "Apply " + outcome.changes + " change(s) to";
-        String answer = console.readLine("%s %s/%s? [y/N] ", verb, outcome.restType,
-                outcome.oid != null ? outcome.oid : "(new)");
+        String answer = console.readLine("%s? [y/N] ", prompt);
         String normalized = (answer == null) ? "" : answer.trim().toLowerCase();
         return normalized.equals("y") || normalized.equals("yes");
     }
@@ -449,8 +661,19 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     private void reportUnit(Fragment fragment, String label, String detail, boolean error) {
-        StringBuilder out = new StringBuilder(String.format("  %-12s %-11s %-38s %-16s %s", label,
-                fragment.typeName(), fragment.identityLabel(), safe(fragment.name()), fragment.sourceFile()));
+        report(label, fragment.typeName(), fragment.identityLabel(), safe(fragment.name()),
+                fragment.sourceFile().toString(), detail, error);
+    }
+
+    private void reportEntry(PlanStore.Entry entry, String label, String detail, boolean error) {
+        report(label, entry.restType, safe(entry.oid),
+                entry.kind == PlanStore.Kind.CREATE ? "(create)" : "(patch)", "", detail, error);
+    }
+
+    private void report(String label, String type, String id, String name, String source, String detail,
+            boolean error) {
+        StringBuilder out = new StringBuilder(
+                String.format("  %-12s %-11s %-38s %-16s %s", label, type, id, name, source));
         if (detail != null && !detail.isEmpty()) {
             out.append("  ").append(detail);
         }
@@ -464,6 +687,12 @@ public class DeployCommand implements Callable<Integer> {
     private void status(String message) {
         if (!quiet) {
             System.out.println(message);
+        }
+    }
+
+    private void note(String message) {
+        if (!quiet) {
+            System.err.println("midpoint-diff: " + message);
         }
     }
 
@@ -483,13 +712,14 @@ public class DeployCommand implements Callable<Integer> {
         return "   (needs " + needs.stream().map(n -> "#" + n).collect(Collectors.joining(",")) + ")";
     }
 
-    /** Running counts for a preview or apply pass. */
+    /** Running counts for a preview or apply pass, plus the units that failed (for retry). */
     private static final class Tally {
         int created;
         int patched;
         int inSync;
         int skipped;
         int failed;
+        final List<Fragment> failedUnits = new ArrayList<>();
 
         int changed() {
             return created + patched;

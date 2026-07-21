@@ -11,16 +11,18 @@ import java.util.List;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.schema.constants.ObjectTypes;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
 /**
  * Reconciles a single desired object (an apply unit) against a live server, reusing the offline
  * {@link DiffEngine}. It <em>plans</em> the action — resolve the current object (search by OID, or a
- * type+name search when {@code --apply-on-match} is set), diff the fragment ({@code --scope present}),
+ * type+name search when {@code --apply-on-match} is set), diff the fragment against the caller's strategy,
  * and decide {@code CREATE}/{@code PATCH}/{@code IN_SYNC}/{@code SKIP}/{@code FAIL} — and then, separately,
- * <em>executes</em> it (POST/PATCH). Planning is read-only, so it drives both the {@code --dry-run}/preview
- * pass and the real apply pass. All HTTP stays in {@link MidpointRestClient}; this class only orchestrates.
+ * <em>executes</em> it (POST/PATCH). Planning is read-only. {@link #planAgainst} decides against a caller-
+ * supplied current object (no fetch), which the {@code --plan} projection uses to advance a local copy of
+ * the tree. All HTTP stays in {@link MidpointRestClient}; this class only orchestrates.
  */
 final class Reconciler {
 
@@ -35,9 +37,10 @@ final class Reconciler {
         final String detail;       // delta summary (patch) or reason (skip/fail)
         final String modificationXml; // PATCH body
         final String createBody;      // POST body
+        final ObjectDelta<? extends Objectable> delta; // the computed delta for a PATCH (for projection)
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
-                String modificationXml, String createBody) {
+                String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta) {
             this.action = action;
             this.restType = restType;
             this.oid = oid;
@@ -45,43 +48,35 @@ final class Reconciler {
             this.detail = detail;
             this.modificationXml = modificationXml;
             this.createBody = createBody;
+            this.delta = delta;
         }
     }
 
     private final PrismContext prismContext;
     private final MidpointRestClient client;
-    private final StrategyOptions.Resolved strategy;
     private final boolean createIfAbsent;
     private final boolean applyOnMatch;
 
-    Reconciler(PrismContext prismContext, MidpointRestClient client, StrategyOptions.Resolved strategy,
-            boolean createIfAbsent, boolean applyOnMatch) {
+    Reconciler(PrismContext prismContext, MidpointRestClient client, boolean createIfAbsent, boolean applyOnMatch) {
         this.prismContext = prismContext;
         this.client = client;
-        this.strategy = strategy;
         this.createIfAbsent = createIfAbsent;
         this.applyOnMatch = applyOnMatch;
     }
 
-    /** Decide what to do with {@code desired}. Read-only. Throws only on a transport/parse failure. */
-    Outcome plan(PrismObject<? extends Objectable> desired) throws SchemaException, IOException {
+    /** Decide what to do with {@code desired}: resolve its current state from the server, then decide. */
+    Outcome plan(PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy)
+            throws SchemaException, IOException {
         Class<?> clazz = desired.getCompileTimeClass();
-        if (clazz == null) {
-            return skip(null, null, "not a recognized midPoint object type");
-        }
-        String restType;
-        try {
-            restType = ObjectTypes.getRestTypeFromClass(clazz);
-        } catch (IllegalArgumentException e) {
-            return skip(null, null, "no REST endpoint for " + clazz.getSimpleName());
+        String restType = restTypeOrNull(clazz);
+        if (restType == null) {
+            return skip(null, null, unaddressable(clazz));
         }
 
         String oid = desired.getOid();
         PrismObject<? extends Objectable> current;
-        String targetOid;
         if (oid != null && !oid.isBlank()) {
             current = LiveLookup.byOid(prismContext, client, clazz, restType, oid);
-            targetOid = oid;
         } else if (applyOnMatch) {
             List<PrismObject<? extends Objectable>> matches =
                     LiveLookup.byName(prismContext, client, clazz, restType, nameOf(desired));
@@ -90,20 +85,34 @@ final class Reconciler {
                         + nameOf(desired) + "'; refusing an ambiguous match");
             }
             current = matches.isEmpty() ? null : matches.get(0);
-            targetOid = (current != null) ? current.getOid() : null;
         } else {
             current = null;
-            targetOid = null;
         }
+        return decide(desired, current, restType, strategy);
+    }
 
+    /** Decide against a caller-supplied current object (or {@code null} = absent); no server read. */
+    Outcome planAgainst(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> current,
+            StrategyOptions.Resolved strategy) throws SchemaException {
+        String restType = restTypeOrNull(desired.getCompileTimeClass());
+        if (restType == null) {
+            return skip(null, null, unaddressable(desired.getCompileTimeClass()));
+        }
+        return decide(desired, current, restType, strategy);
+    }
+
+    private Outcome decide(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> current,
+            String restType, StrategyOptions.Resolved strategy) throws SchemaException {
+        String oid = desired.getOid();
         if (current != null) {
-            return planPatch(restType, targetOid, desired, current);
+            String targetOid = (oid != null && !oid.isBlank()) ? oid : current.getOid();
+            return planPatch(restType, targetOid, desired, current, strategy);
         }
         return planCreate(restType, oid, desired);
     }
 
     private Outcome planPatch(String restType, String targetOid, PrismObject<? extends Objectable> desired,
-            PrismObject<? extends Objectable> current) throws SchemaException {
+            PrismObject<? extends Objectable> current, StrategyOptions.Resolved strategy) throws SchemaException {
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
                 .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
         if (!result.accruedInPlaceEditPaths().isEmpty() && !strategy.allowInplaceMerge) {
@@ -112,19 +121,20 @@ final class Reconciler {
                     + " (use --equivalence real-value or --allow-inplace-merge)");
         }
         if (!result.hasDrift()) {
-            return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null);
+            return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null, null);
         }
         int changes = result.delta().getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
         String summary = DeltaOutput.toSummary(result.delta()).replace("\n", "; ");
-        return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null);
+        return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
+                result.delta());
     }
 
     private Outcome planCreate(String restType, String oid, PrismObject<? extends Objectable> desired)
             throws SchemaException {
         if (createIfAbsent) {
             return new Outcome(Action.CREATE, restType, oid, 0, "would create",
-                    null, ApplyCommand.createBody(prismContext, desired));
+                    null, ApplyCommand.createBody(prismContext, desired), null);
         }
         if (oid != null && !oid.isBlank()) {
             return fail(restType, oid, "does not exist (pass --create-if-absent to create it)");
@@ -146,15 +156,31 @@ final class Reconciler {
         }
     }
 
+    private static String restTypeOrNull(Class<?> clazz) {
+        if (clazz == null) {
+            return null;
+        }
+        try {
+            return ObjectTypes.getRestTypeFromClass(clazz);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static String unaddressable(Class<?> clazz) {
+        return (clazz == null) ? "not a recognized midPoint object type"
+                : "no REST endpoint for " + clazz.getSimpleName();
+    }
+
     private static String nameOf(PrismObject<? extends Objectable> object) {
         return (object.getName() != null) ? object.getName().getOrig() : "";
     }
 
     private static Outcome skip(String restType, String oid, String reason) {
-        return new Outcome(Action.SKIP, restType, oid, 0, reason, null, null);
+        return new Outcome(Action.SKIP, restType, oid, 0, reason, null, null, null);
     }
 
     private static Outcome fail(String restType, String oid, String reason) {
-        return new Outcome(Action.FAIL, restType, oid, 0, reason, null, null);
+        return new Outcome(Action.FAIL, restType, oid, 0, reason, null, null, null);
     }
 }
