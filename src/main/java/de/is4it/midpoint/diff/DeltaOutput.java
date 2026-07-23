@@ -39,7 +39,8 @@ final class DeltaOutput {
     static String toModificationXml(PrismContext prismContext, ObjectDelta<? extends Objectable> delta)
             throws SchemaException {
         ObjectModificationType modification = DeltaConvertor.toObjectModificationType(delta);
-        return prismContext.xmlSerializer().serializeRealValue(modification, ObjectFactory.F_OBJECT_MODIFICATION);
+        return XmlPretty.tidyRoot(
+                prismContext.xmlSerializer().serializeRealValue(modification, ObjectFactory.F_OBJECT_MODIFICATION));
     }
 
     /** The same {@code objectModification} as JSON (midPoint's REST {@code PATCH} also accepts JSON). */

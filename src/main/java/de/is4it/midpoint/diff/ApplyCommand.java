@@ -213,7 +213,7 @@ public class ApplyCommand implements Callable<Integer> {
     static String createBody(PrismContext prismContext, PrismObject<? extends Objectable> desired)
             throws SchemaException {
         desired.getValue().removeOperationalItems();
-        return prismContext.xmlSerializer().serialize(desired);
+        return XmlPretty.tidyRoot(prismContext.xmlSerializer().serialize(desired));
     }
 
     /** Prompt/decide whether to write. Returns {@code null} to proceed, or the exit code to return. */
