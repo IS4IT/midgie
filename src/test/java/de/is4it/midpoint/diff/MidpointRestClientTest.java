@@ -111,6 +111,16 @@ class MidpointRestClientTest {
     }
 
     @Test
+    void redirectIsReportedWithLocationAndAHint() {
+        MidpointRestClient.RestException ex = assertThrows(
+                MidpointRestClient.RestException.class, () -> client.getObject("users", "redirect"));
+        assertEquals(302, ex.statusCode());
+        assertTrue(ex.getMessage().contains("redirected"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("/midpoint/"), ex.getMessage());   // the Location header
+        assertTrue(ex.getMessage().contains("context path"), ex.getMessage()); // the actionable hint
+    }
+
+    @Test
     void connectionRefusedGivesAClearMessage() {
         MidpointRestClient dead = new MidpointRestClient(
                 java.net.URI.create("http://127.0.0.1:1/midpoint"), "u", "p", false);
@@ -228,6 +238,9 @@ class MidpointRestClientTest {
             respond(exchange, 401, "unauthorized");
         } else if (lastPath.endsWith("/users/forbidden")) {
             respond(exchange, 403, "forbidden");
+        } else if (lastPath.endsWith("/users/redirect")) {
+            exchange.getResponseHeaders().add("Location", "/midpoint/");
+            respond(exchange, 302, "");
         } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users/search")) {
             respond(exchange, 200, "<objectList><object oid=\"found-oid\"/></objectList>");
         } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users")) {

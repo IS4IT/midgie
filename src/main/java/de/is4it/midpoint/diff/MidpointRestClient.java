@@ -224,6 +224,15 @@ public final class MidpointRestClient {
                     backoff(attempt++);
                     continue;
                 }
+                if (status >= 300 && status < 400) {
+                    // A redirect on the REST base almost always means --host is off (missing context path or
+                    // wrong scheme). Following it would chase an HTML page, not the API, so report it clearly.
+                    String location = response.headers().firstValue("Location").orElse("(no Location header)");
+                    throw new RestException(status, what + " — the server redirected (HTTP " + status + ") to '"
+                            + location + "'. Point --host at the exact midPoint REST base: it usually needs the "
+                            + "application context path (e.g. http://host:port/midpoint) and the matching scheme "
+                            + "(http vs https).");
+                }
                 if (status < 200 || status >= 300) {
                     throw new RestException(status,
                             what + " failed: HTTP " + status + statusHint(status) + shortBody(response.body()));
