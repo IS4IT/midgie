@@ -75,7 +75,7 @@ public class DiffCommand implements Callable<Integer> {
             description = "Raise the log level to DEBUG (framework logs on stderr) for troubleshooting.")
     boolean debug;
 
-    @Option(names = "--match-by-name",
+    @Option(names = {"--match-by-name", "-m"},
             description = "In live mode, if the object has no oid, find it on the server by type+name "
                     + "(a single match) instead of failing.")
     boolean matchByName;

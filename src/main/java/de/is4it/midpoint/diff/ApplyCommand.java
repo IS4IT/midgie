@@ -59,11 +59,11 @@ public class ApplyCommand implements Callable<Integer> {
     @Mixin
     SchemaOptions schemaOptions;
 
-    @Option(names = "--create-if-absent",
+    @Option(names = {"--create-if-absent", "-c"},
             description = "If the object does not exist, POST the whole desired object to create it.")
     boolean createIfAbsent;
 
-    @Option(names = "--match-by-name",
+    @Option(names = {"--match-by-name", "-m"},
             description = "If the object has no oid, find it on the server by type+name (a single match) "
                     + "instead of failing; combine with --create-if-absent to create it when there is no match.")
     boolean matchByName;

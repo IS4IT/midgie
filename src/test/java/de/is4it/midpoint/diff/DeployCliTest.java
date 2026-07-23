@@ -171,6 +171,15 @@ class DeployCliTest {
     }
 
     @Test
+    void shortCreateAndMatchFlagsAreRecognized() {
+        // -c/-m are shorthands for --create-if-absent/--match-by-name: without --host they hit the
+        // write-flags guard (not an "unknown option" error), which proves they parsed as those flags.
+        Result r = run("deploy", TREE, "-c", "-m");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--host"), r.err);
+    }
+
+    @Test
     void dryRunWithoutHostIsAnError() {
         Result r = run("deploy", TREE, "--dry-run");
         assertEquals(2, r.exit);

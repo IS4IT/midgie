@@ -86,11 +86,11 @@ public class DeployCommand implements Callable<Integer> {
             description = "Prompt before each individual change (per itemDelta) instead of once for the whole tree.")
     boolean confirmEachApply;
 
-    @Option(names = "--create-if-absent",
+    @Option(names = {"--create-if-absent", "-c"},
             description = "POST objects that do not exist yet (otherwise a missing object fails; an OID-less one is skipped).")
     boolean createIfAbsent;
 
-    @Option(names = "--match-by-name",
+    @Option(names = {"--match-by-name", "-m"},
             description = "For an OID-less object, search the server by type+name and PATCH the single match (else skip/create).")
     boolean matchByName;
 
