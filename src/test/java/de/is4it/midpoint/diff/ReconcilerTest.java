@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Offline tests for the reconcile decision table, driving {@link Reconciler} through the real REST client
  * against a stub {@code com.sun.net.httpserver}. Existence is checked with a {@code POST {type}/search}
  * (an absent object is an empty result, not a 404), so the stub answers search with a controllable
- * {@code ObjectListType}. The name-search path ({@code --apply-on-match}) is exercised end-to-end against
+ * {@code ObjectListType}. The name-search path ({@code --match-by-name}) is exercised end-to-end against
  * the live rig instead (see {@code LiveIntegrationTest}).
  */
 class ReconcilerTest {
@@ -110,9 +110,9 @@ class ReconcilerTest {
 
     // --- helpers ---
 
-    private Reconciler.Outcome plan(boolean createIfAbsent, boolean applyOnMatch, String xml) throws Exception {
+    private Reconciler.Outcome plan(boolean createIfAbsent, boolean matchByName, String xml) throws Exception {
         MidpointRestClient client = new MidpointRestClient(host, "administrator", "s3cret", false);
-        Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, applyOnMatch);
+        Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, matchByName);
         return reconciler.plan(desired(xml), strategy());
     }
 

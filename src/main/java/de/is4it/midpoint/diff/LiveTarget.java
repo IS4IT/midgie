@@ -25,6 +25,11 @@ public final class LiveTarget {
         this.oid = oid;
     }
 
+    /** A target from an already-resolved REST type and OID (the OID may be {@code null} for a create). */
+    static LiveTarget of(String restType, String oid) {
+        return new LiveTarget(restType, oid);
+    }
+
     /**
      * Resolve the REST type from the desired object's compile-time class and the OID from
      * {@code oidOverride} (if given) or the object itself.

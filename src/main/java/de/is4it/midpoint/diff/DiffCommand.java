@@ -75,6 +75,11 @@ public class DiffCommand implements Callable<Integer> {
             description = "Raise the log level to DEBUG (framework logs on stderr) for troubleshooting.")
     boolean debug;
 
+    @Option(names = "--match-by-name",
+            description = "In live mode, if the object has no oid, find it on the server by type+name "
+                    + "(a single match) instead of failing.")
+    boolean matchByName;
+
     @Override
     public Integer call() {
         if (debug) {
@@ -159,13 +164,13 @@ public class DiffCommand implements Callable<Integer> {
     private PrismObject<? extends Objectable> fetchLive(
             PrismContext prismContext, MidpointRestClient client, PrismObject<? extends Objectable> desired)
             throws Exception {
-        LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);
-        PrismObject<? extends Objectable> current =
-                LiveLookup.byOid(prismContext, client, desired.getCompileTimeClass(), target.restType, target.oid);
-        if (current == null) {
-            throw new SchemaException("Object " + target.restType + "/" + target.oid
-                    + " does not exist on the server.");
+        LiveLookup.Target target =
+                LiveLookup.resolveCurrent(prismContext, client, desired, connectionOptions.oid, matchByName);
+        if (target.current == null) {
+            String where = (target.oid != null) ? "Object " + target.restType + "/" + target.oid
+                    : "A " + target.restType + " named '" + LiveLookup.nameOf(desired) + "'";
+            throw new SchemaException(where + " does not exist on the server.");
         }
-        return current;
+        return target.current;
     }
 }

@@ -228,7 +228,7 @@ class LiveIntegrationTest {
     }
 
     @Test
-    void deployApplyOnMatchPatchesAnOidlessObjectByName(@TempDir Path dir) throws Exception {
+    void deployMatchByNamePatchesAnOidlessObjectByName(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteDeployObjects();
 
@@ -237,42 +237,42 @@ class LiveIntegrationTest {
         Files.writeString(seed.resolve("role.xml"), role(DEPLOY_MATCH_OID, "AOM Role", "orig"), StandardCharsets.UTF_8);
         run("deploy", seed.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
 
-        // Deploy an OID-less fragment with the SAME name and a changed description; --apply-on-match finds
+        // Deploy an OID-less fragment with the SAME name and a changed description; --match-by-name finds
         // it by name and PATCHes it.
         Path aom = java.nio.file.Files.createDirectories(dir.resolve("aom"));
         Files.writeString(aom.resolve("role.xml"), role(null, "AOM Role", "changed"), StandardCharsets.UTF_8);
         CliResult patched = run("deploy", aom.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
-                "--apply-on-match", "--yes");
+                "--match-by-name", "--yes");
         assertEquals(0, patched.exit, patched.err);
-        assertTrue(patched.out.contains("patched"), "apply-on-match should patch the match, got: " + patched.out);
+        assertTrue(patched.out.contains("patched"), "match-by-name should patch the match, got: " + patched.out);
         assertTrue(client.getObject("roles", DEPLOY_MATCH_OID).contains("changed"),
                 "the matched role should carry the new description");
     }
 
     @Test
-    void deployApplyOnMatchWithCreateIfAbsentCreatesThenMatches(@TempDir Path dir) throws Exception {
+    void deployMatchByNameWithCreateIfAbsentCreatesThenMatches(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteByName("roles", COMBO_NAME);
 
         Path tree = java.nio.file.Files.createDirectories(dir.resolve("combo"));
         Files.writeString(tree.resolve("role.xml"), role(null, COMBO_NAME, "v1"), StandardCharsets.UTF_8);
 
-        // No match yet: --apply-on-match finds nothing, --create-if-absent then POSTs it.
+        // No match yet: --match-by-name finds nothing, --create-if-absent then POSTs it.
         CliResult created = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
-                "--apply-on-match", "--create-if-absent", "--yes");
+                "--match-by-name", "--create-if-absent", "--yes");
         assertEquals(0, created.exit, created.err);
         assertTrue(created.out.contains("created"), "no match -> create, got: " + created.out);
 
-        // Re-run identical: --apply-on-match now finds it by name -> in-sync (no duplicate created).
+        // Re-run identical: --match-by-name now finds it by name -> in-sync (no duplicate created).
         CliResult resynced = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
-                "--apply-on-match", "--create-if-absent", "--yes");
+                "--match-by-name", "--create-if-absent", "--yes");
         assertEquals(0, resynced.exit, resynced.err);
         assertTrue(resynced.out.contains("in-sync"), "re-run must match, not create again, got: " + resynced.out);
 
         // Change the fragment: match -> patch.
         Files.writeString(tree.resolve("role.xml"), role(null, COMBO_NAME, "v2"), StandardCharsets.UTF_8);
         CliResult patched = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
-                "--apply-on-match", "--create-if-absent", "--yes");
+                "--match-by-name", "--create-if-absent", "--yes");
         assertEquals(0, patched.exit, patched.err);
         assertTrue(patched.out.contains("patched"), "changed fragment -> patch, got: " + patched.out);
 
@@ -327,6 +327,50 @@ class LiveIntegrationTest {
         CliResult full = run("deploy", dir.resolve("tree").toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
                 "--overrides", overrides.toString(), "--dry-run");
         assertEquals(1, full.exit, full.out + full.err);
+    }
+
+    @Test
+    void diffMatchByNameResolvesAnOidlessObject(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+
+        // Seed a role with an OID, name, and description.
+        File seed = dir.resolve("seed.xml").toFile();
+        Files.writeString(seed.toPath(), role(DEPLOY_ROLE_OID, "IT Deploy Role", "orig"), StandardCharsets.UTF_8);
+        run("deploy", seed.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+
+        // An OID-less desired with the same name and a changed description.
+        File oidless = dir.resolve("oidless.xml").toFile();
+        Files.writeString(oidless.toPath(), role(null, "IT Deploy Role", "changed"), StandardCharsets.UTF_8);
+
+        // Without --match-by-name there is no OID to address -> error.
+        CliResult noFlag = run("diff", oidless.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD);
+        assertEquals(2, noFlag.exit);
+        assertTrue(noFlag.err.contains("match-by-name"), noFlag.err);
+
+        // With --match-by-name it resolves by name and sees the drift.
+        CliResult matched = run("diff", oidless.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--match-by-name", "--format", "summary");
+        assertEquals(1, matched.exit, matched.err);
+        assertTrue(matched.out.contains("replace description"), matched.out);
+    }
+
+    @Test
+    void applyMatchByNamePatchesAnOidlessObject(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+
+        File seed = dir.resolve("seed.xml").toFile();
+        Files.writeString(seed.toPath(), role(DEPLOY_ROLE_OID, "IT Deploy Role", "orig"), StandardCharsets.UTF_8);
+        run("deploy", seed.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+
+        File oidless = dir.resolve("oidless.xml").toFile();
+        Files.writeString(oidless.toPath(), role(null, "IT Deploy Role", "changed"), StandardCharsets.UTF_8);
+        CliResult applied = run("apply", oidless.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+                "--match-by-name", "--yes");
+        assertEquals(0, applied.exit, applied.err);
+        assertTrue(applied.out.contains("Applied"), applied.out);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains("changed"), "the matched role was patched");
     }
 
     // --- helpers ---

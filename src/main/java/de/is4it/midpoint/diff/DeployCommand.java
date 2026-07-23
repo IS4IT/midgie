@@ -90,9 +90,9 @@ public class DeployCommand implements Callable<Integer> {
             description = "POST objects that do not exist yet (otherwise a missing object fails; an OID-less one is skipped).")
     boolean createIfAbsent;
 
-    @Option(names = "--apply-on-match",
+    @Option(names = "--match-by-name",
             description = "For an OID-less object, search the server by type+name and PATCH the single match (else skip/create).")
-    boolean applyOnMatch;
+    boolean matchByName;
 
     @Option(names = "--retry",
             description = "After the apply pass, re-apply the failed units until a round makes no progress (catches by-name refs).")
@@ -136,10 +136,10 @@ public class DeployCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
         boolean live = connectionOptions.isLive();
-        boolean writeFlags = dryRun || assumeYes || confirmEachApply || createIfAbsent || applyOnMatch
+        boolean writeFlags = dryRun || assumeYes || confirmEachApply || createIfAbsent || matchByName
                 || retry || planDir != null || applyPlanDir != null || overridesFile != null;
         if (!live && writeFlags) {
-            System.err.println("midpoint-diff: --dry-run/--yes/--create-if-absent/--apply-on-match/--retry/"
+            System.err.println("midpoint-diff: --dry-run/--yes/--create-if-absent/--match-by-name/--retry/"
                     + "--plan/--apply-plan/--overrides need --host; without a host, deploy only prints the plan.");
             return EXIT_ERROR;
         }
@@ -203,7 +203,7 @@ public class DeployCommand implements Callable<Integer> {
 
             emitWarnings(localSchemas, schemaOrder, objectOrder, warnings);
             overrides = (overridesFile != null) ? Overrides.load(overridesFile, globalStrategy) : null;
-            Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, applyOnMatch);
+            Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, matchByName);
             List<Fragment> units = flatten(schemaOrder, objectOrder);
             return (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
         } catch (Exception e) {

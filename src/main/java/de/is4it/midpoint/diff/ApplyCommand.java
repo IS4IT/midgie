@@ -63,6 +63,11 @@ public class ApplyCommand implements Callable<Integer> {
             description = "If the object does not exist, POST the whole desired object to create it.")
     boolean createIfAbsent;
 
+    @Option(names = "--match-by-name",
+            description = "If the object has no oid, find it on the server by type+name (a single match) "
+                    + "instead of failing; combine with --create-if-absent to create it when there is no match.")
+    boolean matchByName;
+
     @Option(names = "--dry-run",
             description = "Compute and print the delta but do not send it. Exits 1 if it would change anything.")
     boolean dryRun;
@@ -111,13 +116,12 @@ public class ApplyCommand implements Callable<Integer> {
                 VersionSupport.warnIfMismatch(prismContext, client);
             }
             PrismObject<? extends Objectable> desired = Io.parseObject(prismContext, desiredFile);
-            LiveTarget target = LiveTarget.resolve(desired, connectionOptions.oid);
-
-            PrismObject<? extends Objectable> current =
-                    LiveLookup.byOid(prismContext, client, desired.getCompileTimeClass(), target.restType, target.oid);
-            return (current == null)
+            LiveLookup.Target resolved =
+                    LiveLookup.resolveCurrent(prismContext, client, desired, connectionOptions.oid, matchByName);
+            LiveTarget target = LiveTarget.of(resolved.restType, resolved.oid);
+            return (resolved.current == null)
                     ? applyCreate(prismContext, client, target, desired)
-                    : applyPatch(prismContext, client, target, desired, strategy, current);
+                    : applyPatch(prismContext, client, target, desired, strategy, resolved.current);
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midpoint-diff: " + message);
@@ -128,18 +132,18 @@ public class ApplyCommand implements Callable<Integer> {
     /** Object is absent (GET 404): create it from the desired object, if allowed and confirmed. */
     private Integer applyCreate(PrismContext prismContext, MidpointRestClient client, LiveTarget target,
             PrismObject<? extends Objectable> desired) throws Exception {
+        String address = (target.oid != null) ? target.restType + "/" + target.oid
+                : target.restType + " '" + LiveLookup.nameOf(desired) + "'";
         if (!createIfAbsent) {
-            System.err.println("midpoint-diff: " + target.restType + "/" + target.oid
-                    + " does not exist. Pass --create-if-absent to create it.");
+            System.err.println("midpoint-diff: " + address + " does not exist. Pass --create-if-absent to create it.");
             return EXIT_ERROR;
         }
-        note("midpoint-diff: " + target.restType + "/" + target.oid
-                + " does not exist; will create it from " + desiredFile.getName() + ".");
+        note("midpoint-diff: " + address + " does not exist; will create it from " + desiredFile.getName() + ".");
         if (dryRun) {
-            note("midpoint-diff: dry run — would create " + target.restType + "/" + target.oid + " (not created).");
+            note("midpoint-diff: dry run — would create " + address + " (not created).");
             return 1; // would change
         }
-        Integer stop = confirmOrExit("Create " + target.restType + "/" + target.oid + "?");
+        Integer stop = confirmOrExit("Create " + address + "?");
         if (stop != null) {
             return stop;
         }

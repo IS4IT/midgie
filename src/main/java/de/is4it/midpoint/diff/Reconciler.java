@@ -18,7 +18,7 @@ import com.evolveum.midpoint.util.exception.SchemaException;
 /**
  * Reconciles a single desired object (an apply unit) against a live server, reusing the offline
  * {@link DiffEngine}. It <em>plans</em> the action — resolve the current object (search by OID, or a
- * type+name search when {@code --apply-on-match} is set), diff the fragment against the caller's strategy,
+ * type+name search when {@code --match-by-name} is set), diff the fragment against the caller's strategy,
  * and decide {@code CREATE}/{@code PATCH}/{@code IN_SYNC}/{@code SKIP}/{@code FAIL} — and then, separately,
  * <em>executes</em> it (POST/PATCH). Planning is read-only. {@link #planAgainst} decides against a caller-
  * supplied current object (no fetch), which the {@code --plan} projection uses to advance a local copy of
@@ -55,13 +55,13 @@ final class Reconciler {
     private final PrismContext prismContext;
     private final MidpointRestClient client;
     private final boolean createIfAbsent;
-    private final boolean applyOnMatch;
+    private final boolean matchByName;
 
-    Reconciler(PrismContext prismContext, MidpointRestClient client, boolean createIfAbsent, boolean applyOnMatch) {
+    Reconciler(PrismContext prismContext, MidpointRestClient client, boolean createIfAbsent, boolean matchByName) {
         this.prismContext = prismContext;
         this.client = client;
         this.createIfAbsent = createIfAbsent;
-        this.applyOnMatch = applyOnMatch;
+        this.matchByName = matchByName;
     }
 
     /** Decide what to do with {@code desired}: resolve its current state from the server, then decide. */
@@ -77,12 +77,12 @@ final class Reconciler {
         PrismObject<? extends Objectable> current;
         if (oid != null && !oid.isBlank()) {
             current = LiveLookup.byOid(prismContext, client, clazz, restType, oid);
-        } else if (applyOnMatch) {
+        } else if (matchByName) {
             List<PrismObject<? extends Objectable>> matches =
-                    LiveLookup.byName(prismContext, client, clazz, restType, nameOf(desired));
+                    LiveLookup.byName(prismContext, client, clazz, restType, LiveLookup.nameOf(desired));
             if (matches.size() > 1) {
-                return fail(restType, null, "--apply-on-match found " + matches.size() + " objects named '"
-                        + nameOf(desired) + "'; refusing an ambiguous match");
+                return fail(restType, null, "--match-by-name found " + matches.size() + " objects named '"
+                        + LiveLookup.nameOf(desired) + "'; refusing an ambiguous match");
             }
             current = matches.isEmpty() ? null : matches.get(0);
         } else {
@@ -139,7 +139,7 @@ final class Reconciler {
         if (oid != null && !oid.isBlank()) {
             return fail(restType, oid, "does not exist (pass --create-if-absent to create it)");
         }
-        return skip(restType, null, "no oid; pass --create-if-absent to create, or --apply-on-match to match by name");
+        return skip(restType, null, "no oid; pass --create-if-absent to create, or --match-by-name to match by name");
     }
 
     /** Execute a planned {@code CREATE}/{@code PATCH}. Returns the affected OID (created OID for a POST). */
@@ -170,10 +170,6 @@ final class Reconciler {
     private static String unaddressable(Class<?> clazz) {
         return (clazz == null) ? "not a recognized midPoint object type"
                 : "no REST endpoint for " + clazz.getSimpleName();
-    }
-
-    private static String nameOf(PrismObject<? extends Objectable> object) {
-        return (object.getName() != null) ? object.getName().getOrig() : "";
     }
 
     private static Outcome skip(String restType, String oid, String reason) {
