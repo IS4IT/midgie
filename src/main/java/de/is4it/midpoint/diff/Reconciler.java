@@ -8,6 +8,9 @@ package de.is4it.midpoint.diff;
 import java.io.IOException;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
@@ -25,6 +28,8 @@ import com.evolveum.midpoint.util.exception.SchemaException;
  * the tree. All HTTP stays in {@link MidpointRestClient}; this class only orchestrates.
  */
 final class Reconciler {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Reconciler.class);
 
     enum Action { CREATE, PATCH, IN_SYNC, SKIP, FAIL }
 
@@ -121,11 +126,13 @@ final class Reconciler {
                     + " (use --equivalence real-value or --allow-inplace-merge)");
         }
         if (!result.hasDrift()) {
+            LOG.debug("{} {}: IN_SYNC", restType, targetOid);
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null, null);
         }
         int changes = result.delta().getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
         String summary = DeltaOutput.toSummary(result.delta()).replace("\n", "; ");
+        LOG.debug("{} {}: PATCH, {} change(s): {}", restType, targetOid, changes, summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
                 result.delta());
     }
@@ -133,6 +140,7 @@ final class Reconciler {
     private Outcome planCreate(String restType, String oid, PrismObject<? extends Objectable> desired)
             throws SchemaException {
         if (createIfAbsent) {
+            LOG.debug("{} {}: CREATE (create-if-absent)", restType, oid);
             return new Outcome(Action.CREATE, restType, oid, 0, "would create",
                     null, ApplyCommand.createBody(prismContext, desired), null);
         }
@@ -144,6 +152,7 @@ final class Reconciler {
 
     /** Execute a planned {@code CREATE}/{@code PATCH}. Returns the affected OID (created OID for a POST). */
     String execute(Outcome outcome) throws IOException {
+        LOG.debug("execute {} {}/{}", outcome.action, outcome.restType, outcome.oid);
         switch (outcome.action) {
             case CREATE:
                 String created = client.createObject(outcome.restType, outcome.createBody);
@@ -173,10 +182,12 @@ final class Reconciler {
     }
 
     private static Outcome skip(String restType, String oid, String reason) {
+        LOG.debug("{} {}: SKIP — {}", restType, oid, reason);
         return new Outcome(Action.SKIP, restType, oid, 0, reason, null, null, null);
     }
 
     private static Outcome fail(String restType, String oid, String reason) {
+        LOG.debug("{} {}: FAIL — {}", restType, oid, reason);
         return new Outcome(Action.FAIL, restType, oid, 0, reason, null, null, null);
     }
 }

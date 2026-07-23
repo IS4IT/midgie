@@ -11,6 +11,9 @@ import java.util.List;
 
 import javax.xml.namespace.QName;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.evolveum.midpoint.prism.Containerable;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismConstants;
@@ -31,6 +34,8 @@ import com.evolveum.prism.xml.ns._public.query_3.QueryType;
  * {@code diff --host}, {@code apply}, and {@code deploy}; all HTTP stays in {@link MidpointRestClient}.
  */
 final class LiveLookup {
+
+    private static final Logger LOG = LoggerFactory.getLogger(LiveLookup.class);
 
     private LiveLookup() {
     }
@@ -72,7 +77,9 @@ final class LiveLookup {
 
         String oid = (oidOverride != null && !oidOverride.isBlank()) ? oidOverride : desired.getOid();
         if (oid != null && !oid.isBlank()) {
-            return new Target(restType, oid, byOid(prismContext, client, clazz, restType, oid));
+            PrismObject<? extends Objectable> current = byOid(prismContext, client, clazz, restType, oid);
+            LOG.debug("resolve {} by oid {} → {}", restType, oid, current != null ? "found" : "absent");
+            return new Target(restType, oid, current);
         }
         if (!matchByName) {
             throw new SchemaException("No OID to address: pass --oid, include an oid in the object, "
@@ -80,6 +87,7 @@ final class LiveLookup {
         }
         String name = nameOf(desired);
         List<PrismObject<? extends Objectable>> matches = byName(prismContext, client, clazz, restType, name);
+        LOG.debug("resolve {} by name '{}' → {} match(es)", restType, name, matches.size());
         if (matches.size() > 1) {
             throw new SchemaException("--match-by-name found " + matches.size() + " " + restType
                     + " named '" + name + "'; refusing an ambiguous match.");
@@ -121,6 +129,7 @@ final class LiveLookup {
                 matches.add(object.asPrismObject());
             }
         }
+        LOG.debug("search {} → {} object(s)", restType, matches.size());
         return matches;
     }
 

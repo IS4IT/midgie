@@ -9,6 +9,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectListType;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.BuildInformationType;
@@ -21,6 +24,8 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectType;
  * misparse objects. Best-effort: if either version cannot be determined it stays quiet.
  */
 final class VersionSupport {
+
+    private static final Logger LOG = LoggerFactory.getLogger(VersionSupport.class);
 
     private VersionSupport() {
     }
@@ -66,6 +71,7 @@ final class VersionSupport {
             }
             return null;
         } catch (Exception e) {
+            LOG.debug("could not read the live server version (GET /nodes)", e);
             return null;
         }
     }
@@ -74,6 +80,7 @@ final class VersionSupport {
     static void warnIfMismatch(PrismContext prismContext, MidpointRestClient client) {
         String compile = compileTimeVersion();
         String live = liveVersion(prismContext, client);
+        LOG.debug("version check: bundled schema {} vs live server {}", compile, live);
         if (compile == null || live == null) {
             return; // can't tell — stay quiet
         }

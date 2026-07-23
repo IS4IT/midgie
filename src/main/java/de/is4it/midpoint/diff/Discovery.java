@@ -15,6 +15,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.w3c.dom.Element;
 
 import com.evolveum.midpoint.prism.Objectable;
@@ -30,6 +32,8 @@ import com.evolveum.midpoint.util.DOMUtil;
  * Files that are not well-formed XML are skipped with a warning.
  */
 final class Discovery {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Discovery.class);
 
     private static final String COMMON_3_NAMESPACE =
             "http://midpoint.evolveum.com/xml/ns/public/common/common-3";
@@ -79,23 +83,28 @@ final class Discovery {
             root = DOMUtil.parseFile(file).getDocumentElement();
         } catch (Exception e) {
             warnings.add("skipped " + file + " — not well-formed XML (" + e.getMessage() + ")");
+            LOG.debug("classify {} → not well-formed XML", file, e);
             return;
         }
 
         if (SchemaSupport.isXsdSchema(root)) {
             schemas.add(new SchemaFile(file, root, SchemaSupport.targetNamespace(root),
                     SchemaSupport.importedNamespaces(root), null));
+            LOG.debug("classify {} → raw XSD schema", file);
         } else if ("schema".equals(root.getLocalName()) && COMMON_3_NAMESPACE.equals(root.getNamespaceURI())) {
             try {
                 PrismObject<? extends Objectable> object = prismContext.parseObject(file);
                 Element schemaElement = SchemaSupport.schemaElement(file.getName(), object.asObjectable());
                 schemas.add(new SchemaFile(file, schemaElement, SchemaSupport.targetNamespace(schemaElement),
                         SchemaSupport.importedNamespaces(schemaElement), Fragment.of(object, file)));
+                LOG.debug("classify {} → SchemaType object (deployable schema)", file);
             } catch (Exception e) {
                 warnings.add("skipped schema " + file + " — " + e.getMessage());
+                LOG.debug("classify {} → skipped SchemaType", file, e);
             }
         } else {
             objectFiles.add(file);
+            LOG.debug("classify {} → candidate object ({})", file, root.getLocalName());
         }
     }
 

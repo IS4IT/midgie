@@ -22,6 +22,9 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Minimal midPoint REST client for the live modes ({@code diff --host}, {@code apply}). This is the
  * only HTTP-touching class — the diff engine stays REST-free (see DESIGN.md layering). Uses the JDK
@@ -32,6 +35,8 @@ import javax.net.ssl.X509TrustManager;
  * {@code ObjectTypes.getRestTypeFromClass} (e.g. {@code users}, {@code roles}). Bodies are XML.
  */
 public final class MidpointRestClient {
+
+    private static final Logger LOG = LoggerFactory.getLogger(MidpointRestClient.class);
 
     /** Thrown for any non-success HTTP status; carries the code so callers can special-case 404. */
     public static final class RestException extends IOException {
@@ -131,6 +136,10 @@ public final class MidpointRestClient {
             builder.sslContext(caCertSslContext(config.caCert));
         }
         this.httpClient = builder.build();
+        LOG.debug("REST client ready: base={}, requestTimeout={}s, maxRetries={}, tls={}",
+                restBase, requestTimeout.toSeconds(), maxRetries,
+                config.insecure ? "insecure (trust-all)"
+                        : (config.caCert != null ? "cacert " + config.caCert : "default"));
     }
 
     /** {@code GET {type}/{oid}} → the object XML. Throws {@link RestException} (404-aware) on failure. */
@@ -139,7 +148,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .GET()
                 .build();
-        return send(request, "GET " + restType + "/" + oid);
+        return send(request, "GET " + restType + "/" + oid, null);
     }
 
     /** {@code GET {type}} → an {@code ObjectListType} of all objects of that type (used to read schemas). */
@@ -148,7 +157,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .GET()
                 .build();
-        return send(request, "GET " + restType);
+        return send(request, "GET " + restType, null);
     }
 
     /**
@@ -162,7 +171,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .POST(HttpRequest.BodyPublishers.ofString(queryXml, StandardCharsets.UTF_8))
                 .build();
-        return send(request, "POST " + restType + "/search");
+        return send(request, "POST " + restType + "/search", queryXml);
     }
 
     /** {@code PATCH {type}/{oid}} with an {@code objectModification} body. */
@@ -172,7 +181,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(modificationXml, StandardCharsets.UTF_8))
                 .build();
-        send(request, "PATCH " + restType + "/" + oid);
+        send(request, "PATCH " + restType + "/" + oid, modificationXml);
     }
 
     /** {@code DELETE {type}/{oid}}. Throws {@link RestException} (404-aware) on failure. */
@@ -181,7 +190,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .DELETE()
                 .build();
-        send(request, "DELETE " + restType + "/" + oid);
+        send(request, "DELETE " + restType + "/" + oid, null);
     }
 
     /** {@code POST {type}} with a full object body (create). Returns the new OID from Location if present. */
@@ -191,7 +200,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .POST(HttpRequest.BodyPublishers.ofString(objectXml, StandardCharsets.UTF_8))
                 .build();
-        HttpResponse<String> response = sendRaw(request, "POST " + restType);
+        HttpResponse<String> response = sendRaw(request, "POST " + restType, objectXml);
         return oidFromLocation(response);
     }
 
@@ -203,24 +212,35 @@ public final class MidpointRestClient {
                 .header("Authorization", authHeader);
     }
 
-    private String send(HttpRequest request, String what) throws IOException {
-        return sendRaw(request, what).body();
+    private String send(HttpRequest request, String what, String requestBody) throws IOException {
+        return sendRaw(request, what, requestBody).body();
     }
 
     /**
      * Send the request, retrying idempotent GETs on transient failures (HTTP 503, connection refused,
      * timeout) up to {@code maxRetries} with exponential backoff. Writes are never retried — re-running
-     * {@code apply} is the safe recovery.
+     * {@code apply} is the safe recovery. {@code requestBody} (null for a bodyless GET/DELETE) is logged
+     * at TRACE only, alongside the response body.
      */
-    private HttpResponse<String> sendRaw(HttpRequest request, String what) throws IOException {
+    private HttpResponse<String> sendRaw(HttpRequest request, String what, String requestBody) throws IOException {
         boolean retryable = "GET".equals(request.method());
         int attempt = 0;
         while (true) {
             try {
+                LOG.debug("→ {}  {}", what, request.uri());
+                if (requestBody != null && !requestBody.isEmpty()) {
+                    LOG.trace("→ {} request body:\n{}", what, requestBody.stripTrailing());
+                }
                 HttpResponse<String> response =
                         httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
                 int status = response.statusCode();
+                String responseBody = response.body();
+                LOG.debug("← {}  HTTP {} ({} byte body)", what, status, bodyLength(responseBody));
+                if (responseBody != null && !responseBody.isEmpty()) {
+                    LOG.trace("← {} response body:\n{}", what, responseBody.stripTrailing());
+                }
                 if (isTransient(status) && retryable && attempt < maxRetries) {
+                    LOG.debug("{}  HTTP {} is transient — retry {} of {}", what, status, attempt + 1, maxRetries);
                     backoff(attempt++);
                     continue;
                 }
@@ -228,6 +248,7 @@ public final class MidpointRestClient {
                     // A redirect on the REST base almost always means --host is off (missing context path or
                     // wrong scheme). Following it would chase an HTML page, not the API, so report it clearly.
                     String location = response.headers().firstValue("Location").orElse("(no Location header)");
+                    LOG.debug("{}  redirected (HTTP {}) to '{}'", what, status, location);
                     throw new RestException(status, what + " — the server redirected (HTTP " + status + ") to '"
                             + location + "'. Point --host at the exact midPoint REST base: it usually needs the "
                             + "application context path (e.g. http://host:port/midpoint) and the matching scheme "
@@ -239,7 +260,9 @@ public final class MidpointRestClient {
                 }
                 return response;
             } catch (java.net.ConnectException | java.net.http.HttpTimeoutException e) {
+                LOG.debug("{}  transport error: {}", what, e.toString());
                 if (retryable && attempt < maxRetries) {
+                    LOG.debug("{}  retry {} of {} after transport error", what, attempt + 1, maxRetries);
                     backoff(attempt++);
                     continue;
                 }
@@ -308,6 +331,10 @@ public final class MidpointRestClient {
         return response.headers().firstValue("Location")
                 .map(location -> location.substring(location.lastIndexOf('/') + 1))
                 .orElse(null);
+    }
+
+    private static int bodyLength(String body) {
+        return (body == null) ? 0 : body.length();
     }
 
     private static String shortBody(String body) {

@@ -7,9 +7,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-23
+
 ### Added
 
 - **`-c` / `-m` short flags** for `--create-if-absent` and `--match-by-name`, on each subcommand that has them: `-c` on `apply` and `deploy`, `-m` on `diff`, `apply`, and `deploy`.
+- **`--debug`/`-v` now traces this tool's own decisions**, not just framework logs. It records the mode (offline/live), the resolved connection (host/user/TLS/timeout, and the password *source* — never the value), every REST request and response (method, URL, status, body size, retries, redirects), schema collection, live lookups and their match counts, the per-object reconcile decision (create/patch/in-sync/skip/fail), the diff result summary, deploy discovery/sort order/apply units/retry rounds, and a full stack trace at the point any subcommand fails. Every log line is timestamped (`yyyy-MM-dd HH:mm:ss.SSS`).
+- **`--trace`** — one level beyond `--debug` (which it implies): additionally logs the full REST request and response bodies and the full HTTP error body (not just the status code). May include sensitive values, so it is a deliberate opt-in separate from `--debug`.
 
 ## [0.2.1] - 2026-07-23
 
@@ -64,7 +68,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midpoint-diff/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/IS4IT/midpoint-diff/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/IS4IT/midpoint-diff/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/IS4IT/midpoint-diff/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/IS4IT/midpoint-diff/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/IS4IT/midpoint-diff/releases/tag/v0.1.0

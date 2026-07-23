@@ -15,6 +15,9 @@ import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -30,6 +33,8 @@ import picocli.CommandLine.Mixin;
  * with {@code **}, e.g. {@code **}{@code /roles/*.xml = --scope full}.
  */
 final class Overrides {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Overrides.class);
 
     private static final class Rule {
         final PathMatcher matcher;
@@ -78,15 +83,17 @@ final class Overrides {
             }
             rules.add(new Rule(FileSystems.getDefault().getPathMatcher("glob:" + glob), strategy));
         }
+        LOG.debug("loaded {} override rule(s) from {}", rules.size(), file);
         return new Overrides(rules, global);
     }
 
     /** The strategy for {@code sourceFile}: the first matching rule, else the global default. */
     StrategyOptions.Resolved strategyFor(File sourceFile) {
         Path path = sourceFile.toPath();
-        for (Rule rule : rules) {
-            if (rule.matcher.matches(path)) {
-                return rule.strategy;
+        for (int i = 0; i < rules.size(); i++) {
+            if (rules.get(i).matcher.matches(path)) {
+                LOG.debug("override rule #{} matched {}", i + 1, sourceFile);
+                return rules.get(i).strategy;
             }
         }
         return global;

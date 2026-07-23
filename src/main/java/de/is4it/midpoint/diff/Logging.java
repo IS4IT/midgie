@@ -24,4 +24,18 @@ final class Logging {
             logbackRoot.setLevel(ch.qos.logback.classic.Level.DEBUG);
         }
     }
+
+    /**
+     * Everything {@link #enableDebug()} does (framework at DEBUG), plus this tool's own loggers at TRACE, so
+     * the extra {@code LOG.trace} detail — REST request/response bodies and full HTTP error bodies — is
+     * emitted <em>without</em> also unleashing the framework's very verbose TRACE logging. Implied by
+     * {@code --trace}. No-op if the SLF4J binding is not logback.
+     */
+    static void enableTrace() {
+        enableDebug();
+        Logger ours = LoggerFactory.getLogger(Logging.class.getPackageName());
+        if (ours instanceof ch.qos.logback.classic.Logger logbackOurs) {
+            logbackOurs.setLevel(ch.qos.logback.classic.Level.TRACE);
+        }
+    }
 }

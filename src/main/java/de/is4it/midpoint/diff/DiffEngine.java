@@ -13,6 +13,9 @@ import java.util.List;
 
 import javax.xml.namespace.QName;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.ItemDefinition;
 import com.evolveum.midpoint.prism.Objectable;
@@ -48,6 +51,8 @@ import com.evolveum.prism.xml.ns._public.types_3.ProtectedStringType;
  * by key. Both operate on the raw prism delta before it is converted to XML.
  */
 public final class DiffEngine {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DiffEngine.class);
 
     /**
      * Which item deltas to keep.
@@ -140,6 +145,10 @@ public final class DiffEngine {
         List<String> accruedInPlaceEdits = multiValue.isMergeActive()
                 ? findAccruedInPlaceEdits(delta, desired, multiValue) : List.of();
 
+        LOG.debug("diff {} (scope={}, {}) → {} modification(s); mergeFallback={}, protectedSkipped={}, "
+                + "accruedInPlace={}", desiredType != null ? desiredType.getSimpleName() : "?", scope,
+                multiValue.isMergeActive() ? "merge" : "replace", delta.getModifications().size(),
+                mergeFallbacks, protectedSkipped, accruedInPlaceEdits);
         return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits);
     }
 

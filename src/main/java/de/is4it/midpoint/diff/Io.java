@@ -10,6 +10,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
@@ -17,6 +20,8 @@ import com.evolveum.midpoint.util.exception.SchemaException;
 
 /** Small I/O helpers: read an object from a file or stdin ({@code -}), and write a payload to a file or stdout. */
 final class Io {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Io.class);
 
     private Io() {
     }
@@ -28,6 +33,7 @@ final class Io {
     /** Parse an object from {@code file}, or from stdin when {@code file} is {@code -}. */
     static PrismObject<? extends Objectable> parseObject(PrismContext prismContext, File file)
             throws SchemaException, IOException {
+        LOG.debug("parse object from {}", isStdin(file) ? "stdin" : file);
         if (isStdin(file)) {
             return prismContext.parseObject(new String(System.in.readAllBytes(), StandardCharsets.UTF_8));
         }

@@ -9,6 +9,9 @@ import java.io.Console;
 import java.io.File;
 import java.util.concurrent.Callable;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
@@ -41,6 +44,8 @@ import picocli.CommandLine.Parameters;
         description = "Reconcile a live midPoint object to the desired state (diff, then PATCH/POST)."
 )
 public class ApplyCommand implements Callable<Integer> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ApplyCommand.class);
 
     private static final int EXIT_ERROR = 2;
 
@@ -81,8 +86,13 @@ public class ApplyCommand implements Callable<Integer> {
     boolean quiet;
 
     @Option(names = {"--debug", "-v"},
-            description = "Raise the log level to DEBUG (framework logs on stderr) for troubleshooting.")
+            description = "Log a full DEBUG trace on stderr (this tool's own decisions plus framework logs) for troubleshooting.")
     boolean debug;
+
+    @Option(names = "--trace",
+            description = "Even more than --debug: also log REST request/response bodies and full HTTP error "
+                    + "bodies (may include sensitive values). Implies --debug.")
+    boolean trace;
 
     @Option(names = "--format", paramLabel = "xml|json|summary", defaultValue = "xml",
             description = "Dry-run output format. xml/json: ObjectModificationType. summary: changed-path list.")
@@ -94,7 +104,9 @@ public class ApplyCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        if (debug) {
+        if (trace) {
+            Logging.enableTrace();
+        } else if (debug) {
             Logging.enableDebug();
         }
         StrategyOptions.Resolved strategy = strategyOptions.resolve();
@@ -119,12 +131,15 @@ public class ApplyCommand implements Callable<Integer> {
             LiveLookup.Target resolved =
                     LiveLookup.resolveCurrent(prismContext, client, desired, connectionOptions.oid, matchByName);
             LiveTarget target = LiveTarget.of(resolved.restType, resolved.oid);
+            LOG.debug("apply: {} → {}", target.restType + "/" + (target.oid != null ? target.oid : "(by name)"),
+                    resolved.current == null ? "absent (create path)" : "present (patch path)");
             return (resolved.current == null)
                     ? applyCreate(prismContext, client, target, desired)
                     : applyPatch(prismContext, client, target, desired, strategy, resolved.current);
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midpoint-diff: " + message);
+            LOG.debug("apply failed", e);
             return EXIT_ERROR;
         }
     }

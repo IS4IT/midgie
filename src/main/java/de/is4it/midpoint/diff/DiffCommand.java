@@ -8,6 +8,9 @@ package de.is4it.midpoint.diff;
 import java.io.File;
 import java.util.concurrent.Callable;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
@@ -36,6 +39,8 @@ import picocli.CommandLine.Parameters;
         description = "Diff a desired object against the current one and emit the minimal itemDelta."
 )
 public class DiffCommand implements Callable<Integer> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DiffCommand.class);
 
     /** Exit code signalling a usage/runtime error, distinct from the drift codes 0/1. */
     private static final int EXIT_ERROR = 2;
@@ -72,8 +77,13 @@ public class DiffCommand implements Callable<Integer> {
     boolean quiet;
 
     @Option(names = {"--debug", "-v"},
-            description = "Raise the log level to DEBUG (framework logs on stderr) for troubleshooting.")
+            description = "Log a full DEBUG trace on stderr (this tool's own decisions plus framework logs) for troubleshooting.")
     boolean debug;
+
+    @Option(names = "--trace",
+            description = "Even more than --debug: also log REST request/response bodies and full HTTP error "
+                    + "bodies (may include sensitive values). Implies --debug.")
+    boolean trace;
 
     @Option(names = {"--match-by-name", "-m"},
             description = "In live mode, if the object has no oid, find it on the server by type+name "
@@ -82,7 +92,9 @@ public class DiffCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        if (debug) {
+        if (trace) {
+            Logging.enableTrace();
+        } else if (debug) {
             Logging.enableDebug();
         }
         StrategyOptions.Resolved strategy = strategyOptions.resolve();
@@ -107,6 +119,7 @@ public class DiffCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
 
+        LOG.debug("diff mode: {}", live ? "live (--host)" : "offline (CURRENT file)");
         MidpointRestClient client = null;
         if (live) {
             client = connectionOptions.newClient();
@@ -157,6 +170,7 @@ public class DiffCommand implements Callable<Integer> {
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midpoint-diff: " + message);
+            LOG.debug("diff failed", e);
             return EXIT_ERROR;
         }
     }

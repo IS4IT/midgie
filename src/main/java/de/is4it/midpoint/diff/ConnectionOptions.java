@@ -12,6 +12,9 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import picocli.CommandLine.Option;
 
 /**
@@ -25,6 +28,8 @@ import picocli.CommandLine.Option;
  * → interactive prompt.
  */
 public final class ConnectionOptions {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ConnectionOptions.class);
 
     @Option(names = "--host", paramLabel = "URL",
             description = "midPoint base URL for live mode (or the MIDPOINT_URL env var), e.g. "
@@ -106,6 +111,8 @@ public final class ConnectionOptions {
         if (password == null) {
             return null; // resolvePassword() already explained why
         }
+        LOG.debug("live mode: host={}, user={}, insecure={}, cacert={}, timeout={}s, retries={}",
+                host(), user, insecure, caCert, timeoutSeconds, retries);
         MidpointRestClient.Config config = new MidpointRestClient.Config()
                 .insecure(insecure)
                 .caCert(caCert)
@@ -117,6 +124,7 @@ public final class ConnectionOptions {
     /** Resolve the password from the most-explicit source available, or {@code null} (with an error). */
     String resolvePassword() {
         if (passwordOption != null) {
+            LOG.debug("password source: --password");
             return passwordOption;
         }
         if (passwordEnv != null) {
@@ -125,6 +133,7 @@ public final class ConnectionOptions {
                 System.err.println("midpoint-diff: --password-env " + passwordEnv + " is not set in the environment.");
                 return null;
             }
+            LOG.debug("password source: --password-env {}", passwordEnv);
             return value;
         }
         if (passwordFile != null) {
@@ -134,6 +143,7 @@ public final class ConnectionOptions {
                     System.err.println("midpoint-diff: --password-file " + passwordFile + " is empty.");
                     return null;
                 }
+                LOG.debug("password source: --password-file {}", passwordFile);
                 return password;
             } catch (IOException e) {
                 System.err.println("midpoint-diff: cannot read --password-file " + passwordFile + ": " + e.getMessage());
@@ -142,12 +152,14 @@ public final class ConnectionOptions {
         }
         String envPassword = System.getenv("MIDPOINT_PASSWORD");
         if (envPassword != null) {
+            LOG.debug("password source: MIDPOINT_PASSWORD env var");
             return envPassword;
         }
         Console console = System.console();
         if (console != null) {
             char[] entered = console.readPassword("Password for %s at %s: ", user(), host());
             if (entered != null && entered.length > 0) {
+                LOG.debug("password source: interactive prompt");
                 return new String(entered);
             }
         }

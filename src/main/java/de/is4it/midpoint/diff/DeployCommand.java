@@ -18,6 +18,8 @@ import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.w3c.dom.Element;
 
 import com.evolveum.midpoint.prism.Objectable;
@@ -57,6 +59,8 @@ import picocli.CommandLine.Parameters;
         description = "Discover a folder tree, sort by dependency, and print the apply order or apply it (--host)."
 )
 public class DeployCommand implements Callable<Integer> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DeployCommand.class);
 
     private static final int EXIT_ERROR = 2;
     private static final int MAX_RETRY_ROUNDS = 20;
@@ -115,8 +119,13 @@ public class DeployCommand implements Callable<Integer> {
     boolean quiet;
 
     @Option(names = {"--debug", "-v"},
-            description = "Raise the log level to DEBUG (framework logs on stderr) for troubleshooting.")
+            description = "Log a full DEBUG trace on stderr (this tool's own decisions plus framework logs) for troubleshooting.")
     boolean debug;
+
+    @Option(names = "--trace",
+            description = "Even more than --debug: also log REST request/response bodies and full HTTP error "
+                    + "bodies (may include sensitive values). Implies --debug.")
+    boolean trace;
 
     // Resolved once per run.
     private StrategyOptions.Resolved globalStrategy;
@@ -124,7 +133,9 @@ public class DeployCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        if (debug) {
+        if (trace) {
+            Logging.enableTrace();
+        } else if (debug) {
             Logging.enableDebug();
         }
         if (assumeYes && confirmEachApply) {
@@ -136,6 +147,9 @@ public class DeployCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
         boolean live = connectionOptions.isLive();
+        LOG.debug("deploy: live={}, dryRun={}, createIfAbsent={}, matchByName={}, retry={}, plan={}, "
+                + "applyPlan={}, overrides={}", live, dryRun, createIfAbsent, matchByName, retry,
+                planDir, applyPlanDir, overridesFile);
         boolean writeFlags = dryRun || assumeYes || confirmEachApply || createIfAbsent || matchByName
                 || retry || planDir != null || applyPlanDir != null || overridesFile != null;
         if (!live && writeFlags) {
@@ -177,6 +191,9 @@ public class DeployCommand implements Callable<Integer> {
             for (SchemaFile schema : scan.schemas()) {
                 schemaMap.put(schema.description(), schema.schemaElement());
             }
+            LOG.debug("scan: {} schema file(s), {} candidate object file(s), {} warning(s); "
+                    + "registering {} extension schema(s)", scan.schemas().size(), scan.objectFiles().size(),
+                    scan.warnings().size(), schemaMap.size());
             SchemaSupport.register(prismContext, schemaMap);
 
             List<String> warnings = new ArrayList<>(scan.warnings());
@@ -186,6 +203,8 @@ public class DeployCommand implements Callable<Integer> {
                     .filter(SchemaFile::deployable).collect(Collectors.toList());
             List<SchemaFile> localSchemas = scan.schemas().stream()
                     .filter(schema -> !schema.deployable()).collect(Collectors.toList());
+            LOG.debug("grouped into {} object(s); {} deployable schema(s), {} local-only schema(s)",
+                    objects.size(), deployableSchemas.size(), localSchemas.size());
 
             if (deployableSchemas.isEmpty() && objects.isEmpty()) {
                 System.err.println("midpoint-diff: no midPoint objects found under the given path(s).");
@@ -194,6 +213,14 @@ public class DeployCommand implements Callable<Integer> {
 
             TopoSort.Result<SchemaFile> schemaOrder = sortSchemas(deployableSchemas);
             TopoSort.Result<DeployObject> objectOrder = sortObjects(objects);
+            LOG.debug("schema order: {}", schemaOrder.ordered().stream()
+                    .map(SchemaFile::targetNamespace).collect(Collectors.toList()));
+            LOG.debug("object order: {}", objectOrder.ordered().stream()
+                    .map(DeployObject::identityLabel).collect(Collectors.toList()));
+            if (!schemaOrder.brokenAt().isEmpty() || !objectOrder.brokenAt().isEmpty()) {
+                LOG.debug("dependency cycle(s) broken: {} schema, {} object",
+                        schemaOrder.brokenAt().size(), objectOrder.brokenAt().size());
+            }
 
             if (!live) {
                 printPlanTable(schemaOrder, objectOrder);
@@ -205,10 +232,12 @@ public class DeployCommand implements Callable<Integer> {
             overrides = (overridesFile != null) ? Overrides.load(overridesFile, globalStrategy) : null;
             Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, matchByName);
             List<Fragment> units = flatten(schemaOrder, objectOrder);
+            LOG.debug("{} apply unit(s); mode={}", units.size(), planDir != null ? "plan" : "apply");
             return (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midpoint-diff: " + message);
+            LOG.debug("deploy failed", e);
             return EXIT_ERROR;
         }
     }
@@ -351,6 +380,7 @@ public class DeployCommand implements Callable<Integer> {
                 tally.failed++;
                 tally.failedUnits.add(unit);
                 reportUnit(unit, preview ? "error" : "failed", safe(e.getMessage()), true);
+                LOG.debug("unit {} {} failed", unit.typeName(), unit.identityLabel(), e);
             }
         }
         return tally;
@@ -463,6 +493,7 @@ public class DeployCommand implements Callable<Integer> {
             System.err.println("midpoint-diff: no plan files (*.create.xml / *.patch.xml) in " + applyPlanDir + ".");
             return EXIT_ERROR;
         }
+        LOG.debug("apply-plan: {} entry/entries from {}", entries.size(), applyPlanDir);
         if (dryRun) {
             for (PlanStore.Entry entry : entries) {
                 reportEntry(entry, entry.kind == PlanStore.Kind.CREATE ? "would-create" : "would-patch", "", false);
@@ -513,6 +544,7 @@ public class DeployCommand implements Callable<Integer> {
                 }
                 failed.add(entry);
                 reportEntry(entry, "failed", safe(e.getMessage()), true);
+                LOG.debug("plan entry {}/{} failed", entry.restType, entry.oid, e);
             }
         }
         return failed;
@@ -527,6 +559,7 @@ public class DeployCommand implements Callable<Integer> {
             int before = failed.size();
             note("retry round " + round + ": re-applying " + before + " failed unit(s)...");
             failed = pass.apply(failed);
+            LOG.debug("retry round {}: {} → {} still failing", round, before, failed.size());
             if (failed.size() >= before) {
                 break; // no progress
             }

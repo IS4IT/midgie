@@ -11,6 +11,8 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.w3c.dom.Element;
 import org.xml.sax.SAXException;
 
@@ -40,6 +42,8 @@ import picocli.CommandLine.Option;
  * </ul>
  */
 public final class SchemaOptions {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SchemaOptions.class);
 
     @Option(names = "--schema-dir", paramLabel = "DIR",
             description = "Directory of extension schemas (.xsd raw XSD, .xml exported SchemaType); other files ignored.")
@@ -93,6 +97,9 @@ public final class SchemaOptions {
         if (liveClient != null && !noLiveSchema) {
             collectLiveSchemas(prismContext, liveClient, schemas);
         }
+        LOG.debug("collected {} extension schema(s) (schemaDir={}, schemaFiles={}, liveSchema={})",
+                schemas.size(), schemaDir != null, schemaFiles != null ? schemaFiles.length : 0,
+                liveClient != null && !noLiveSchema);
         return schemas;
     }
 
@@ -153,21 +160,26 @@ public final class SchemaOptions {
             if (list == null) {
                 return;
             }
+            int found = 0;
             for (ObjectType object : list.getObject()) {
                 if (object instanceof SchemaType) {
                     SchemaDefinitionType definition = ((SchemaType) object).getDefinition();
                     if (definition != null && definition.getSchema() != null) {
                         schemas.put("live schema " + object.getName() + " (" + object.getOid() + ")",
                                 definition.getSchema());
+                        found++;
                     }
                 }
             }
+            LOG.debug("live schema read: {} SchemaType object(s) registered", found);
         } catch (Exception e) {
             if (isReportedByObjectFetch(e)) {
+                LOG.debug("live schema read skipped (the object fetch will report this failure): {}", e.toString());
                 return; // the caller's object fetch reports the same failure with a clear message
             }
             System.err.println("midpoint-diff: warning: could not read extension schema from the server ("
                     + e.getMessage() + "); continuing with base schema only.");
+            LOG.debug("live schema read failed", e);
         }
     }
 

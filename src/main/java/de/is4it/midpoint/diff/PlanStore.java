@@ -13,6 +13,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Reads and writes a {@code deploy --plan} directory: one file per changing unit, named
  * {@code NNN-<type>-<token>.<create|patch>.xml} where {@code NNN} is the zero-padded apply position,
@@ -23,6 +26,8 @@ import java.util.List;
  * sequence is digits, so a 3-way split on {@code -} recovers the OID intact.
  */
 final class PlanStore {
+
+    private static final Logger LOG = LoggerFactory.getLogger(PlanStore.class);
 
     enum Kind { CREATE, PATCH }
 
@@ -66,6 +71,7 @@ final class PlanStore {
                 kind == Kind.CREATE ? "create" : "patch");
         Files.createDirectories(dir.toPath());
         Files.writeString(new File(dir, fileName).toPath(), body + System.lineSeparator(), StandardCharsets.UTF_8);
+        LOG.debug("plan file written: {}", fileName);
     }
 
     /** Read a plan directory into apply-ordered entries (sorted by filename). */
