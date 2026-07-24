@@ -306,7 +306,7 @@ class LiveIntegrationTest {
     }
 
     @Test
-    void deployOverridesChangeThePerPathStrategy(@TempDir Path dir) throws Exception {
+    void deployPolicyChangesThePerObjectStrategy(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteDeployObjects();
 
@@ -321,11 +321,11 @@ class LiveIntegrationTest {
         CliResult present = run("deploy", dir.resolve("tree").toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
         assertEquals(0, present.exit, present.out + present.err);
 
-        // An override forcing --scope full on that path makes it a full replace -> the description drifts -> exit 1.
-        Path overrides = dir.resolve("ov.txt");
-        Files.writeString(overrides, "**/roles/*.xml = --scope full\n", StandardCharsets.UTF_8);
+        // A policy forcing scope=full on the role makes it a full replace -> the description drifts -> exit 1.
+        Path policy = dir.resolve("policy.txt");
+        Files.writeString(policy, "RoleType/* scope=full\n", StandardCharsets.UTF_8);
         CliResult full = run("deploy", dir.resolve("tree").toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
-                "--overrides", overrides.toString(), "--dry-run");
+                "--policy", policy.toString(), "--dry-run");
         assertEquals(1, full.exit, full.out + full.err);
     }
 

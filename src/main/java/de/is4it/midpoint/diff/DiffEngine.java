@@ -27,7 +27,6 @@ import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
-import com.evolveum.midpoint.prism.path.ItemName;
 import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.prism.xml.ns._public.types_3.ProtectedStringType;
@@ -160,19 +159,49 @@ public final class DiffEngine {
     }
 
     /**
-     * Drop item deltas whose top-level item does not appear in the desired object. With a live&rarr;desired
-     * delta these are exactly the deltas that would remove live-only items, so dropping them leaves
-     * unmanaged items alone.
+     * Drop item deltas whose target item does not appear in the desired object, matched at the <b>full
+     * path</b> (not just the top-level item). With a live&rarr;desired delta these are exactly the deltas
+     * that would remove live-only items, so dropping them leaves unmanaged items alone.
+     *
+     * <p>Matching the full path (rather than only the first segment) is what lets two fragments of one
+     * object each fill in a <em>different child</em> of the same single-valued container without clobbering
+     * each other. If file A sets {@code deploymentInformation/headerColor} and file B sets
+     * {@code deploymentInformation/name}, B's diff against a live object that already carries A's
+     * {@code headerColor} yields a {@code delete deploymentInformation/headerColor} — but {@code headerColor}
+     * is absent from B's desired object, so under PRESENT it is a live-only item and the delete is dropped.
+     * A change to an item the fragment <em>does</em> declare (e.g. {@code deploymentInformation/name}) is
+     * found at its full path and kept.
      */
     private static void retainItemsPresentIn(ObjectDelta<?> delta, PrismObject<?> desired) {
         List<ItemDelta<?, ?>> toRemove = new ArrayList<>();
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
-            ItemName top = mod.getPath().firstName();
-            if (top == null || desired.findItem(ItemPath.create(top)) == null) {
+            // Test the delta's item at its id-free prefix — the path truncated at the first container-id
+            // segment (or the whole path when it has none). An id-free path names an exact item, so two
+            // fragments can each fill a different child of one single-valued container without deleting the
+            // other's child, and single-valued mid-levels (e.g. internals/tracing) are protected at their
+            // own depth. Protection can only be as fine as the first MULTI-valued container: a delta that
+            // reaches into one (internals/tracing/profile/[2]/…) carries that value's live-side id, which
+            // need not exist in desired, so it is judged at the container (internals/tracing/profile) —
+            // testing the id would wrongly drop a managed change under a re-keyed value and would rob the
+            // accrued-in-place-edit detection of the deltas it inspects.
+            ItemPath checkPath = idFreePrefix(mod.getPath());
+            if (checkPath.isEmpty() || desired.findItem(checkPath) == null) {
                 toRemove.add(mod);
             }
         }
         toRemove.forEach(delta::removeModification);
+    }
+
+    /** The path truncated at the first container-id segment (the whole path when it has none). */
+    private static ItemPath idFreePrefix(ItemPath path) {
+        List<Object> segments = new ArrayList<>();
+        for (Object segment : path.getSegments()) {
+            if (ItemPath.isId(segment)) {
+                break;
+            }
+            segments.add(segment);
+        }
+        return ItemPath.create(segments.toArray());
     }
 
     /**
@@ -369,32 +398,59 @@ public final class DiffEngine {
      */
     public static final class MultiValueStrategy {
 
-        /** A per-path override: this item path uses merge (or replace) regardless of the global default. */
+        /**
+         * A per-path override: containers whose path matches {@code glob} use merge (or replace) regardless of
+         * the global default. A plain rule (e.g. from {@code --path}) matches its glob against the container's
+         * item path; an identity-scoped rule (from the deploy {@link Policy}) matches against the object's
+         * identity prefix followed by the container path, so a selector can pin a container within a type/name.
+         */
         public static final class PathRule {
-            private final ItemPath path;
+            private final GlobPath glob;
             private final boolean merge;
+            private final boolean identityScoped;
 
+            /** An exact per-path rule (e.g. from {@code --path assignment=merge}); matches the item path alone. */
             public PathRule(ItemPath path, boolean merge) {
-                this.path = path;
+                this(GlobPath.ofItemPath(path), merge, false);
+            }
+
+            PathRule(GlobPath glob, boolean merge, boolean identityScoped) {
+                this.glob = glob;
                 this.merge = merge;
+                this.identityScoped = identityScoped;
             }
         }
 
         private final boolean globalMerge;
-        private final List<PathRule> overrides;
+        private final List<PathRule> rules;
+        private final List<List<String>> identityPrefixes;
 
-        private MultiValueStrategy(boolean globalMerge, List<PathRule> overrides) {
+        private MultiValueStrategy(boolean globalMerge, List<PathRule> rules, List<List<String>> identityPrefixes) {
             this.globalMerge = globalMerge;
-            this.overrides = List.copyOf(overrides);
+            this.rules = List.copyOf(rules);
+            this.identityPrefixes = List.copyOf(identityPrefixes);
         }
 
         /** Everything replaces — the default, and identical to the pre-merge behaviour. */
         public static MultiValueStrategy replaceAll() {
-            return new MultiValueStrategy(false, List.of());
+            return new MultiValueStrategy(false, List.of(), List.of());
         }
 
-        public static MultiValueStrategy of(boolean globalMerge, List<PathRule> overrides) {
-            return new MultiValueStrategy(globalMerge, overrides);
+        public static MultiValueStrategy of(boolean globalMerge, List<PathRule> rules) {
+            return new MultiValueStrategy(globalMerge, rules, List.of());
+        }
+
+        /** As {@link #of(boolean, List)} but with identity prefixes for identity-scoped ({@link Policy}) rules. */
+        static MultiValueStrategy of(boolean globalMerge, List<PathRule> rules, List<List<String>> identityPrefixes) {
+            return new MultiValueStrategy(globalMerge, rules, identityPrefixes);
+        }
+
+        boolean isGlobalMerge() {
+            return globalMerge;
+        }
+
+        List<PathRule> pathRules() {
+            return rules;
         }
 
         /** True if merge applies anywhere — which is when key-aware container matching is needed. */
@@ -402,7 +458,7 @@ public final class DiffEngine {
             if (globalMerge) {
                 return true;
             }
-            for (PathRule rule : overrides) {
+            for (PathRule rule : rules) {
                 if (rule.merge) {
                     return true;
                 }
@@ -410,15 +466,40 @@ public final class DiffEngine {
             return false;
         }
 
-        /** Whether the container at {@code containerPath} should merge. Per-path overrides win. */
+        /** Whether the container at {@code containerPath} should merge. The most-specific matching rule wins. */
         public boolean isMerge(ItemPath containerPath) {
-            ItemPath normalized = containerPath.removeIds();
-            for (PathRule rule : overrides) {
-                if (rule.path.removeIds().equivalent(normalized)) {
-                    return rule.merge;
+            List<String> itemNames = localNames(containerPath);
+            PathRule best = null;
+            for (PathRule rule : rules) {
+                boolean matched = rule.identityScoped
+                        ? matchesWithIdentity(rule.glob, itemNames)
+                        : rule.glob.matches(itemNames);
+                if (matched && (best == null || rule.glob.compareSpecificity(best.glob) > 0)) {
+                    best = rule;
                 }
             }
-            return globalMerge;
+            return (best != null) ? best.merge : globalMerge;
+        }
+
+        private boolean matchesWithIdentity(GlobPath glob, List<String> itemNames) {
+            for (List<String> prefix : identityPrefixes) {
+                List<String> candidate = new ArrayList<>(prefix);
+                candidate.addAll(itemNames);
+                if (glob.matches(candidate)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static List<String> localNames(ItemPath path) {
+            List<String> names = new ArrayList<>();
+            for (Object segment : path.removeIds().getSegments()) {
+                if (ItemPath.isName(segment)) {
+                    names.add(ItemPath.toName(segment).getLocalPart());
+                }
+            }
+            return names;
         }
     }
 }

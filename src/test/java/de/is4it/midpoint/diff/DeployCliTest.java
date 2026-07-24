@@ -187,6 +187,24 @@ class DeployCliTest {
     }
 
     @Test
+    void policyWithoutHostIsAnError() {
+        Result r = run("deploy", TREE, "--policy", "some.policy");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--host"), r.err);
+    }
+
+    @Test
+    void badPolicyFileFailsFast(@TempDir Path dir) throws IOException {
+        // An object-only knob on an item-path selector is rejected at load — which happens before any server
+        // round-trip, so a dead host still surfaces the policy error (not a connection error).
+        Path policy = dir.resolve("bad.policy");
+        Files.writeString(policy, "**/assignment scope=full\n", StandardCharsets.UTF_8);
+        Result r = run("deploy", TREE, "--host", DEAD_HOST, "--user", "u", "-p", "x", "--policy", policy.toString());
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("object-only knob"), r.err);
+    }
+
+    @Test
     void yesAndConfirmEachApplyAreMutuallyExclusive() {
         Result r = run("deploy", TREE, "--yes", "--confirm-each-apply");
         assertEquals(2, r.exit);

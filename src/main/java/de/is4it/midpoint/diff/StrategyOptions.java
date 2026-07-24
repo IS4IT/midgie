@@ -86,13 +86,21 @@ public final class StrategyOptions {
     }
 
     private DiffEngine.Scope parseScope() {
-        switch (scope.toLowerCase()) {
+        DiffEngine.Scope value = scopeByName(scope);
+        if (value == null) {
+            System.err.println("midpoint-diff: --scope must be 'present' or 'full', got: " + scope);
+        }
+        return value;
+    }
+
+    /** Map a {@code present|full} name to a scope, or {@code null} if unrecognised. Shared with {@link Policy}. */
+    static DiffEngine.Scope scopeByName(String value) {
+        switch (value.toLowerCase()) {
             case "present":
                 return DiffEngine.Scope.PRESENT;
             case "full":
                 return DiffEngine.Scope.FULL;
             default:
-                System.err.println("midpoint-diff: --scope must be 'present' or 'full', got: " + scope);
                 return null;
         }
     }
@@ -128,15 +136,29 @@ public final class StrategyOptions {
      * a real server and prints an experimental note when selected.
      */
     private ParameterizedEquivalenceStrategy parseEquivalence() {
-        switch (equivalence.toLowerCase()) {
+        ParameterizedEquivalenceStrategy strategy = equivalenceByName(equivalence);
+        if (strategy == null) {
+            System.err.println("midpoint-diff: --equivalence must be "
+                    + "real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal, got: "
+                    + equivalence);
+            return null;
+        }
+        if (strategy == EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) {
+            System.err.println("midpoint-diff: note: --equivalence natural-keys "
+                    + "(REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) is prism-experimental; "
+                    + "container-value matching by natural key may behave unexpectedly.");
+        }
+        return strategy;
+    }
+
+    /** Map an {@code --equivalence} name to a prism strategy, or {@code null} if unrecognised. Shared with {@link Policy}. */
+    static ParameterizedEquivalenceStrategy equivalenceByName(String value) {
+        switch (value.toLowerCase()) {
             case "real-value":
                 return EquivalenceStrategy.REAL_VALUE;
             case "consider-different-ids":
                 return EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS;
             case "natural-keys":
-                System.err.println("midpoint-diff: note: --equivalence natural-keys "
-                        + "(REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) is prism-experimental; "
-                        + "container-value matching by natural key may behave unexpectedly.");
                 return EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS;
             case "ignore-metadata":
                 return EquivalenceStrategy.IGNORE_METADATA;
@@ -145,9 +167,6 @@ public final class StrategyOptions {
             case "literal":
                 return EquivalenceStrategy.LITERAL;
             default:
-                System.err.println("midpoint-diff: --equivalence must be "
-                        + "real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal, got: "
-                        + equivalence);
                 return null;
         }
     }

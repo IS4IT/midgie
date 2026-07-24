@@ -103,6 +103,60 @@ class DiffCommandTest {
     }
 
     @Test
+    void scopePresentLeavesUnmentionedChildrenOfASingleValuedContainer(@TempDir Path dir) throws Exception {
+        // Two fragments of one systemConfiguration each fill a DIFFERENT child of the single-valued
+        // deploymentInformation container. Diffing the "name" fragment against a live object that already
+        // carries a headerColor (set by the other fragment) must NOT delete headerColor: it is absent from
+        // this fragment's desired object, so under PRESENT it is a live-only item and is left untouched.
+        File desired = write(dir, "desired.xml", sysconfig("<name>Midgie</name>"));
+        File live = write(dir, "live.xml", sysconfig("<headerColor>navy</headerColor>"));
+
+        DiffEngine.DiffResult present = engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll());
+        assertEquals(1, present.delta().getModifications().size(),
+                "present must emit only the managed name, not touch headerColor: " + paths(present));
+        assertFalse(deletesPath(present, "headerColor"),
+                "present must not delete the live-only headerColor: " + paths(present));
+
+        // scope=full, by contrast, DOES remove the unmentioned headerColor.
+        DiffEngine.DiffResult full = engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.FULL,
+                DiffEngine.MultiValueStrategy.replaceAll());
+        assertTrue(deletesPath(full, "headerColor"), "full scope must delete the live-only headerColor");
+    }
+
+    @Test
+    void scopePresentProtectsSingleValuedMidLevelsBelowTheTop(@TempDir Path dir) throws Exception {
+        // A fragment that touches `internals` only via internals/repository must NOT disturb a live-only
+        // internals/tracing subtree: the single-valued internals/tracing level is judged at its own depth,
+        // not collapsed to the top-level `internals`. (Answers "is anything at mid level safe?" for present.)
+        String ns = "http://midpoint.evolveum.com/xml/ns/public/common/common-3";
+        File desired = write(dir, "desired.xml", "<systemConfiguration xmlns=\"" + ns + "\""
+                + " oid=\"00000000-0000-0000-0000-000000000001\">\n"
+                + "  <name>SystemConfiguration</name>\n"
+                + "  <internals><repository><autoCreatePartitionsOnAdd>true</autoCreatePartitionsOnAdd>"
+                + "</repository></internals>\n"
+                + "</systemConfiguration>");
+        File live = write(dir, "live.xml", "<systemConfiguration xmlns=\"" + ns + "\""
+                + " oid=\"00000000-0000-0000-0000-000000000001\">\n"
+                + "  <name>SystemConfiguration</name>\n"
+                + "  <internals><tracing><profile id=\"1\"><name>perf</name></profile></tracing></internals>\n"
+                + "</systemConfiguration>");
+
+        DiffEngine.DiffResult present = engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll());
+        assertFalse(deletesPath(present, "tracing"),
+                "present must not delete the live-only internals/tracing: " + paths(present));
+
+        DiffEngine.DiffResult full = engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.FULL,
+                DiffEngine.MultiValueStrategy.replaceAll());
+        assertTrue(deletesPath(full, "tracing"), "full scope must delete the live-only internals/tracing");
+    }
+
+    @Test
     void multivalueMergePreservesExistingValues(@TempDir Path dir) throws Exception {
         // live carries assignment[1] (managed) and assignment[2] (accrued at runtime).
         File live = write(dir, "live.xml", user(
@@ -317,6 +371,26 @@ class DiffCommandTest {
     private static boolean touchesItem(DiffEngine.DiffResult result, String localName) {
         return result.delta().getModifications().stream()
                 .anyMatch(mod -> localName.equals(mod.getPath().firstName().getLocalPart()));
+    }
+
+    /** True if any modification deletes value(s) at a path mentioning {@code childLocalName}. */
+    private static boolean deletesPath(DiffEngine.DiffResult result, String childLocalName) {
+        return result.delta().getModifications().stream()
+                .anyMatch(mod -> mod.getPath().toString().contains(childLocalName)
+                        && mod.getValuesToDelete() != null && !mod.getValuesToDelete().isEmpty());
+    }
+
+    private static List<String> paths(DiffEngine.DiffResult result) {
+        return result.delta().getModifications().stream().map(mod -> mod.getPath().toString()).toList();
+    }
+
+    /** A systemConfiguration named SystemConfiguration whose single-valued deploymentInformation holds one child. */
+    private static String sysconfig(String deploymentInfoChild) {
+        return "<systemConfiguration xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"00000000-0000-0000-0000-000000000001\">\n"
+                + "  <name>SystemConfiguration</name>\n"
+                + "  <deploymentInformation>" + deploymentInfoChild + "</deploymentInformation>\n"
+                + "</systemConfiguration>";
     }
 
     private static String targetRefOid(Object assignmentRealValue) {

@@ -45,7 +45,7 @@ import picocli.CommandLine.Parameters;
  * {@code --scope present}, PATCH, or POST to create with {@code --create-if-absent}), in that order, so a
  * role is created before the user that references it. {@code --retry} re-applies the failed set until it
  * stabilises; {@code --plan <dir>} writes the changes as reviewable files and {@code --apply-plan <dir>}
- * replays them verbatim; {@code --overrides <file>} varies the diff strategy per path. Writing is gated:
+ * replays them verbatim; {@code --policy <file>} varies the diff strategy per object/item. Writing is gated:
  * a single up-front confirmation by default ({@code --yes}, {@code --confirm-each-apply}, {@code --dry-run}).
  *
  * <p>Exit codes: offline {@code 0}/{@code 2}. Apply {@code 0} (all created/patched/in-sync/skipped or
@@ -110,9 +110,10 @@ public class DeployCommand implements Callable<Integer> {
             description = "Replay a plan directory written by --plan (POST creates, PATCH patches, in order). Needs --host.")
     File applyPlanDir;
 
-    @Option(names = "--overrides", paramLabel = "FILE",
-            description = "Per-path diff-strategy overrides ('glob = <strategy flags>' lines); first match wins.")
-    File overridesFile;
+    @Option(names = "--policy", paramLabel = "FILE",
+            description = "Per-object/-item diff-strategy policy file ('<Type/Name/item glob> key=value' lines); "
+                    + "most-specific selector wins.")
+    File policyFile;
 
     @Option(names = {"--quiet", "-q"},
             description = "Suppress the plan/status output and notes; keep errors, failures, and the exit code.")
@@ -129,7 +130,7 @@ public class DeployCommand implements Callable<Integer> {
 
     // Resolved once per run.
     private StrategyOptions.Resolved globalStrategy;
-    private Overrides overrides;
+    private Policy policy;
 
     @Override
     public Integer call() {
@@ -148,13 +149,13 @@ public class DeployCommand implements Callable<Integer> {
         }
         boolean live = connectionOptions.isLive();
         LOG.debug("deploy: live={}, dryRun={}, createIfAbsent={}, matchByName={}, retry={}, plan={}, "
-                + "applyPlan={}, overrides={}", live, dryRun, createIfAbsent, matchByName, retry,
-                planDir, applyPlanDir, overridesFile);
+                + "applyPlan={}, policy={}", live, dryRun, createIfAbsent, matchByName, retry,
+                planDir, applyPlanDir, policyFile);
         boolean writeFlags = dryRun || assumeYes || confirmEachApply || createIfAbsent || matchByName
-                || retry || planDir != null || applyPlanDir != null || overridesFile != null;
+                || retry || planDir != null || applyPlanDir != null || policyFile != null;
         if (!live && writeFlags) {
             System.err.println("midpoint-diff: --dry-run/--yes/--create-if-absent/--match-by-name/--retry/"
-                    + "--plan/--apply-plan/--overrides need --host; without a host, deploy only prints the plan.");
+                    + "--plan/--apply-plan/--policy need --host; without a host, deploy only prints the plan.");
             return EXIT_ERROR;
         }
         if (applyPlanDir == null && (paths == null || paths.isEmpty())) {
@@ -180,6 +181,7 @@ public class DeployCommand implements Callable<Integer> {
             }
 
             PrismContext prismContext = SchemaOptions.newBaseContext();
+            policy = (policyFile != null) ? Policy.load(policyFile) : null; // load early: fail fast on a bad policy
             if (live && !quiet) {
                 VersionSupport.warnIfMismatch(prismContext, client);
             }
@@ -229,7 +231,6 @@ public class DeployCommand implements Callable<Integer> {
             }
 
             emitWarnings(localSchemas, schemaOrder, objectOrder, warnings);
-            overrides = (overridesFile != null) ? Overrides.load(overridesFile, globalStrategy) : null;
             Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, matchByName);
             List<Fragment> units = flatten(schemaOrder, objectOrder);
             LOG.debug("{} apply unit(s); mode={}", units.size(), planDir != null ? "plan" : "apply");
@@ -243,7 +244,8 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     private StrategyOptions.Resolved strategyFor(Fragment unit) {
-        return (overrides != null) ? overrides.strategyFor(unit.sourceFile()) : globalStrategy;
+        return (policy != null) ? policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy)
+                : globalStrategy;
     }
 
     /** Parse the candidate object files (schema is now registered); skip anything that isn't an object. */
