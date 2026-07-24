@@ -696,19 +696,27 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     private void reportUnit(Fragment fragment, String label, String detail, boolean error) {
-        report(label, fragment.typeName(), fragment.identityLabel(), safe(fragment.name()),
-                fragment.sourceFile().toString(), detail, error);
+        // source (file) -> target (object): the object path sits last so it reads into the change detail's
+        // item path (e.g. SystemConfigurationType/SystemConfiguration  …deploymentInformation/headerColor).
+        report(label, fragment.sourceFile().toString(), verbose() ? fragment.oidLabel() : null,
+                fragment.objectPath(), detail, error);
     }
 
     private void reportEntry(PlanStore.Entry entry, String label, String detail, boolean error) {
+        // Plan files are keyed by OID and carry no name, so an apply-plan row is identified by its OID.
         report(label, entry.restType, safe(entry.oid),
-                entry.kind == PlanStore.Kind.CREATE ? "(create)" : "(patch)", "", detail, error);
+                entry.kind == PlanStore.Kind.CREATE ? "(create)" : "(patch)", detail, error);
     }
 
-    private void report(String label, String type, String id, String name, String source, String detail,
-            boolean error) {
-        StringBuilder out = new StringBuilder(
-                String.format("  %-12s %-11s %-38s %-16s %s", label, type, id, name, source));
+    /** One result row: {@code label  source  [oid — only under --debug]  target  detail}. */
+    private void report(String label, String source, String oid, String target, String detail, boolean error) {
+        StringBuilder out = new StringBuilder(String.format("  %-12s %-44s", label, source));
+        if (oid != null) {
+            out.append(String.format(" %-38s", oid));
+        }
+        if (target != null && !target.isEmpty()) {
+            out.append(" ").append(target);
+        }
         if (detail != null && !detail.isEmpty()) {
             out.append("  ").append(detail);
         }
@@ -717,6 +725,11 @@ public class DeployCommand implements Callable<Integer> {
         } else {
             status(out.toString());
         }
+    }
+
+    /** True when the OID should be shown: {@code --debug} (or {@code --trace}, which implies it). */
+    private boolean verbose() {
+        return debug || trace;
     }
 
     private void status(String message) {
@@ -735,9 +748,12 @@ public class DeployCommand implements Callable<Integer> {
         return (value != null) ? value : "";
     }
 
-    private static String line(int seq, Fragment fragment) {
-        return String.format("  %2d  %-12s  %-38s  %-18s  %s", seq, fragment.typeName(),
-                fragment.identityLabel(), safe(fragment.name()), fragment.sourceFile());
+    private String line(int seq, Fragment fragment) {
+        StringBuilder out = new StringBuilder(String.format("  %2d  %-44s", seq, fragment.sourceFile().toString()));
+        if (verbose()) {
+            out.append(String.format("  %-38s", fragment.oidLabel()));
+        }
+        return out.append("  ").append(fragment.objectPath()).toString();
     }
 
     private static String needsSuffix(List<Integer> needs) {

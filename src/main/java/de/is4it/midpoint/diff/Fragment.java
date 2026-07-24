@@ -79,4 +79,14 @@ final class Fragment {
         }
         return "(" + typeName() + "/" + (name != null ? name : "?") + ")";
     }
+
+    /** The object's {@code Type/Name} path — the identity form the {@code --policy} selectors also use. */
+    String objectPath() {
+        return typeName() + "/" + (name != null && !name.isBlank() ? name : "?");
+    }
+
+    /** The OID for the {@code --debug} identity column, or {@code "-"} when the object has none. */
+    String oidLabel() {
+        return (oid != null && !oid.isBlank()) ? oid : "-";
+    }
 }
