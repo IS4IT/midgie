@@ -3,9 +3,10 @@
 [![CI](https://github.com/IS4IT/midgie/actions/workflows/ci.yml/badge.svg)](https://github.com/IS4IT/midgie/actions/workflows/ci.yml)
 [![REUSE status](https://api.reuse.software/badge/github.com/IS4IT/midgie)](https://api.reuse.software/info/github.com/IS4IT/midgie)
 
-A schema-aware diff tool for [midPoint](https://evolveum.com/midpoint/). It computes the **minimal
-`itemDelta`** between two versions of a **single object** and emits the `ObjectModificationType` XML that
-midPoint's REST `PATCH` endpoint consumes — a `kubectl diff`/`apply` for midPoint config.
+A schema-aware diff/apply tool for [midPoint](https://evolveum.com/midpoint/). It computes the **minimal
+`itemDelta`** between the desired and current state of a **single object** and emits the
+`ObjectModificationType` XML that midPoint's REST `PATCH` endpoint consumes — a `kubectl diff`/`apply` for
+midPoint config, one object at a time or a whole folder tree (`deploy`).
 
 > **It compares one object with itself, not two different objects.** Both inputs are the *same* object
 > (same OID) in two states: the **desired** state (how you want it) and the **current** state (how it is
@@ -45,42 +46,39 @@ classgraph (a transitive prism dependency) prints during startup. Those warnings
 stderr, so that launch flag is the only way to suppress them — running the JAR directly instead? Set
 `JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
 
-## Modes
+## Commands
 
-Both subcommands take the object's **desired** state first. Its **current** state — the *same* object as it
-is now — is either a second file (offline) or fetched from a running server by OID with `--host`:
+`midgie` has three subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them. All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--host`).
+
+> Each object is compared with **itself**, not another object: its *desired* state (how you want it) against its *current* state (how it is now), and the delta transforms current → desired. If both sides carry an OID and the OIDs differ, the run is refused.
+
+In live mode all three address the object by OID (its `oid`, or `--oid`); if it has none, **`--match-by-name`** resolves it on the server by type + name (a single match) — opt-in everywhere, since resolving a write target by name is deliberately explicit.
+
+### `diff` — the minimal delta
+
+Emits the `ObjectModificationType`. The current state is a local `CURRENT` file (offline) or, with `--host`, a `GET` over REST (fetched by the desired object's `oid`, or `--oid`). Pass `-` for either path to read from stdin.
 
 ```bash
-# Offline: diff the desired object against a saved copy of its current state
+# Offline: desired vs a saved copy of its current state
 bin/midgie diff desired.xml current.xml        # -> itemDelta on stdout (exit 1 if they differ)
 
-# Live: diff the desired object against its current state on a running midPoint (fetched by OID)
+# Live: desired vs its current state on a running midPoint
 bin/midgie diff desired.xml --host https://mp.example/midpoint --user administrator
+```
 
-# Apply: PATCH the minimal change into that same object, after confirmation (create it if absent)
+An explicit `CURRENT` file means offline; `--host` (or `MIDPOINT_URL`) means live — the two together are an error, and a host inherited only from `MIDPOINT_URL` is a fallback that a `CURRENT` file overrides (so an env var never breaks a file diff).
+
+### `apply` — reconcile one live object
+
+Fetches the object's current state, computes the delta, shows what would change, and — after confirmation — `PATCH`es it. Idempotent (nothing is sent when already in sync); `--create-if-absent` `POST`s the object if it does not exist yet (operational/metadata items stripped first); `--dry-run` reports without writing (exit `1` if it would change anything); `--yes`/`-y` skips the prompt (required in non-interactive use).
+
+```bash
 bin/midgie apply desired.xml --host https://mp.example/midpoint --user administrator --create-if-absent
 ```
 
-`DESIRED` and `CURRENT` are the same object at two points in time. In live mode the current state is
-fetched by OID — the `oid` in the desired object, or `--oid`. Pass `-` for either path to read from stdin.
+### `deploy` — reconcile a folder tree
 
-- **`diff`** emits the `ObjectModificationType`. The current state comes from a local `CURRENT` file
-  (offline) or, with `--host`, from a `GET` over REST.
-- **`apply`** fetches the object's current state, computes the delta, prints what would change, and — after
-  confirmation — `PATCH`es it. It is idempotent (nothing is sent when already in sync) and, with
-  `--create-if-absent`, `POST`s the object if it does not exist yet (operational/metadata items stripped
-  first). `--dry-run` changes nothing and just reports the delta; `--yes`/`-y` skips the prompt (required
-  in non-interactive use).
-
-An explicit `CURRENT` file means offline; `--host` (or `MIDPOINT_URL`) means live. A `CURRENT` file **and**
-`--host` together is an error; a host inherited only from `MIDPOINT_URL` is a fallback that an explicit
-`CURRENT` file overrides, so an env var never breaks a file diff.
-
-In live mode all three subcommands address the object by OID (its `oid`, or `--oid`). If the object has no OID, pass **`--match-by-name`** to resolve it on the server by type + name instead (a single match); it's opt-in everywhere — `diff`, `apply`, and `deploy` — since resolving a write target by name is deliberately explicit.
-
-## deploy
-
-`deploy` walks a folder tree of desired-state object XML, sorts it by dependency, and either prints the apply order (offline) or reconciles it against a live server (`--host`).
+Walks a folder tree of desired-state object XML, sorts it by dependency, and either prints the apply order (offline) or reconciles it against a live server (`--host`).
 
 ```bash
 bin/midgie deploy config/          # offline: print the dependency-ordered apply plan
@@ -105,6 +103,8 @@ The contract lets CI gate on drift without parsing output:
 | `diff` | no differences | differences found (drift) | error |
 | `apply --dry-run` | already in sync | would create/patch | error |
 | `apply` (real write) | applied, created, in sync, or declined | — | error |
+| `deploy --dry-run` / `--plan` | nothing to change | would change something | error |
+| `deploy` (real apply) | all applied/in-sync/skipped/declined | — | a unit failed, or error |
 
 ## Flags
 
@@ -144,17 +144,21 @@ a clean union).
 | `--schema-dir DIR` | Directory of extension schemas (`.xsd`/`.xml`); other files ignored. |
 | `--no-live-schema` | Skip the live `GET /schemas` read (faster, or when the account lacks schema-read). Extension items then need `--schema`/`--schema-dir` or they diff as raw. |
 
-### Output & apply
+### Output, logging & writes
 
 | flag | meaning |
 |---|---|
 | `--format xml\|json\|summary` | `xml` (default) / `json`: the `ObjectModificationType`. `summary`: a human-readable changed-path list. |
 | `-o, --output FILE` | Write the delta to `FILE` instead of stdout. |
 | `-q, --quiet` | Suppress advisory notes/status; keep the delta payload, errors, and exit code. |
-| `-v, --debug` | Raise the framework log level to DEBUG on stderr. |
-| `--create-if-absent` | *(apply)* `POST` the whole desired object if it does not exist. |
-| `--dry-run` | *(apply)* Compute and print the delta but do not send it; exits `1` if it would change anything. |
-| `-y, --yes` | *(apply)* Apply without the interactive confirmation prompt. |
+| `-v, --debug` | Log a full DEBUG trace on stderr — the tool's own decisions (mode, connection, every REST call, per-object outcome) plus framework logs, each line timestamped. |
+| `--trace` | Everything `--debug` logs, plus full REST request/response bodies and HTTP error bodies. Implies `--debug`; may include sensitive values. |
+| `-c, --create-if-absent` | *(apply, deploy)* `POST` the whole desired object if it does not exist. |
+| `-m, --match-by-name` | *(diff, apply, deploy)* Resolve an OID-less object on the server by type + name (a single match). |
+| `--dry-run` | *(apply, deploy)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
+| `-y, --yes` | *(apply, deploy)* Apply without the interactive confirmation prompt (required non-interactively). |
+
+`deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--policy <file>`, and `--confirm-each-apply` — described in the `deploy` section above.
 
 ## Environment variables
 
