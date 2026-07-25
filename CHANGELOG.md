@@ -7,11 +7,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-25
+
+### Added
+
+- **`deploy` warns when two files that are fragments of one object both set the same multi-valued item** (e.g. both add an `inducement`). They apply file-by-file and are not merged, so under the default (replace) the later PATCH overwrites the earlier one (last-one-wins); the warning points at combining the files or a `--policy '<path> multivalue=merge'`. Non-fatal, and it honours `--quiet`.
+
 ### Changed
 
 - **Renamed the tool `midpoint-diff` → `midgie`.** The launcher (`bin/midgie`), the built artifact (`midgie.jar`), the command name (`midgie …`), the `--version`/message output, the docs, the release workflow, and the GitHub repository all use the new name. The Java package `de.is4it.midpoint.diff` is kept for now. If you build from source, the JAR is now `target/midgie.jar` and the launcher env override is `MIDGIE_JAR`.
 - **`--scope present` now preserves live items the desired object doesn't mention at *any* depth**, not just whole top-level items. Two files that are fragments of one object can each fill a *different* child of the same single-valued container (e.g. one file sets `deploymentInformation/headerColor`, another `deploymentInformation/name`) without the second file's diff deleting the first's child — and single-valued mid-levels (e.g. `internals/tracing`) are protected too. Protection can only be as fine as the first multi-valued container (a live-side container id can't be matched to id-less desired XML), which is where per-value semantics take over.
 - **Replaced `deploy --overrides` with `deploy --policy`.** A single central policy file keyed on the **object/item** (`<selector> key=value` lines), not the source file, so it survives the fragment model. The selector is one glob over `Type/Name/item/subitem…` (or `oid:<oid>/item…`) with `*` (exactly one segment) and `**` (zero or more segments) at any level. A selector that stops at the object identity sets object-level knobs (`scope`, `equivalence`, `allow-inplace-merge`, a default `multivalue`); a deeper/`**` selector sets `multivalue` for that container (an object-only knob on an item selector is rejected). When several rules set the same knob for one target, the most-specific selector wins (more literal segments, then fewer `**`, then a longer literal prefix; ties → earlier line). The object XML stays pure midPoint XML. **Breaking:** the file-glob `--overrides` is removed.
+- **`deploy`'s report reads source → target.** Each row is now `<source file>  <Type/Name>` — the object path is the same identity form the `--policy` selectors use, replacing the old type + `(type/name)` + name columns — and the OID is shown only under `--debug`/`--trace`. Applies to both the live apply report and the offline plan table.
 
 ## [0.2.2] - 2026-07-23
 
@@ -74,7 +81,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/IS4IT/midgie/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/IS4IT/midgie/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/IS4IT/midgie/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/IS4IT/midgie/compare/v0.1.0...v0.2.0
