@@ -1,6 +1,6 @@
 # Test rig: a real midPoint server (Docker Compose)
 
-Spins up a midPoint server backed by PostgreSQL so `midpoint-diff` can be exercised
+Spins up a midPoint server backed by PostgreSQL so `midgie` can be exercised
 against a live repository over REST — the target for the upcoming `diff --host` and
 `apply` live modes. Adapted from the `connector-sap` rig (itself from
 [Evolveum/midpoint-docker](https://github.com/Evolveum/midpoint-docker)), stripped to
@@ -33,7 +33,7 @@ test stacks (e.g. `connector-sap` on 11080) without port clashes.
 
 ## Version coupling (read before bumping)
 
-`midpoint-diff` bundles midPoint's **compile-time base schema** for the version pinned by
+`midgie` bundles midPoint's **compile-time base schema** for the version pinned by
 `<midpoint.version>` in `pom.xml`. That must match the running server's major line, or
 objects fetched over REST will be misparsed. Both are pinned to **4.10.3** — to target
 another version, bump `MP_VER` in `docker/.env` **and** `midpoint.version` in `pom.xml`
@@ -57,21 +57,21 @@ A `200` with a `<user>` document means REST is ready. (`00000000-0000-0000-0000-
 is the well-known OID of `administrator`.) On first boot REST may briefly return `503`/refuse
 the connection while midPoint finishes starting — retry until the `<user>` comes back.
 
-## Using it with midpoint-diff
+## Using it with midgie
 
 Point the live modes straight at the rig — they GET/PATCH over REST for you:
 
 ```bash
 # diff a desired object against the live one
-java -jar target/midpoint-diff.jar diff desired.xml \
+java -jar target/midgie.jar diff desired.xml \
   --host http://localhost:12080/midpoint -u administrator -p T3stPw890uio
 
 # reconcile it (PATCH; create if absent)
-java -jar target/midpoint-diff.jar apply desired.xml \
+java -jar target/midgie.jar apply desired.xml \
   --host http://localhost:12080/midpoint -u administrator -p T3stPw890uio --create-if-absent
 ```
 
-Or diff two local files offline (no server): `java -jar target/midpoint-diff.jar diff desired.xml live.xml`.
+Or diff two local files offline (no server): `java -jar target/midgie.jar diff desired.xml live.xml`.
 
 ## Live integration tests
 

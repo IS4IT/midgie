@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 #
 # Overlay on docker-compose.yml that adds a TLS reverse proxy (nginx, 8443) in front of the plain-HTTP
-# midPoint, plus a midpoint-diff client container that runs the TLS smoke tests against it. The base
+# midPoint, plus a midgie client container that runs the TLS smoke tests against it. The base
 # midPoint (mp_server, HTTP 8080) is untouched, so the HTTP integration tests keep working.
 #
 # Run (from the repo root):

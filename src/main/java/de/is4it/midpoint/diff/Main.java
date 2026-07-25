@@ -9,14 +9,14 @@ import picocli.CommandLine;
 import picocli.CommandLine.Command;
 
 /**
- * Entry point for the {@code midpoint-diff} CLI.
+ * Entry point for the {@code midgie} CLI.
  *
  * <p>See {@code DESIGN.md} for the full design. In short: a schema-aware diff of two midPoint objects
  * that emits the minimal {@code ObjectModificationType} (itemDelta) — the body midPoint's REST
  * {@code PATCH} consumes.
  */
 @Command(
-        name = "midpoint-diff",
+        name = "midgie",
         mixinStandardHelpOptions = true,
         versionProvider = VersionProvider.class,
         description = "Schema-aware diff of midPoint objects into an itemDelta (ObjectModificationType).",

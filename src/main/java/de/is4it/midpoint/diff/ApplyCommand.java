@@ -114,7 +114,7 @@ public class ApplyCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
         if (!connectionOptions.isLive()) {
-            System.err.println("midpoint-diff: apply needs a running server — pass --host (or set MIDPOINT_URL).");
+            System.err.println("midgie: apply needs a running server — pass --host (or set MIDPOINT_URL).");
             return EXIT_ERROR;
         }
         MidpointRestClient client = connectionOptions.newClient();
@@ -138,7 +138,7 @@ public class ApplyCommand implements Callable<Integer> {
                     : applyPatch(prismContext, client, target, desired, strategy, resolved.current);
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
-            System.err.println("midpoint-diff: " + message);
+            System.err.println("midgie: " + message);
             LOG.debug("apply failed", e);
             return EXIT_ERROR;
         }
@@ -150,12 +150,12 @@ public class ApplyCommand implements Callable<Integer> {
         String address = (target.oid != null) ? target.restType + "/" + target.oid
                 : target.restType + " '" + LiveLookup.nameOf(desired) + "'";
         if (!createIfAbsent) {
-            System.err.println("midpoint-diff: " + address + " does not exist. Pass --create-if-absent to create it.");
+            System.err.println("midgie: " + address + " does not exist. Pass --create-if-absent to create it.");
             return EXIT_ERROR;
         }
-        note("midpoint-diff: " + address + " does not exist; will create it from " + desiredFile.getName() + ".");
+        note("midgie: " + address + " does not exist; will create it from " + desiredFile.getName() + ".");
         if (dryRun) {
-            note("midpoint-diff: dry run — would create " + address + " (not created).");
+            note("midgie: dry run — would create " + address + " (not created).");
             return 1; // would change
         }
         Integer stop = confirmOrExit("Create " + address + "?");
@@ -182,15 +182,15 @@ public class ApplyCommand implements Callable<Integer> {
         }
 
         for (String path : result.mergeFallbackPaths()) {
-            note("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
+            note("midgie: note: '" + path + "' diffs to a whole-value replace; "
                     + "merge does not apply there, so it was left as replace.");
         }
         for (String path : result.protectedSkippedPaths()) {
-            note("midpoint-diff: note: skipped protected value at '" + path
+            note("midgie: note: skipped protected value at '" + path
                     + "' — ciphertext changes on every fetch and is not safely diffable.");
         }
         for (String path : result.accruedInPlaceEditPaths()) {
-            note("midpoint-diff: warning: '" + path + "' edits an accrued (live-only) value in place; "
+            note("midgie: warning: '" + path + "' edits an accrued (live-only) value in place; "
                     + "merge cannot preserve it, so it will be overwritten (proceeding under --allow-inplace-merge).");
         }
 
@@ -203,14 +203,14 @@ public class ApplyCommand implements Callable<Integer> {
         if (dryRun) {
             // The delta is dry-run's payload — written even under --quiet (redirect stdout to silence it).
             Io.writePayload(output, DeltaOutput.render(prismContext, result.delta(), format));
-            note("midpoint-diff: dry run — " + changes + " change(s) NOT applied to "
+            note("midgie: dry run — " + changes + " change(s) NOT applied to "
                     + target.restType + "/" + target.oid + ".");
             return 1; // would change
         }
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
 
         // Show what will change (stderr, so stdout stays the status line) then confirm.
-        note("midpoint-diff: will apply " + changes + " change(s) to " + target.restType + "/" + target.oid + ":");
+        note("midgie: will apply " + changes + " change(s) to " + target.restType + "/" + target.oid + ":");
         for (String line : DeltaOutput.toSummary(result.delta()).split("\n")) {
             note("  " + line);
         }
@@ -240,11 +240,11 @@ public class ApplyCommand implements Callable<Integer> {
             case PROCEED:
                 return null;
             case ABORTED:
-                System.err.println("midpoint-diff: aborted — nothing was applied.");
+                System.err.println("midgie: aborted — nothing was applied.");
                 return 0;
             case NON_INTERACTIVE:
             default:
-                System.err.println("midpoint-diff: refusing to write without confirmation in a non-interactive "
+                System.err.println("midgie: refusing to write without confirmation in a non-interactive "
                         + "session; re-run with --yes to proceed.");
                 return EXIT_ERROR;
         }

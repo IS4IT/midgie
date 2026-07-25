@@ -140,11 +140,11 @@ public class DeployCommand implements Callable<Integer> {
             Logging.enableDebug();
         }
         if (assumeYes && confirmEachApply) {
-            System.err.println("midpoint-diff: use either --yes or --confirm-each-apply, not both.");
+            System.err.println("midgie: use either --yes or --confirm-each-apply, not both.");
             return EXIT_ERROR;
         }
         if (planDir != null && applyPlanDir != null) {
-            System.err.println("midpoint-diff: use either --plan or --apply-plan, not both.");
+            System.err.println("midgie: use either --plan or --apply-plan, not both.");
             return EXIT_ERROR;
         }
         boolean live = connectionOptions.isLive();
@@ -154,12 +154,12 @@ public class DeployCommand implements Callable<Integer> {
         boolean writeFlags = dryRun || assumeYes || confirmEachApply || createIfAbsent || matchByName
                 || retry || planDir != null || applyPlanDir != null || policyFile != null;
         if (!live && writeFlags) {
-            System.err.println("midpoint-diff: --dry-run/--yes/--create-if-absent/--match-by-name/--retry/"
+            System.err.println("midgie: --dry-run/--yes/--create-if-absent/--match-by-name/--retry/"
                     + "--plan/--apply-plan/--policy need --host; without a host, deploy only prints the plan.");
             return EXIT_ERROR;
         }
         if (applyPlanDir == null && (paths == null || paths.isEmpty())) {
-            System.err.println("midpoint-diff: provide at least one PATH, or --apply-plan <dir>.");
+            System.err.println("midgie: provide at least one PATH, or --apply-plan <dir>.");
             return EXIT_ERROR;
         }
 
@@ -209,7 +209,7 @@ public class DeployCommand implements Callable<Integer> {
                     objects.size(), deployableSchemas.size(), localSchemas.size());
 
             if (deployableSchemas.isEmpty() && objects.isEmpty()) {
-                System.err.println("midpoint-diff: no midPoint objects found under the given path(s).");
+                System.err.println("midgie: no midPoint objects found under the given path(s).");
                 return EXIT_ERROR;
             }
 
@@ -237,7 +237,7 @@ public class DeployCommand implements Callable<Integer> {
             return (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
-            System.err.println("midpoint-diff: " + message);
+            System.err.println("midgie: " + message);
             LOG.debug("deploy failed", e);
             return EXIT_ERROR;
         }
@@ -321,7 +321,7 @@ public class DeployCommand implements Callable<Integer> {
             return preview.changed() > 0 ? 1 : 0;
         }
         if (confirmEachApply && System.console() == null) {
-            System.err.println("midpoint-diff: --confirm-each-apply needs an interactive session; "
+            System.err.println("midgie: --confirm-each-apply needs an interactive session; "
                     + "use --yes for non-interactive apply.");
             return EXIT_ERROR;
         }
@@ -422,7 +422,7 @@ public class DeployCommand implements Callable<Integer> {
 
     private Integer runPlan(Reconciler reconciler, List<Fragment> units) throws Exception {
         if (PlanStore.hasPlanFiles(planDir)) {
-            System.err.println("midpoint-diff: --plan directory " + planDir
+            System.err.println("midgie: --plan directory " + planDir
                     + " already contains plan files; use an empty (or new) directory.");
             return EXIT_ERROR;
         }
@@ -492,7 +492,7 @@ public class DeployCommand implements Callable<Integer> {
     private Integer runApplyPlan(MidpointRestClient client) throws Exception {
         List<PlanStore.Entry> entries = PlanStore.read(applyPlanDir);
         if (entries.isEmpty()) {
-            System.err.println("midpoint-diff: no plan files (*.create.xml / *.patch.xml) in " + applyPlanDir + ".");
+            System.err.println("midgie: no plan files (*.create.xml / *.patch.xml) in " + applyPlanDir + ".");
             return EXIT_ERROR;
         }
         LOG.debug("apply-plan: {} entry/entries from {}", entries.size(), applyPlanDir);
@@ -504,7 +504,7 @@ public class DeployCommand implements Callable<Integer> {
             return 1;
         }
         if (confirmEachApply && System.console() == null) {
-            System.err.println("midpoint-diff: --confirm-each-apply needs an interactive session; use --yes.");
+            System.err.println("midgie: --confirm-each-apply needs an interactive session; use --yes.");
             return EXIT_ERROR;
         }
         if (!assumeYes && !confirmEachApply) {
@@ -611,11 +611,11 @@ public class DeployCommand implements Callable<Integer> {
             case PROCEED:
                 return null;
             case ABORTED:
-                System.err.println("midpoint-diff: aborted — nothing was applied.");
+                System.err.println("midgie: aborted — nothing was applied.");
                 return 0;
             case NON_INTERACTIVE:
             default:
-                System.err.println("midpoint-diff: refusing to deploy without confirmation in a non-interactive "
+                System.err.println("midgie: refusing to deploy without confirmation in a non-interactive "
                         + "session; re-run with --yes (or --dry-run to preview).");
                 return EXIT_ERROR;
         }
@@ -671,19 +671,19 @@ public class DeployCommand implements Callable<Integer> {
             return;
         }
         for (SchemaFile local : localSchemas) {
-            System.err.println("midpoint-diff: note: registered local schema (not deployed): "
+            System.err.println("midgie: note: registered local schema (not deployed): "
                     + local.sourceFile() + " [" + local.targetNamespace() + "]");
         }
         for (SchemaFile schema : schemaOrder.brokenAt()) {
-            System.err.println("midpoint-diff: warning: schema dependency cycle — broke it at "
+            System.err.println("midgie: warning: schema dependency cycle — broke it at "
                     + schema.sourceFile() + "; the order there is approximate.");
         }
         for (DeployObject object : objectOrder.brokenAt()) {
-            System.err.println("midpoint-diff: warning: object dependency cycle — broke it at "
+            System.err.println("midgie: warning: object dependency cycle — broke it at "
                     + object.identityLabel() + "; the order there is approximate.");
         }
         for (String warning : warnings) {
-            System.err.println("midpoint-diff: warning: " + warning);
+            System.err.println("midgie: warning: " + warning);
         }
     }
 
@@ -740,7 +740,7 @@ public class DeployCommand implements Callable<Integer> {
 
     private void note(String message) {
         if (!quiet) {
-            System.err.println("midpoint-diff: " + message);
+            System.err.println("midgie: " + message);
         }
     }
 

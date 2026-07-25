@@ -15,9 +15,9 @@ if [ -f ca.crt ] && [ -f server.crt ] && [ -f server.key ]; then
     exit 0
 fi
 
-echo "Creating CA (CN=midpoint-diff-test-CA)..."
+echo "Creating CA (CN=midgie-test-CA)..."
 openssl genrsa -out ca.key 4096
-openssl req -x509 -new -noenc -key ca.key -sha256 -days 3650 -subj '/CN=midpoint-diff-test-CA' -out ca.crt
+openssl req -x509 -new -noenc -key ca.key -sha256 -days 3650 -subj '/CN=midgie-test-CA' -out ca.crt
 
 echo "Creating server cert (CN=mp-tls, SAN=mp-tls,localhost,127.0.0.1)..."
 openssl req -new -noenc -newkey rsa:2048 -keyout server.key -out server.csr -subj '/CN=mp-tls'

@@ -1,7 +1,7 @@
-# midpoint-diff
+# midgie
 
-[![CI](https://github.com/IS4IT/midpoint-diff/actions/workflows/ci.yml/badge.svg)](https://github.com/IS4IT/midpoint-diff/actions/workflows/ci.yml)
-[![REUSE status](https://api.reuse.software/badge/github.com/IS4IT/midpoint-diff)](https://api.reuse.software/info/github.com/IS4IT/midpoint-diff)
+[![CI](https://github.com/IS4IT/midgie/actions/workflows/ci.yml/badge.svg)](https://github.com/IS4IT/midgie/actions/workflows/ci.yml)
+[![REUSE status](https://api.reuse.software/badge/github.com/IS4IT/midgie)](https://api.reuse.software/info/github.com/IS4IT/midgie)
 
 A schema-aware diff tool for [midPoint](https://evolveum.com/midpoint/). It computes the **minimal
 `itemDelta`** between two versions of a **single object** and emits the `ObjectModificationType` XML that
@@ -22,24 +22,24 @@ engine.
 
 midPoint's existing apply paths (`post-initial-objects`, `ninja import`, REST `PUT`) all do a *full object
 replace*, which wipes accumulated runtime state (assignments, links, metadata) on any object that isn't
-pure config. `midpoint-diff` changes **only the fields you manage** and leaves the rest intact. The offline
+pure config. `midgie` changes **only the fields you manage** and leaves the rest intact. The offline
 two-file mode is also useful on its own for drift detection, migration deltas, and review.
 
 ## Install
 
-A prebuilt fat JAR is attached to each [release](https://github.com/IS4IT/midpoint-diff/releases). To build
+A prebuilt fat JAR is attached to each [release](https://github.com/IS4IT/midgie/releases). To build
 from source instead:
 
 ```bash
-mvn -q package                       # builds target/midpoint-diff.jar (a fat JAR)
-bin/midpoint-diff --help             # launcher (recommended)
-java -jar target/midpoint-diff.jar --help   # or run the JAR directly
+mvn -q package                       # builds target/midgie.jar (a fat JAR)
+bin/midgie --help             # launcher (recommended)
+java -jar target/midgie.jar --help   # or run the JAR directly
 ```
 
 Requires **JDK 17+**. Dependencies (midPoint schema + prism) resolve from Evolveum's Nexus, configured in
 `pom.xml`. The first build downloads the midPoint schema and prism dependencies, so it is sizeable.
 
-The `bin/midpoint-diff` launcher finds the JAR (override with `MIDPOINT_DIFF_JAR`) and, on **JDK 23+**,
+The `bin/midgie` launcher finds the JAR (override with `MIDGIE_JAR`) and, on **JDK 23+**,
 adds `--sun-misc-unsafe-memory-access=allow` to silence the JEP 498 `sun.misc.Unsafe` warnings that
 classgraph (a transitive prism dependency) prints during startup. Those warnings go straight to the native
 stderr, so that launch flag is the only way to suppress them — running the JAR directly instead? Set
@@ -52,13 +52,13 @@ is now — is either a second file (offline) or fetched from a running server by
 
 ```bash
 # Offline: diff the desired object against a saved copy of its current state
-bin/midpoint-diff diff desired.xml current.xml        # -> itemDelta on stdout (exit 1 if they differ)
+bin/midgie diff desired.xml current.xml        # -> itemDelta on stdout (exit 1 if they differ)
 
 # Live: diff the desired object against its current state on a running midPoint (fetched by OID)
-bin/midpoint-diff diff desired.xml --host https://mp.example/midpoint --user administrator
+bin/midgie diff desired.xml --host https://mp.example/midpoint --user administrator
 
 # Apply: PATCH the minimal change into that same object, after confirmation (create it if absent)
-bin/midpoint-diff apply desired.xml --host https://mp.example/midpoint --user administrator --create-if-absent
+bin/midgie apply desired.xml --host https://mp.example/midpoint --user administrator --create-if-absent
 ```
 
 `DESIRED` and `CURRENT` are the same object at two points in time. In live mode the current state is
@@ -83,11 +83,11 @@ In live mode all three subcommands address the object by OID (its `oid`, or `--o
 `deploy` walks a folder tree of desired-state object XML, sorts it by dependency, and either prints the apply order (offline) or reconciles it against a live server (`--host`).
 
 ```bash
-bin/midpoint-diff deploy config/          # offline: print the dependency-ordered apply plan
-bin/midpoint-diff deploy config/ --host https://mp.example/midpoint --user administrator --dry-run   # preview the changes
-bin/midpoint-diff deploy config/ --host https://mp.example/midpoint --user administrator --create-if-absent --yes   # apply
-bin/midpoint-diff deploy config/ --host … --create-if-absent --plan out/   # write the changes to out/ for review
-bin/midpoint-diff deploy --apply-plan out/ --host … --yes                  # replay a reviewed plan
+bin/midgie deploy config/          # offline: print the dependency-ordered apply plan
+bin/midgie deploy config/ --host https://mp.example/midpoint --user administrator --dry-run   # preview the changes
+bin/midgie deploy config/ --host https://mp.example/midpoint --user administrator --create-if-absent --yes   # apply
+bin/midgie deploy config/ --host … --create-if-absent --plan out/   # write the changes to out/ for review
+bin/midgie deploy --apply-plan out/ --host … --yes                  # replay a reviewed plan
 ```
 
 The order is two-tier: extension **schemas** first (raw `.xsd` inputs and exported `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered so extension attributes resolve), then **objects** (sorted by their reference OIDs). Objects are identified by OID, or by type+name when they carry no OID, so several files may declare *fragments* of one object — each applied individually. A genuine contradiction between fragments (a different type under one OID, or a single-valued item set to two values) is an error; same-object non-overlapping fragments are fine.
@@ -163,7 +163,7 @@ a clean union).
 | `MIDPOINT_URL` | `--host` |
 | `MIDPOINT_USER` | `--user` |
 | `MIDPOINT_PASSWORD` | password (after the `--password*` flags, before the prompt) |
-| `MIDPOINT_DIFF_JAR` | JAR path used by the `bin/midpoint-diff` launcher |
+| `MIDGIE_JAR` | JAR path used by the `bin/midgie` launcher |
 | `JDK_JAVA_OPTIONS` | set to `--sun-misc-unsafe-memory-access=allow` when running the JAR directly on JDK 23+ |
 
 ## Safety guards
@@ -194,7 +194,7 @@ Two layers (full detail in [`DESIGN.md`](DESIGN.md#schema-two-layers-two-knobs))
 
 The bundled base schema is version-specific. To target a different midPoint major line, bump
 `<midpoint.version>` in `pom.xml` (default **4.10.3**) **and** `MP_VER` in `docker/.env`, then rebuild. A
-build-time check fails if those two drift apart. `bin/midpoint-diff --version` prints the tool version and
+build-time check fails if those two drift apart. `bin/midgie --version` prints the tool version and
 the bundled schema line.
 
 ## Testing

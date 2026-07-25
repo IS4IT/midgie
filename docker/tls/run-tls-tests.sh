@@ -7,7 +7,7 @@
 # Asserts exit codes; a non-zero container exit means a check failed.
 set -u
 
-JAR=/tls/midpoint-diff.jar
+JAR=/tls/midgie.jar
 CA=/tls/ca.crt
 DESIRED=/tls/desired.xml
 MP_USER=administrator

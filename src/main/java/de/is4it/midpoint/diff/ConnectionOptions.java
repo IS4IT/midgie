@@ -99,12 +99,12 @@ public final class ConnectionOptions {
     /** Build a REST client, or print an error and return {@code null} if the connection args are invalid. */
     public MidpointRestClient newClient() {
         if (insecure && caCert != null) {
-            System.err.println("midpoint-diff: use either --insecure or --cacert, not both.");
+            System.err.println("midgie: use either --insecure or --cacert, not both.");
             return null;
         }
         String user = user();
         if (user == null) {
-            System.err.println("midpoint-diff: live mode needs a user (--user or MIDPOINT_USER).");
+            System.err.println("midgie: live mode needs a user (--user or MIDPOINT_USER).");
             return null;
         }
         String password = resolvePassword();
@@ -130,7 +130,7 @@ public final class ConnectionOptions {
         if (passwordEnv != null) {
             String value = System.getenv(passwordEnv);
             if (value == null) {
-                System.err.println("midpoint-diff: --password-env " + passwordEnv + " is not set in the environment.");
+                System.err.println("midgie: --password-env " + passwordEnv + " is not set in the environment.");
                 return null;
             }
             LOG.debug("password source: --password-env {}", passwordEnv);
@@ -140,13 +140,13 @@ public final class ConnectionOptions {
             try {
                 String password = Files.readString(passwordFile.toPath(), StandardCharsets.UTF_8).stripTrailing();
                 if (password.isEmpty()) {
-                    System.err.println("midpoint-diff: --password-file " + passwordFile + " is empty.");
+                    System.err.println("midgie: --password-file " + passwordFile + " is empty.");
                     return null;
                 }
                 LOG.debug("password source: --password-file {}", passwordFile);
                 return password;
             } catch (IOException e) {
-                System.err.println("midpoint-diff: cannot read --password-file " + passwordFile + ": " + e.getMessage());
+                System.err.println("midgie: cannot read --password-file " + passwordFile + ": " + e.getMessage());
                 return null;
             }
         }
@@ -163,7 +163,7 @@ public final class ConnectionOptions {
                 return new String(entered);
             }
         }
-        System.err.println("midpoint-diff: no password provided. Use --password-env, --password-file, "
+        System.err.println("midgie: no password provided. Use --password-env, --password-file, "
                 + "the MIDPOINT_PASSWORD env var, or run interactively.");
         return null;
     }

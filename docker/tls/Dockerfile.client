@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: EUPL-1.2
 #
-# midpoint-diff client that runs the TLS smoke tests. Build context: the repo root (needs the built jar).
+# midgie client that runs the TLS smoke tests. Build context: the repo root (needs the built jar).
 FROM eclipse-temurin:17-jre
 WORKDIR /tls
-COPY target/midpoint-diff.jar /tls/midpoint-diff.jar
+COPY target/midgie.jar /tls/midgie.jar
 COPY docker/tls/ca.crt /tls/ca.crt
 COPY docker/tls/desired.xml /tls/desired.xml
 COPY docker/tls/run-tls-tests.sh /tls/run-tls-tests.sh

@@ -10,11 +10,11 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>de.is4it.midpoint</groupId>
-    <artifactId>midpoint-diff</artifactId>
+    <artifactId>midgie</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <name>midpoint-diff</name>
+    <name>midgie</name>
     <description>Schema-aware diff of midPoint objects into an itemDelta (ObjectModificationType).</description>
 
     <properties>
@@ -64,7 +64,7 @@
     </dependencies>
 
     <build>
-        <finalName>midpoint-diff</finalName>
+        <finalName>midgie</finalName>
 
         <!-- Filter build-info.properties only, so ${midpoint.version} is embedded for the runtime
              version check; everything else (e.g. logback.xml, which contains its own ${} tokens)

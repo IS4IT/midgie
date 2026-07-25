@@ -1,6 +1,6 @@
 # TODO — possible improvements
 
-Hardening and polish for `midpoint-diff`. None of these are bugs — the tool is functional (offline
+Hardening and polish for `midgie`. None of these are bugs — the tool is functional (offline
 `diff`, `diff --host`, `apply` with create/patch/idempotency, and two-layer extension schema). Priority
 is value × how exposed the gap is. ⭐ marks a good first cluster (small, independent, high-value).
 
@@ -37,7 +37,7 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] **Dynamic version** — `--version` reads the pom `project.version` from the filtered `build-info.properties` (no more hardcoded `0.1.0`) and also prints the bundled midPoint schema line, via a picocli `VersionProvider`.
 - [x] **CI workflow** — `.github/workflows/ci.yml`: `mvn verify` on JDK 17 + 21 (Maven-cached; rig-gated live tests self-skip) plus a REUSE compliance lint (`fsfe/reuse-action`), on push/PR to `main`. README carries CI + REUSE badges.
 - [x] **CHANGELOG + a tagged release** — `CHANGELOG.md` (Keep a Changelog) documents 0.1.0; `.github/workflows/release.yml` builds on a `v*` tag, stamps the tag version into the build (`versions:set`, pom stays `-SNAPSHOT`), and publishes a GitHub Release with the fat JAR attached and notes pulled from the changelog. Cut one with `git tag -a v0.1.0 -m … && git push origin v0.1.0`.
-- [x] **Classgraph `Unsafe` startup warnings** — the `bin/midpoint-diff` launcher adds `--sun-misc-unsafe-memory-access=allow` on JDK 23+ (the flag is unknown to JDK ≤ 22, which doesn't warn). The warnings go to the native stderr, bypassing `System.err`, so an in-process filter is impossible — verified empirically. Direct-JAR users: `JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
+- [x] **Classgraph `Unsafe` startup warnings** — the `bin/midgie` launcher adds `--sun-misc-unsafe-memory-access=allow` on JDK 23+ (the flag is unknown to JDK ≤ 22, which doesn't warn). The warnings go to the native stderr, bypassing `System.err`, so an in-process filter is impossible — verified empirically. Direct-JAR users: `JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
 
 ## G. Test coverage gaps — done
 - [x] **Command-layer offline tests** — `CliTest` drives the real CLI offline: missing LIVE, `--host` vs LIVE exclusion, bad `--scope`/`--equivalence`/`--multivalue`/`--path`/`--format` → exit 2, `apply` without `--host`/password → exit 2, plus drift/no-drift exit codes.
@@ -60,4 +60,4 @@ A new subcommand that discovers desired-state object XML under one or more paths
 - [x] **Plan / intermediate deltas** — `--dry-run` prints the plan + deltas and changes nothing (exit 1 on drift); `--plan <dir>` writes ordered, numbered per-object create/patch files for review; `deploy --apply-plan <dir>` replays them in order (the "apply a saved change" mode).
 - [x] **Tests** — unit: sort correctness, discovery skips non-objects, same-identity fragments group, contradictions error, the reconcile decision table, the REST search, policy selector matching / most-specific-wins / validation, plan-file round-trip, and stub-server retry convergence. Integration (`docker/` rig): deploy a small tree with dependency order + idempotent re-run, `--match-by-name`, the non-interactive refuse, the `--plan`→`--apply-plan` round-trip, and a `--policy` per-object override.
 
-> **Naming:** now that `deploy` applies, the tool does more than "diff". A broader name is under consideration (TBD — `midOps` was floated, not settled). Keep `midpoint-diff` until the name is decided; the rename is mechanical (repo/artifactId/binary/launcher/main class/package/docs/CI) and can be a single commit.
+> **Naming:** now that `deploy` applies, the tool does more than "diff", so it was renamed **midgie** (a wee Scots midge). The rename covers the artifact/JAR, launcher, main-class command name, message prefix, docs, CI, and the GitHub repo. Left as-is on purpose: the Java package `de.is4it.midpoint.diff`.

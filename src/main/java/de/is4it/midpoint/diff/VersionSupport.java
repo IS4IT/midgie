@@ -85,7 +85,7 @@ final class VersionSupport {
             return; // can't tell — stay quiet
         }
         if (!sameMajorLine(compile, live)) {
-            System.err.println("midpoint-diff: warning: server midPoint version " + live
+            System.err.println("midgie: warning: server midPoint version " + live
                     + " differs from the bundled schema version " + compile
                     + "; objects may be misparsed. Rebuild with a matching <midpoint.version>.");
         }

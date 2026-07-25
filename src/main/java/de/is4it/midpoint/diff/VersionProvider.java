@@ -17,7 +17,7 @@ final class VersionProvider implements IVersionProvider {
     @Override
     public String[] getVersion() {
         return new String[] {
-                "midpoint-diff " + orUnknown(VersionSupport.projectVersion()),
+                "midgie " + orUnknown(VersionSupport.projectVersion()),
                 "bundled midPoint schema " + orUnknown(VersionSupport.compileTimeVersion()),
         };
     }

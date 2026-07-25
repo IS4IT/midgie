@@ -88,7 +88,7 @@ public final class StrategyOptions {
     private DiffEngine.Scope parseScope() {
         DiffEngine.Scope value = scopeByName(scope);
         if (value == null) {
-            System.err.println("midpoint-diff: --scope must be 'present' or 'full', got: " + scope);
+            System.err.println("midgie: --scope must be 'present' or 'full', got: " + scope);
         }
         return value;
     }
@@ -138,13 +138,13 @@ public final class StrategyOptions {
     private ParameterizedEquivalenceStrategy parseEquivalence() {
         ParameterizedEquivalenceStrategy strategy = equivalenceByName(equivalence);
         if (strategy == null) {
-            System.err.println("midpoint-diff: --equivalence must be "
+            System.err.println("midgie: --equivalence must be "
                     + "real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal, got: "
                     + equivalence);
             return null;
         }
         if (strategy == EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) {
-            System.err.println("midpoint-diff: note: --equivalence natural-keys "
+            System.err.println("midgie: note: --equivalence natural-keys "
                     + "(REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) is prism-experimental; "
                     + "container-value matching by natural key may behave unexpectedly.");
         }
@@ -177,7 +177,7 @@ public final class StrategyOptions {
      * before they emit or write a delta that would overwrite accrued state.
      */
     static String accruedInPlaceRefusal(List<String> paths) {
-        return "midpoint-diff: refusing to merge: it would edit accrued (live-only) value(s) in place instead "
+        return "midgie: refusing to merge: it would edit accrued (live-only) value(s) in place instead "
                 + "of preserving them, silently overwriting them at " + String.join(", ", paths)
                 + ". Use --equivalence real-value for a clean union, or --allow-inplace-merge to proceed anyway.";
     }
@@ -193,7 +193,7 @@ public final class StrategyOptions {
                 globalMerge = true;
                 break;
             default:
-                System.err.println("midpoint-diff: --multivalue must be 'replace' or 'merge', got: " + multivalue);
+                System.err.println("midgie: --multivalue must be 'replace' or 'merge', got: " + multivalue);
                 return null;
         }
 
@@ -202,7 +202,7 @@ public final class StrategyOptions {
             for (String spec : pathStrategies) {
                 int eq = spec.lastIndexOf('=');
                 if (eq <= 0 || eq == spec.length() - 1) {
-                    System.err.println("midpoint-diff: --path must be <itemPath>=merge|replace, got: " + spec);
+                    System.err.println("midgie: --path must be <itemPath>=merge|replace, got: " + spec);
                     return null;
                 }
                 String pathText = spec.substring(0, eq).trim();
@@ -214,13 +214,13 @@ public final class StrategyOptions {
                 } else if ("replace".equals(strategyText)) {
                     merge = false;
                 } else {
-                    System.err.println("midpoint-diff: --path strategy must be merge|replace, got: " + strategyText);
+                    System.err.println("midgie: --path strategy must be merge|replace, got: " + strategyText);
                     return null;
                 }
 
                 ItemPath path = parseItemPath(pathText);
                 if (path.isEmpty()) {
-                    System.err.println("midpoint-diff: --path has an empty itemPath in: " + spec);
+                    System.err.println("midgie: --path has an empty itemPath in: " + spec);
                     return null;
                 }
                 overrides.add(new DiffEngine.MultiValueStrategy.PathRule(path, merge));

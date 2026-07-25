@@ -107,14 +107,14 @@ public class DiffCommand implements Callable<Integer> {
         boolean live;
         if (currentFile != null) {
             if (connectionOptions.isExplicitHost()) {
-                System.err.println("midpoint-diff: provide either a CURRENT file or --host, not both.");
+                System.err.println("midgie: provide either a CURRENT file or --host, not both.");
                 return EXIT_ERROR;
             }
             live = false;
         } else if (connectionOptions.isLive()) {
             live = true;
         } else {
-            System.err.println("midpoint-diff: offline diff needs a CURRENT file, "
+            System.err.println("midgie: offline diff needs a CURRENT file, "
                     + "or set --host (or MIDPOINT_URL) for live mode.");
             return EXIT_ERROR;
         }
@@ -151,15 +151,15 @@ public class DiffCommand implements Callable<Integer> {
             // Merge notes go to stderr so stdout stays a clean PATCH body.
             if (!quiet) {
                 for (String path : result.mergeFallbackPaths()) {
-                    System.err.println("midpoint-diff: note: '" + path + "' diffs to a whole-value replace; "
+                    System.err.println("midgie: note: '" + path + "' diffs to a whole-value replace; "
                             + "merge does not apply there, so it was left as replace.");
                 }
                 for (String path : result.protectedSkippedPaths()) {
-                    System.err.println("midpoint-diff: note: skipped protected value at '" + path
+                    System.err.println("midgie: note: skipped protected value at '" + path
                             + "' — ciphertext changes on every fetch and is not safely diffable.");
                 }
                 for (String path : result.accruedInPlaceEditPaths()) {
-                    System.err.println("midpoint-diff: warning: '" + path + "' edits an accrued (live-only) "
+                    System.err.println("midgie: warning: '" + path + "' edits an accrued (live-only) "
                             + "value in place; merge cannot preserve it, so it will be overwritten "
                             + "(proceeding under --allow-inplace-merge).");
                 }
@@ -169,7 +169,7 @@ public class DiffCommand implements Callable<Integer> {
             return result.hasDrift() ? 1 : 0;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
-            System.err.println("midpoint-diff: " + message);
+            System.err.println("midgie: " + message);
             LOG.debug("diff failed", e);
             return EXIT_ERROR;
         }

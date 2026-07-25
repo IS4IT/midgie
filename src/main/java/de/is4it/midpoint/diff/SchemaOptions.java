@@ -148,7 +148,7 @@ public final class SchemaOptions {
         if (detail.endsWith(".")) {
             detail = detail.substring(0, detail.length() - 1);
         }
-        System.err.println("midpoint-diff: warning: ignoring schema file '" + file + "' — " + detail + ".");
+        System.err.println("midgie: warning: ignoring schema file '" + file + "' — " + detail + ".");
     }
 
     /** Read {@code SchemaType} objects off the server and add their schemas. Best-effort: warns on failure. */
@@ -177,7 +177,7 @@ public final class SchemaOptions {
                 LOG.debug("live schema read skipped (the object fetch will report this failure): {}", e.toString());
                 return; // the caller's object fetch reports the same failure with a clear message
             }
-            System.err.println("midpoint-diff: warning: could not read extension schema from the server ("
+            System.err.println("midgie: warning: could not read extension schema from the server ("
                     + e.getMessage() + "); continuing with base schema only.");
             LOG.debug("live schema read failed", e);
         }

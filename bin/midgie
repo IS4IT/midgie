@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: EUPL-1.2
 #
-# Launcher for midpoint-diff: locate the fat JAR and run it, adding
+# Launcher for midgie: locate the fat JAR and run it, adding
 # --sun-misc-unsafe-memory-access=allow on JDK 23+ to silence the JEP 498
 # warnings that classgraph (a transitive prism dependency) triggers when it
 # unmaps memory-mapped schema jars during prism bootstrap. Those warnings are
@@ -16,12 +16,12 @@ set -eu
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 # Locate the JAR: explicit override, then a dev build, then a lib/ layout, then alongside the script.
-JAR="${MIDPOINT_DIFF_JAR:-}"
+JAR="${MIDGIE_JAR:-}"
 if [ -z "$JAR" ]; then
     for candidate in \
-        "$SCRIPT_DIR/../target/midpoint-diff.jar" \
-        "$SCRIPT_DIR/../lib/midpoint-diff.jar" \
-        "$SCRIPT_DIR/midpoint-diff.jar"; do
+        "$SCRIPT_DIR/../target/midgie.jar" \
+        "$SCRIPT_DIR/../lib/midgie.jar" \
+        "$SCRIPT_DIR/midgie.jar"; do
         if [ -f "$candidate" ]; then
             JAR=$candidate
             break
@@ -29,7 +29,7 @@ if [ -z "$JAR" ]; then
     done
 fi
 if [ -z "$JAR" ] || [ ! -f "$JAR" ]; then
-    echo "midpoint-diff: cannot find midpoint-diff.jar (run 'mvn -q package', or set MIDPOINT_DIFF_JAR)." >&2
+    echo "midgie: cannot find midgie.jar (run 'mvn -q package', or set MIDGIE_JAR)." >&2
     exit 2
 fi
 

@@ -1,12 +1,12 @@
 # TLS test rig
 
-Verifies midpoint-diff's TLS options (`--cacert`, `--insecure`) end to end against a real HTTPS endpoint.
+Verifies midgie's TLS options (`--cacert`, `--insecure`) end to end against a real HTTPS endpoint.
 
 midPoint (Spring Boot) serves a single port, so instead of enabling its native TLS this rig puts a tiny
 **nginx TLS reverse proxy** in front of the plain-HTTP midPoint from `../docker-compose.yml`:
 
 ```
-midpoint-diff client ──HTTPS(8443)──▶ nginx (mp-tls) ──HTTP(8080)──▶ midPoint (mp_server)
+midgie client ──HTTPS(8443)──▶ nginx (mp-tls) ──HTTP(8080)──▶ midPoint (mp_server)
         └─ trusts ca.crt via --cacert                └─ presents server.crt (SAN: mp-tls)
 ```
 

@@ -1,4 +1,4 @@
-# midpoint-diff — design
+# midgie — design
 
 A standalone, schema-aware CLI that computes the **minimal `itemDelta`** between two midPoint
 objects and (optionally) applies it through the model REST API. Core value: a thin wrapper around
@@ -79,10 +79,10 @@ the midPoint source tree.
 
 **v1 = the offline core.** Live and apply are thin adapters added in a second increment.
 
-- `midpoint-diff diff <desired.xml> <live.xml>` → itemDelta XML on stdout. No REST, no server.
-- `midpoint-diff diff <desired.xml> --host <url> --user <u> --password <p> [--oid <oid>]` → GET the
+- `midgie diff <desired.xml> <live.xml>` → itemDelta XML on stdout. No REST, no server.
+- `midgie diff <desired.xml> --host <url> --user <u> --password <p> [--oid <oid>]` → GET the
   current object (type + OID read from the desired file if not given), diff, emit itemDelta.
-- `midpoint-diff apply <desired.xml> --host … [--create-if-absent]` → diff then
+- `midgie apply <desired.xml> --host … [--create-if-absent]` → diff then
   `PATCH /ws/rest/{type}/{oid}`; on a GET-404 with `--create-if-absent`, `POST /ws/rest/{type}` the whole
   object (operational/metadata items stripped first). This is the reconciler. Because it writes, it shows
   the pending change and confirms first: it prompts interactively, or refuses in a non-interactive session
@@ -176,7 +176,7 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 - Maven, Java 17, fat JAR via `maven-shade-plugin` (needs a JVM; GraalVM native is impractical given
   prism's reflection/JAXB). Dependencies: `com.evolveum.midpoint.infra:schema` (pulls prism), picocli,
   JUnit 5; live/apply use the JDK 11+ `java.net.http` client — no extra dependency.
-- **Launcher `bin/midpoint-diff`.** On JDK 23+, classgraph (a transitive prism dependency) calls the
+- **Launcher `bin/midgie`.** On JDK 23+, classgraph (a transitive prism dependency) calls the
   terminally-deprecated `sun.misc.Unsafe::invokeCleaner` to unmap memory-mapped schema jars during prism
   bootstrap, which prints JEP 498 warnings. Those go to the *native* stderr (fd 2), bypassing `System.err`,
   so they cannot be filtered in-process — the only suppression is the launch flag
@@ -218,11 +218,11 @@ That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — app
 
 ## deploy — apply a folder tree
 
-> **Status: built.** Read-only discovery + schema-aware dependency sort, the file-by-file apply loop (`--dry-run`, `--create-if-absent`, `--match-by-name`), `--retry`, the `--plan`/`--apply-plan` saved-change modes, and the `--policy` strategy file. See TODO.md section H. Now that `deploy` applies, the tool does more than "diff" — a broader name is under consideration (TBD; `midOps` was floated but **not** settled). Keep the current name until decided; the rename would be a separate, mechanical commit.
+> **Status: built.** Read-only discovery + schema-aware dependency sort, the file-by-file apply loop (`--dry-run`, `--create-if-absent`, `--match-by-name`), `--retry`, the `--plan`/`--apply-plan` saved-change modes, and the `--policy` strategy file. See TODO.md section H. Now that `deploy` applies, the tool does more than "diff", so it was renamed **midgie** (a wee Scots midge); only the Java package `de.is4it.midpoint.diff` keeps the old name for now.
 
 Apply a whole tree of desired-state object XML to a live server, in dependency order, reusing the `diff`/`apply` engine — **one JVM bootstrap** for the whole run. midPoint's prism bootstrap costs ~1.5 s, so a shell loop invoking the tool once per file would pay that per object; an in-process subcommand pays it once and can sort with prism's precise reference walk instead of a text heuristic. **Structure-agnostic**: objects are discovered by content, so the config repo can use any folder layout the team likes. The deploy model is **file-by-file**: each source file is diffed and applied individually (one `itemDelta` per file), and *schema extensions follow the same model* — an extension is a `SchemaType` object deployed like any other, so schema files are first-class nodes in the same dependency sort.
 
-`midpoint-diff deploy <path...> [--host <url>] [creds/TLS/retry — the same mixins as diff/apply] [flags]` (paths are files or directories, walked recursively).
+`midgie deploy <path...> [--host <url>] [creds/TLS/retry — the same mixins as diff/apply] [flags]` (paths are files or directories, walked recursively).
 
 ### Increment 1 (built): read-only discovery + schema-aware dependency sort
 
@@ -247,4 +247,4 @@ The plan prints one line per apply unit (`seq  type  oid-or-(type/name)  name  f
 
 **Verification.** Unit: schema import ordering, object schema→role→user ordering, a cycle, external refs ignored, discovery skips non-objects, same-identity fragments group, contradictions error, the reconcile decision table, the REST search, policy selector matching / most-specific-wins / validation, plan-file round-trip, and stub-server retry convergence (`DeployCliTest`, `TopoSortTest`, `ReconcilerTest`, `MidpointRestClientTest`, `PolicyTest`, `PlanStoreTest`, `DeployRetryTest` over `src/test/resources/deploy/`). Integration (`docker/` rig, `LiveIntegrationTest`): deploy a small tree with the dependency order and an **idempotent re-run** (second run all in-sync, exit 0), `--match-by-name` patching by name, the non-interactive refuse, the `--plan`→`--apply-plan` round-trip, and a `--policy` per-object strategy override.
 
-**Consumer.** This is the promoter for the midpoint-k8s delivery pipeline: the chart's config-apply Job becomes `midpoint-diff deploy /config --host <route> --user … --password-file …`, run after `helm upgrade`.
+**Consumer.** This is the promoter for the midpoint-k8s delivery pipeline: the chart's config-apply Job becomes `midgie deploy /config --host <route> --user … --password-file …`, run after `helm upgrade`.

@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 /**
  * Pins the exact {@code ObjectModificationType} XML the tool emits, so a change in prism serialization
  * (or our conversion) that would alter the REST PATCH body is caught. Regenerate the golden with
- * {@code java -jar target/midpoint-diff.jar diff examples/a.xml examples/b.xml} if a change is intended.
+ * {@code java -jar target/midgie.jar diff examples/a.xml examples/b.xml} if a change is intended.
  */
 class GoldenOutputTest {
 

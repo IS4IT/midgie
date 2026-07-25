@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: EUPL-1.2
 
-# Test rig: a real midPoint server for exercising midpoint-diff over REST
+# Test rig: a real midPoint server for exercising midgie over REST
 # (the future `diff --host` / `apply` live modes).
 #
 #
 # IMPORTANT: the midPoint image tag (MP_VER) must match <midpoint.version> in
-# pom.xml. midpoint-diff bundles the compile-time base schema for that version,
+# pom.xml. midgie bundles the compile-time base schema for that version,
 # and diffing against a different major line will misparse objects. Both are
 # pinned to 4.10.3 (bump together).
 #

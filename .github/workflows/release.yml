@@ -7,7 +7,7 @@
 # -SNAPSHOT; the tag is the single source of truth for the release version, applied with versions:set.
 #
 # To cut a release: update CHANGELOG.md (move Unreleased -> the new version), then:
-#   git tag -a v0.1.0 -m "midpoint-diff 0.1.0" && git push origin v0.1.0
+#   git tag -a v0.1.0 -m "midgie 0.1.0" && git push origin v0.1.0
 name: Release
 
 on:
@@ -46,7 +46,7 @@ jobs:
         run: mvn -B -ntp verify
 
       - name: Name the artifact with the version
-        run: cp target/midpoint-diff.jar "midpoint-diff-${VERSION}.jar"
+        run: cp target/midgie.jar "midgie-${VERSION}.jar"
 
       - name: Extract release notes from CHANGELOG.md
         run: |
@@ -62,7 +62,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: midpoint-diff ${{ env.VERSION }}
+          name: midgie ${{ env.VERSION }}
           body_path: release-notes.md
-          files: midpoint-diff-${{ env.VERSION }}.jar
+          files: midgie-${{ env.VERSION }}.jar
           fail_on_unmatched_files: true
