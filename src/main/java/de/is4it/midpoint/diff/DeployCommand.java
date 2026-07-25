@@ -199,7 +199,7 @@ public class DeployCommand implements Callable<Integer> {
             SchemaSupport.register(prismContext, schemaMap);
 
             List<String> warnings = new ArrayList<>(scan.warnings());
-            List<DeployObject> objects = DeployObject.group(parseObjects(prismContext, scan, warnings));
+            List<DeployObject> objects = DeployObject.group(parseObjects(prismContext, scan, warnings), warnings);
 
             List<SchemaFile> deployableSchemas = scan.schemas().stream()
                     .filter(SchemaFile::deployable).collect(Collectors.toList());

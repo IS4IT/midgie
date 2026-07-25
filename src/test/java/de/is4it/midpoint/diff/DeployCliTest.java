@@ -97,6 +97,21 @@ class DeployCliTest {
     }
 
     @Test
+    void multiValuedFragmentsSharingAContainerAreWarned(@TempDir Path dir) throws IOException {
+        // Two fragments of one role each add to the multi-valued <inducement> — not a contradiction, but
+        // file-by-file apply would clobber it under the default (replace), so it is warned (not fatal).
+        String oid = "11111111-0000-0000-0e00-000000000004";
+        write(dir, "a.xml", role(oid, "Shared",
+                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fa\" type=\"c:RoleType\"/></inducement>"));
+        write(dir, "b.xml", role(oid, "Shared",
+                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fb\" type=\"c:RoleType\"/></inducement>"));
+        Result r = run("deploy", dir.toString());
+        assertEquals(0, r.exit, r.err);
+        assertTrue(r.err.contains("multi-valued 'inducement'"), r.err);
+        assertTrue(r.err.contains("last-one-wins") && r.err.contains("multivalue=merge"), r.err);
+    }
+
+    @Test
     void differentTypesUnderOneOidAreAnError(@TempDir Path dir) throws IOException {
         String oid = "11111111-0000-0000-0e00-000000000002";
         write(dir, "a.xml", role(oid, "Foo", ""));
