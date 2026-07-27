@@ -202,7 +202,7 @@ public class InitCommand implements Callable<Integer> {
                 continue;
             }
             String selector = object.getCompileTimeClass().getSimpleName() + "/"
-                    + (object.getName() != null ? object.getName().getOrig() : "?");
+                    + escapeSlashes(object.getName() != null ? object.getName().getOrig() : "?");
             keyedByObject.computeIfAbsent(selector, key -> new LinkedHashMap<>()).putAll(keyed);
         }
 
@@ -224,10 +224,10 @@ public class InitCommand implements Callable<Integer> {
             out.append("\n# Nothing in this tree addresses a keyed multi-valued container, so no rules are needed.\n");
         }
         for (Map.Entry<String, Map<String, String>> entry : keyedByObject.entrySet()) {
-            out.append('\n').append(entry.getKey()).append("  equivalence=natural-keys\n");
+            out.append('\n').append(quoteIfNeeded(entry.getKey())).append("  equivalence=natural-keys\n");
             for (Map.Entry<String, String> keyed : entry.getValue().entrySet()) {
                 out.append("#   key: ").append(keyed.getValue()).append('\n')
-                        .append(entry.getKey()).append('/').append(keyed.getKey())
+                        .append(quoteIfNeeded(entry.getKey() + "/" + keyed.getKey()))
                         .append("  multivalue=merge\n");
             }
         }
@@ -239,6 +239,22 @@ public class InitCommand implements Callable<Integer> {
                         ? " — nothing in this tree needs tuning, so it is a comment-only file."
                         : " — review it, then pass it as 'deploy --policy " + writePolicy + "'."));
         return 0;
+    }
+
+    /**
+     * Write a selector in a form {@code Policy.load} reads back.
+     *
+     * <p>Object names are emitted verbatim, and midPoint allows characters the selector grammar gives its
+     * own meaning to: a {@code /} reads as another path segment, and a {@code =} can start the settings.
+     * Without this, midgie could generate a policy file midgie then refuses to load.
+     */
+    private static String quoteIfNeeded(String selector) {
+        return (selector.indexOf('=') >= 0) ? "\"" + selector + "\"" : selector;
+    }
+
+    /** A {@code /} inside an object name is escaped, since the selector itself is a /-separated path. */
+    private static String escapeSlashes(String name) {
+        return name.replace("/", "\\/");
     }
 
     private void status(String message) {

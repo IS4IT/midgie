@@ -57,7 +57,47 @@ public final class MidpointRestClient {
         }
     }
 
+    /**
+     * The connection never came up, or gave up waiting: no HTTP status, nothing to classify by code.
+     *
+     * <p>A type rather than a message prefix, because callers do act on it — {@code SchemaOptions} stays
+     * quiet about a failed schema read when the object fetch is about to report the same transport problem.
+     * Matching on the message text made rewording an error message a silent behaviour change.
+     */
+    public static final class TransportException extends IOException {
+        TransportException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     private static final Duration RETRY_MAX_DELAY = Duration.ofSeconds(30);
+
+    /**
+     * Whether hostname verification has been switched off for this process, or {@code null} while undecided.
+     *
+     * <p>It is a single process-wide decision, not a per-client one: the JDK reads
+     * {@code jdk.internal.httpclient.disableHostnameVerification} exactly once, into a {@code static final},
+     * on first use of {@code java.net.http}. Setting it from whichever client happened to be built first
+     * meant the flag worked only by accident of call order — a client built after any earlier request would
+     * silently keep verification on, and every client built after an {@code --insecure} one would silently
+     * have it off. {@link #latchHostnameVerification} makes the decision once, before any client exists.
+     */
+    private static Boolean hostnameVerificationDisabled;
+
+    /**
+     * Fix the process-wide hostname-verification decision. Called from {@code Main} before any client is
+     * built; the first call wins and later ones are ignored, so the constructor can only ever observe it.
+     */
+    static synchronized void latchHostnameVerification(boolean disabled) {
+        if (hostnameVerificationDisabled != null) {
+            return;
+        }
+        hostnameVerificationDisabled = disabled;
+        if (disabled) {
+            System.setProperty("jdk.internal.httpclient.disableHostnameVerification", "true");
+        }
+        LOG.debug("hostname verification {} for this process", disabled ? "disabled" : "enabled");
+    }
 
     /** Timeout / retry / TLS knobs for the client (fluent setters; sensible defaults). */
     public static final class Config {
@@ -129,10 +169,21 @@ public final class MidpointRestClient {
 
         HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(config.connectTimeout);
         if (config.insecure) {
-            // "insecure" must mean insecure: trust any cert AND skip hostname verification. The latter
-            // is only honoured by java.net.http via this system property.
-            System.setProperty("jdk.internal.httpclient.disableHostnameVerification", "true");
+            // "insecure" must mean insecure: trust any cert AND skip hostname verification. The latter is
+            // only honoured by java.net.http via a system property the JDK reads once — see the latch.
+            latchHostnameVerification(true);
+            if (!Boolean.TRUE.equals(hostnameVerificationDisabled)) {
+                throw new IllegalStateException("--insecure cannot be honoured: hostname verification was "
+                        + "already fixed for this process before this connection was built. The JDK reads "
+                        + "that setting once, so it has to be decided before any client exists.");
+            }
             builder.sslContext(trustAllSslContext());
+        } else if (Boolean.TRUE.equals(hostnameVerificationDisabled)) {
+            System.err.println("midgie: warning: hostname verification is off for this process because "
+                    + "--insecure was requested; this connection cannot turn it back on.");
+            if (config.caCert != null) {
+                builder.sslContext(caCertSslContext(config.caCert));
+            }
         } else if (config.caCert != null) {
             builder.sslContext(caCertSslContext(config.caCert));
         }
@@ -289,10 +340,11 @@ public final class MidpointRestClient {
                     continue;
                 }
                 if (e instanceof java.net.ConnectException) {
-                    throw new IOException(what + " — cannot connect to " + restBase
+                    throw new TransportException(what + " — cannot connect to " + restBase
                             + " (is the server up and the URL correct? " + e.getMessage() + ")", e);
                 }
-                throw new IOException(what + " — timed out talking to " + restBase + " (" + e.getMessage() + ")", e);
+                throw new TransportException(what + " — timed out talking to " + restBase
+                        + " (" + e.getMessage() + ")", e);
             } catch (javax.net.ssl.SSLException e) {
                 // The commonest TLS misconfiguration is a private CA with no --cacert. The raw JDK message
                 // ("PKIX path building failed ...") names neither the server nor the flags that fix it.

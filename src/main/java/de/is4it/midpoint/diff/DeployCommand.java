@@ -330,6 +330,8 @@ public class DeployCommand implements Callable<Integer> {
                 note("warning: --prune has nothing to compare against, so nothing will be removed.");
             }
 
+            reportUnmatchedPolicyRules();
+
             Integer exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
 
             // Prune after the tree is applied, so the desired state lands first and only leftovers go.
@@ -495,6 +497,16 @@ public class DeployCommand implements Callable<Integer> {
                 + removalDisposition() + ":");
         for (RemovalDetector.Removal removal : removals) {
             note("  " + removal.objectLabel + "  " + removal);
+        }
+    }
+
+    /** Name the policy lines that applied to nothing, so a typo is not mistaken for a rule that ran. */
+    private void reportUnmatchedPolicyRules() {
+        if (policy == null) {
+            return;
+        }
+        for (String rule : policy.unmatchedRules()) {
+            note("note: policy rule matched no object in this tree: " + rule);
         }
     }
 

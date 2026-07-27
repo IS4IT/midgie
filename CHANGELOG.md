@@ -32,6 +32,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A file that claims to be a midPoint object and cannot be parsed fails the run** instead of being skipped with an advisory that `--quiet` then hid, which let a pipeline go green with an object never deployed.
 - **An interrupted `--plan` cannot be replayed as if it were whole.** Plan directories are marked incomplete while they are written; `--apply-plan` refuses one still carrying the marker rather than applying part of a tree and reporting success.
 - **Credentials embedded in the server URL are stripped.** `java.net.http` accepts them and never authenticates with them, so they only ever travelled — into the connection errors printed regardless of `--quiet`, the debug log, and the confirmation prompts.
+- **`--insecure` is decided once per process**, before any client exists. The JDK reads the hostname-verification property once, on first use of `java.net.http`, so leaving it to whichever client was built first made the flag depend on call order — and left it silently off for every later connection.
+- **A single file is no longer keyed by the tree it sits in.** `deploy config/roles/x.xml` recorded the whole `config` tree as applied at that revision, so the next full deploy compared against a point at which most of it was never applied.
 - Also: an `oid:` policy selector outranks a type-wide rule; a colon in an object name is part of the name; policy rules outrank the CLI flags they are meant to override; a cycle is broken only at a node that is on one; `init --write-policy` no longer discards the schema it read from the server; overlapping `PATH` arguments are deduplicated; `-o` and plan files are created owner-only; and a TLS handshake failure names `--cacert` and `--insecure` instead of surfacing a bare PKIX message.
 
 ### Changed
@@ -40,6 +42,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`--apply-plan` rejects flags it does not read** (`--prune`, `--policy`, `-c`, `-m`, and `PATH`), and `--plan` rejects `--dry-run`/`--retry`, instead of silently ignoring them.
 - **A `--schema` file or `--schema-dir` that does not exist is an error.** A typo'd path used to produce a delta computed without that schema, with the affected items diffed as raw.
 - **The partial-declaration warning counts matched live values**, not desired ones; the old wording mixed denominators and could print sums that did not add up.
+- **A policy selector can express an awkward object name**: quote it when the name contains `=`, escape a `/` inside a name. Only a known knob starts the settings now, so `OrgType/ou=people scope=full` parses. `init --write-policy` emits both forms, closing a round trip where midgie could generate a policy file midgie then refused to load.
+- **`deploy` names any policy line that matched nothing**, instead of letting a typo'd selector resolve silently to the CLI baseline.
+- Transport failures are a typed exception rather than a message prefix other code matched on, so rewording an error is no longer a behaviour change.
 - The rig's containers bind to loopback, and all GitHub Actions are pinned to commit SHAs.
 
 ## [0.3.1] - 2026-07-27

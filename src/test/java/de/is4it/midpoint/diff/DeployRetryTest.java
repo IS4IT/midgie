@@ -145,13 +145,22 @@ class DeployRetryTest {
         }
     }
 
-    private static String searchResult(String oid) {
+    /**
+     * The object the stub "server" holds. Never swallows a failure: an empty result means "absent", and
+     * without --create-if-absent an absent object fails the unit — the very outcome
+     * {@code withoutRetryAFlakyUnitFailsTheRun} asserts. A broken stub would have disguised itself as the
+     * expected failure and the test would have passed having exercised nothing.
+     */
+    private static String searchResult(String oid) throws IOException {
         try {
             ObjectListType list = new ObjectListType();
             list.getObject().add((ObjectType) prismContext.parseObject(role(oid, "old")).asObjectable());
             return prismContext.xmlSerializer().serializeRealValue(list, new QName(NS_API, "objectList"));
         } catch (Exception e) {
-            return "<objectList xmlns=\"" + NS_API + "\"/>";
+            // Fail the request rather than answering "no such object": absent is exactly what
+            // withoutRetryAFlakyUnitFailsTheRun expects to see, so a broken stub used to pass that test
+            // having served nothing and never reached the retry machinery at all.
+            throw new IOException("stub could not build the search response", e);
         }
     }
 

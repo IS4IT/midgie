@@ -49,12 +49,15 @@ final class Policy {
         final boolean itemLevel;
         final Map<String, String> settings;
         final int order;
+        final String source;    // the line as written, for the "matched nothing" report
+        boolean matched;
 
-        Rule(GlobPath selector, boolean itemLevel, Map<String, String> settings, int order) {
+        Rule(GlobPath selector, boolean itemLevel, Map<String, String> settings, int order, String source) {
             this.selector = selector;
             this.itemLevel = itemLevel;
             this.settings = settings;
             this.order = order;
+            this.source = source;
         }
     }
 
@@ -86,22 +89,49 @@ final class Policy {
     }
 
     private static Rule parseLine(String line, int lineNumber, int order) throws IOException {
-        String[] tokens = line.split("\\s+");
-        int firstSetting = -1;
-        for (int i = 0; i < tokens.length; i++) {
-            if (tokens[i].indexOf('=') > 0) { // the first key=value token starts the settings
-                firstSetting = i;
-                break;
+        String selectorText;
+        String settingsText;
+        if (line.startsWith("\"")) {
+            // A quoted selector, for a name holding a character the bare form cannot express: '=' would
+            // otherwise start the settings, and '/' would read as another path segment. midPoint names do
+            // contain both (an org named 'ou=people'), and 'init --write-policy' emits names verbatim, so
+            // without quoting midgie could generate a policy file midgie then refuses to load.
+            int close = line.indexOf('"', 1);
+            if (close < 0) {
+                throw new IOException("policy line " + lineNumber + " has an unterminated quoted selector: "
+                        + line);
             }
+            selectorText = line.substring(1, close).strip();
+            settingsText = line.substring(close + 1).strip();
+        } else {
+            String[] tokens = line.split("\\s+");
+            int firstSetting = -1;
+            for (int i = 0; i < tokens.length; i++) {
+                // Only a known knob starts the settings: an object name may contain '=' too, and treating
+                // any '=' token as a setting made 'OrgType/ou=people scope=full' fail with a message about
+                // the line's shape rather than about the name.
+                int eq = tokens[i].indexOf('=');
+                if (eq > 0 && KNOWN_KNOBS.contains(tokens[i].substring(0, eq).toLowerCase())) {
+                    firstSetting = i;
+                    break;
+                }
+            }
+            if (firstSetting <= 0) {
+                throw new IOException("policy line " + lineNumber + " must be '<selector> <key=value>…' with "
+                        + "a known knob (scope, multivalue, equivalence, allow-inplace-merge); quote the "
+                        + "selector if the object name contains '=' or '/': " + line);
+            }
+            // The selector is everything before the first setting, so an object name may contain spaces.
+            selectorText = String.join(" ", Arrays.copyOfRange(tokens, 0, firstSetting)).strip();
+            settingsText = String.join(" ", Arrays.copyOfRange(tokens, firstSetting, tokens.length)).strip();
         }
-        if (firstSetting <= 0) {
-            throw new IOException("policy line " + lineNumber + " must be '<selector> <key=value>…': " + line);
-        }
-        // The selector is everything before the first setting, so an object name may contain spaces. A
-        // trailing ':' (a readability separator) is dropped.
-        String selectorText = String.join(" ", Arrays.copyOfRange(tokens, 0, firstSetting)).strip();
+        // A trailing ':' (a readability separator) is dropped.
         if (selectorText.endsWith(":")) {
             selectorText = selectorText.substring(0, selectorText.length() - 1).strip();
+        }
+        String[] settingTokens = settingsText.isEmpty() ? new String[0] : settingsText.split("\\s+");
+        if (settingTokens.length == 0) {
+            throw new IOException("policy line " + lineNumber + " has a selector but no settings: " + line);
         }
         // The leading Type/Name segments name an object, so 'prefix:' stripping must not reach them.
         GlobPath selector = GlobPath.parse(selectorText, identityDepth(selectorText));
@@ -111,8 +141,7 @@ final class Policy {
         boolean itemLevel = isItemLevel(selectorText, selector);
 
         Map<String, String> settings = new LinkedHashMap<>();
-        for (int i = firstSetting; i < tokens.length; i++) {
-            String token = tokens[i];
+        for (String token : settingTokens) {
             int eq = token.indexOf('=');
             if (eq <= 0 || eq == token.length() - 1) {
                 throw new IOException("policy line " + lineNumber + " setting must be key=value: " + token);
@@ -133,7 +162,7 @@ final class Policy {
             }
             settings.put(key, value);
         }
-        return new Rule(selector, itemLevel, settings, order);
+        return new Rule(selector, itemLevel, settings, order, line.strip());
     }
 
     /**
@@ -208,12 +237,16 @@ final class Policy {
                 if (multivalue != null) {
                     itemRules.add(new DiffEngine.MultiValueStrategy.PathRule(
                             rule.selector, Boolean.TRUE.equals(mergeByName(multivalue)), true));
+                    if (couldMatchIdentity(rule.selector, identity)) {
+                        rule.matched = true;
+                    }
                 }
                 continue;
             }
             if (!matchesIdentity(rule.selector, identity)) {
                 continue;
             }
+            rule.matched = true;
             if (rule.settings.containsKey("scope") && (scopeRule == null || moreSpecific(rule, scopeRule))) {
                 scope = StrategyOptions.scopeByName(rule.settings.get("scope"));
                 scopeRule = rule;
@@ -239,6 +272,34 @@ final class Policy {
         DiffEngine.MultiValueStrategy multiValue =
                 DiffEngine.MultiValueStrategy.of(globalMerge, itemRules, identity);
         return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace);
+    }
+
+    /**
+     * Policy lines that were never offered to any object in this run.
+     *
+     * <p>Worth saying out loud: a typo'd type, a renamed object or a mangled selector resolves silently to
+     * the CLI baseline, so a {@code multivalue=merge} rule written to protect accrued values quietly becomes
+     * replace and the deploy deletes them. Nothing in the output distinguished that from a rule that
+     * applied.
+     */
+    List<String> unmatchedRules() {
+        List<String> unmatched = new ArrayList<>();
+        for (Rule rule : rules) {
+            if (!rule.matched) {
+                unmatched.add(rule.source);
+            }
+        }
+        return unmatched;
+    }
+
+    /** Whether an item-level selector's leading identity segments can apply to this object at all. */
+    private static boolean couldMatchIdentity(GlobPath selector, List<List<String>> identity) {
+        for (List<String> prefix : identity) {
+            if (selector.matchesPrefix(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean matchesIdentity(GlobPath selector, List<List<String>> identity) {

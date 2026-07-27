@@ -265,16 +265,26 @@ class RemovalDetectorTest {
         return GitRevision.of(dir.toFile()).head();
     }
 
+    /**
+     * Run a command in {@code dir}, bounded and without orphaning the child — the production code guards
+     * both (see {@code GitRevision.run}). An unbounded waitFor hangs the whole build until CI's wall clock
+     * gives up, and the exception path used to leave the process running.
+     */
     private static int run(Path dir, String... command) throws Exception {
+        Process process = null;
         try {
-            Process process = new ProcessBuilder(command)
+            process = new ProcessBuilder(command)
                     .directory(dir.toFile())
                     .redirectErrorStream(true)
                     .start();
             process.getInputStream().readAllBytes();
-            return process.waitFor();
+            return process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS) ? process.exitValue() : -1;
         } catch (java.io.IOException e) {
-            return -1;
+            return -1; // no git on this machine
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
         }
     }
 }

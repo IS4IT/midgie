@@ -46,7 +46,7 @@ final class GlobPath {
     static GlobPath parse(String text, int identitySegments) {
         List<String> segs = new ArrayList<>();
         int index = 0;
-        for (String raw : text.split("/")) {
+        for (String raw : splitOnUnescapedSlash(text)) {
             String seg = raw.trim();
             if (seg.isEmpty()) {
                 continue;
@@ -55,6 +55,32 @@ final class GlobPath {
             index++;
         }
         return new GlobPath(segs);
+    }
+
+    /**
+     * Split on {@code /}, honouring {@code \/} as a literal slash.
+     *
+     * <p>A selector is a {@code /}-separated path, so an object whose name contains a slash — midPoint
+     * allows it — cannot be written plainly without reading as one more path segment. Escaping is the only
+     * unambiguous way to say which is meant.
+     */
+    private static List<String> splitOnUnescapedSlash(String text) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\\' && i + 1 < text.length() && text.charAt(i + 1) == '/') {
+                current.append('/');
+                i++;
+            } else if (c == '/') {
+                parts.add(current.toString());
+                current.setLength(0);
+            } else {
+                current.append(c);
+            }
+        }
+        parts.add(current.toString());
+        return parts;
     }
 
     /** An all-literal glob from an item path's local names — for exact {@code --path} rules. */
@@ -110,6 +136,29 @@ final class GlobPath {
             }
         }
         return dp[n][m];
+    }
+
+    /**
+     * Whether this glob could still match something that <em>starts</em> with {@code prefix}.
+     *
+     * <p>Used to tell an item-level policy rule that is simply about another object from one that is about
+     * this object but names a container it does not have: only the second is worth reporting as applied.
+     */
+    boolean matchesPrefix(List<String> prefix) {
+        int i = 0;
+        for (String segment : segments) {
+            if (GLOBSTAR.equals(segment)) {
+                return true; // ** can absorb anything that follows, including the whole prefix
+            }
+            if (i == prefix.size()) {
+                return true; // the glob is longer than the prefix and matched it so far
+            }
+            if (!STAR.equals(segment) && !segment.equals(prefix.get(i))) {
+                return false;
+            }
+            i++;
+        }
+        return i >= prefix.size();
     }
 
     /**

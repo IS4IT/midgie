@@ -89,6 +89,27 @@ public class Main implements java.util.concurrent.Callable<Integer> {
     }
 
     public static void main(String[] args) {
+        // Before anything can build an HttpClient: the JDK reads the hostname-verification property once,
+        // on first use of java.net.http, so leaving the decision to whichever client is constructed first
+        // makes --insecure depend on call order rather than on the flag.
+        MidpointRestClient.latchHostnameVerification(insecureRequested(args));
         System.exit(commandLine().execute(args));
+    }
+
+    /**
+     * Whether {@code --insecure} appears among the options. Read straight off the argument list because the
+     * decision has to be made before picocli runs a command, and a command is what would build the client.
+     * Anything after a {@code --} separator is a positional argument, not an option.
+     */
+    static boolean insecureRequested(String[] args) {
+        for (String arg : args) {
+            if ("--".equals(arg)) {
+                return false;
+            }
+            if ("--insecure".equals(arg)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

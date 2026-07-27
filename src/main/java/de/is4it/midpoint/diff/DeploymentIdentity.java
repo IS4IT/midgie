@@ -49,11 +49,20 @@ final class DeploymentIdentity {
      * the key is derived from git. Never throws — an underivable identity is a normal outcome.
      */
     static DeploymentIdentity of(File tree, String appOverride) {
-        File dir = (tree != null && tree.isFile()) ? tree.getParentFile() : tree;
+        boolean singleFile = tree != null && tree.isFile();
+        File dir = singleFile ? tree.getParentFile() : tree;
         if (dir == null) {
             dir = new File(".");
         }
         GitRevision git = GitRevision.of(dir);
+        if (singleFile && (appOverride == null || appOverride.isBlank())) {
+            // Deploying one file is not deploying the tree it sits in. Deriving the parent directory's
+            // identity would record the whole tree as applied at this revision, so the next full deploy
+            // would compare against a point at which most of it was never applied and miss every removal
+            // made in between. --app can still name such a deployment deliberately.
+            return unavailable("a single file is being deployed, not a tree, so it has no deployment "
+                    + "identity of its own — deploy its directory, or pass --app to name it", git);
+        }
 
         // History is checked before the override, not after. --app replaces the *key*, but recovering
         // last-applied still reads the previous revision out of git, so without usable history a named

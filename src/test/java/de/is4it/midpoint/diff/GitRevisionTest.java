@@ -64,6 +64,23 @@ class GitRevisionTest {
     }
 
     @Test
+    void asingleFileHasNoIdentityOfItsOwn(@TempDir Path dir) throws Exception {
+        // Deploying one file is not deploying its directory. Keying it by the parent tree would record the
+        // whole tree as applied at this revision, so the next full deploy would compare against a point at
+        // which most of it was never applied and miss every removal made in between.
+        Files.writeString(dir.resolve("role.xml"), "<x/>", StandardCharsets.UTF_8);
+        Assumptions.assumeTrue(initRepository(dir), "git is not usable here");
+
+        DeploymentIdentity file = DeploymentIdentity.of(dir.resolve("role.xml").toFile(), null);
+        assertFalse(file.isAvailable(), "a single file must not inherit the tree's identity");
+        assertTrue(file.unavailableReason().contains("--app"), file.unavailableReason());
+
+        assertTrue(DeploymentIdentity.of(dir.toFile(), null).isAvailable(), "the directory still has one");
+        assertEquals("my-app", DeploymentIdentity.of(dir.resolve("role.xml").toFile(), "my-app").key(),
+                "and --app can name such a deployment deliberately");
+    }
+
+    @Test
     void identityIsDerivedFromTheRootCommitAndTreePath(@TempDir Path dir) throws Exception {
         // The derivation must be root-commit based, so every clone and remote agrees on it. Build a tiny
         // repository with a sub-tree and check the key is <root>/<prefix> and stable across calls.
@@ -140,16 +157,26 @@ class GitRevisionTest {
         return run(dir, "git", "commit", "-qm", "initial") == 0;
     }
 
+    /**
+     * Run a command in {@code dir}, bounded and without orphaning the child — the production code guards
+     * both (see {@code GitRevision.run}). An unbounded waitFor hangs the whole build until CI's wall clock
+     * gives up, and the exception path used to leave the process running.
+     */
     private static int run(Path dir, String... command) throws Exception {
+        Process process = null;
         try {
-            Process process = new ProcessBuilder(command)
+            process = new ProcessBuilder(command)
                     .directory(dir.toFile())
                     .redirectErrorStream(true)
                     .start();
             process.getInputStream().readAllBytes();
-            return process.waitFor();
+            return process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS) ? process.exitValue() : -1;
         } catch (java.io.IOException e) {
             return -1; // no git on this machine
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
         }
     }
 

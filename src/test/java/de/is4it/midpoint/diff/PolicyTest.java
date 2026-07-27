@@ -176,6 +176,44 @@ class PolicyTest {
     }
 
     @Test
+    void anObjectNameMayContainEqualsAndSlashWhenQuoted(@TempDir Path dir) throws Exception {
+        // midPoint names really do contain both: an org named 'ou=people', a role named 'App / Admin'.
+        // Unquoted, '=' started the settings and '/' read as another path segment, so the error message
+        // described the shape of the line rather than the name — and init --write-policy, which emits names
+        // verbatim, could generate a file Policy.load then refused.
+        Policy equals = load(dir, "\"OrgType/ou=people\" scope=full");
+        assertEquals(DiffEngine.Scope.FULL, equals.resolveFor("OrgType", "ou=people", OID, baseline()).scope);
+
+        // A slash inside a name is escaped, since the selector itself is a /-separated path.
+        Policy slash = load(dir, "\"RoleType/App \\/ Admin\" scope=full");
+        assertEquals(DiffEngine.Scope.FULL, slash.resolveFor("RoleType", "App / Admin", OID, baseline()).scope);
+        assertEquals(DiffEngine.Scope.PRESENT, slash.resolveFor("RoleType", "App", OID, baseline()).scope);
+    }
+
+    @Test
+    void aSettingIsOnlyASettingWhenItsKeyIsAKnownKnob(@TempDir Path dir) throws Exception {
+        // Unquoted names containing '=' still work as long as the part before it is not a knob.
+        Policy policy = load(dir, "OrgType/ou=people scope=full");
+        assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("OrgType", "ou=people", OID, baseline()).scope);
+    }
+
+    @Test
+    void aRuleThatMatchesNothingIsReported(@TempDir Path dir) throws Exception {
+        // A typo'd type or a renamed object resolves silently to the CLI baseline, so a merge rule written
+        // to protect accrued values quietly becomes replace and the deploy deletes them.
+        Policy policy = load(dir, "RoleType/Manager scope=full", "Role/Typo scope=full",
+                "**/assignment multivalue=merge");
+        policy.resolveFor("RoleType", "Manager", OID, baseline());
+
+        assertTrue(policy.unmatchedRules().stream().anyMatch(r -> r.contains("Role/Typo")),
+                "the typo must be named: " + policy.unmatchedRules());
+        assertFalse(policy.unmatchedRules().stream().anyMatch(r -> r.contains("RoleType/Manager")),
+                "the rule that applied must not be: " + policy.unmatchedRules());
+        assertFalse(policy.unmatchedRules().stream().anyMatch(r -> r.contains("assignment")),
+                "nor an item rule offered to a matching object: " + policy.unmatchedRules());
+    }
+
+    @Test
     void objectOnlyKnobOnAnItemSelectorIsRejected(@TempDir Path dir) {
         IOException ex = assertThrows(IOException.class, () -> load(dir, "**/assignment scope=full"));
         assertTrue(ex.getMessage().contains("object-only knob"), ex.getMessage());

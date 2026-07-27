@@ -295,7 +295,9 @@ class LiveIntegrationTest {
                 "--create-if-absent", "--plan", plan.toString());
         assertEquals(1, planned.exit, planned.err);
         assertFalse(exists("roles", DEPLOY_ROLE_OID), "--plan must not write to the server");
-        assertTrue(Files.list(plan).anyMatch(p -> p.toString().endsWith(".create.xml")), "expected create files");
+        try (java.util.stream.Stream<Path> files = Files.list(plan)) {
+            assertTrue(files.anyMatch(p -> p.toString().endsWith(".create.xml")), "expected create files");
+        }
 
         // --apply-plan replays them: the role (lower sequence) is POSTed before the user that assigns it.
         CliResult applied = run("deploy", "--apply-plan", plan.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");

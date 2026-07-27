@@ -203,7 +203,6 @@ public final class SchemaOptions {
             int code = restException.statusCode();
             return code == 401 || (code >= 300 && code < 400);
         }
-        String message = e.getMessage();
-        return message != null && (message.contains("cannot connect") || message.contains("timed out"));
+        return e instanceof MidpointRestClient.TransportException;
     }
 }
