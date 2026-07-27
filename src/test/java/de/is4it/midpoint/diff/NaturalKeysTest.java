@@ -51,6 +51,30 @@ class NaturalKeysTest {
     }
 
     @Test
+    void halfOfACompositeKeyDoesNotCount() throws Exception {
+        // ResourceObjectTypeDefinitionType is keyed by kind + intent, and getConstituents() returns only the
+        // constituents actually present — so counting them without comparing against the declared set let a
+        // value carrying just <kind> pass as keyed. It would then match every objectType of that kind, and
+        // the warning that would have explained the outcome never fired.
+        PrismObject<?> partial = prismContext.parseObject(resource("<kind>account</kind>"));
+        assertFalse(NaturalKeys.keyedContainers(partial).containsKey("schemaHandling/objectType"),
+                "kind alone cannot discriminate: " + NaturalKeys.keyedContainers(partial));
+
+        PrismObject<?> whole = prismContext.parseObject(
+                resource("<kind>account</kind><intent>default</intent>"));
+        assertTrue(NaturalKeys.keyedContainers(whole).containsKey("schemaHandling/objectType"),
+                "kind + intent does: " + NaturalKeys.keyedContainers(whole));
+    }
+
+    private static String resource(String objectTypeBody) {
+        return "<resource xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\""
+                + " oid=\"33333333-3333-3333-3333-333333333333\">\n"
+                + "  <name>Example Resource</name>\n"
+                + "  <schemaHandling><objectType>" + objectTypeBody + "</objectType></schemaHandling>\n"
+                + "</resource>";
+    }
+
+    @Test
     void aFilledKeyIsSuggestedWithItsConstituents() throws Exception {
         PrismObject<?> user = prismContext.parseObject(
                 "<user xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\" oid=\"22222222-2222-2222-2222-222222222222\">\n"

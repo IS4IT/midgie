@@ -549,6 +549,51 @@ class DiffCommandTest {
                 "and the fallback to replace must be reported: " + result.mergeFallbackPaths());
     }
 
+    @Test
+    void aMergeRuleOnANestedContainerArmsTheAccruedGuard(@TempDir Path dir) throws Exception {
+        // The guard used to read only the outermost container of the delta path, while applyMerge matches
+        // the full id-free path. A merge rule on a *nested* container therefore dropped that container's
+        // deletes without ever arming the refusal, so an accrued value was overwritten in silence — with a
+        // rule that names exactly the container being clobbered.
+        File desired = write(dir, "desired.xml", sysconfigPanel("Desired label"));
+        File live = write(dir, "live.xml", sysconfigLivePanels());
+
+        DiffEngine.DiffResult result = engine().diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.of(false, List.of(new DiffEngine.MultiValueStrategy.PathRule(
+                        ItemPath.fromString("adminGuiConfiguration/objectDetails/objectDetailsPage/panel"),
+                        true))));
+
+        assertFalse(result.accruedInPlaceEditPaths().isEmpty(),
+                "a merge rule on the nested container must arm the guard: " + result.delta());
+    }
+
+    private static String sysconfigPanel(String label) {
+        return "<systemConfiguration xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"44444444-4444-4444-4444-444444444444\">\n"
+                + "  <name>SystemConfiguration</name>\n"
+                + "  <adminGuiConfiguration><objectDetails><objectDetailsPage>\n"
+                + "    <type>c:UserType</type>\n"
+                + "    <panel><display><label>" + label + "</label></display></panel>\n"
+                + "  </objectDetailsPage></objectDetails></adminGuiConfiguration>\n"
+                + "</systemConfiguration>";
+    }
+
+    /** The live object: the managed panel plus one accrued alongside it, both carrying container ids. */
+    private static String sysconfigLivePanels() {
+        return "<systemConfiguration xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"44444444-4444-4444-4444-444444444444\">\n"
+                + "  <name>SystemConfiguration</name>\n"
+                + "  <adminGuiConfiguration><objectDetails><objectDetailsPage id=\"1\">\n"
+                + "    <type>c:UserType</type>\n"
+                + "    <panel id=\"10\"><display><label>Set in the GUI</label></display></panel>\n"
+                + "    <panel id=\"11\"><identifier>basic</identifier></panel>\n"
+                + "  </objectDetailsPage></objectDetails></adminGuiConfiguration>\n"
+                + "</systemConfiguration>";
+    }
+
     private static String resource(String connectorOid) {
         return "<resource xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
                 + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""

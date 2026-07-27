@@ -48,13 +48,25 @@ final class NaturalKeys {
     }
 
     /**
-     * Whether {@code value} actually carries the key's constituents. A key absent from both sides compares
-     * vacuously equal and would match everything, so "declared" is not enough — it has to be filled in.
+     * Whether {@code value} actually carries <em>all</em> of the key's constituents. A key absent from both
+     * sides compares vacuously equal and would match everything, so "declared" is not enough — it has to be
+     * filled in.
+     *
+     * <p>All of them, because {@code getConstituents} returns only the ones present in the value: a value
+     * carrying half a composite key would otherwise pass and then match on that half alone. midPoint's
+     * most-edited keyed container is exactly composite — {@code ResourceObjectTypeDefinitionType} is keyed
+     * by {@code kind + intent}, and omitting {@code <intent>} in a hand-written {@code schemaHandling}
+     * fragment is routine.
      */
     static boolean carries(NaturalKeyDefinition key, PrismContainerValue<?> value) {
         try {
+            ItemDefinition<?> definition = (value != null) ? value.getDefinition() : null;
+            List<QName> declared = (definition != null) ? definition.getNaturalKeyConstituents() : null;
+            if (declared == null || declared.isEmpty()) {
+                return false;
+            }
             Collection<Item<?, ?>> constituents = key.getConstituents(value);
-            if (constituents == null || constituents.isEmpty()) {
+            if (constituents == null || constituents.size() != declared.size()) {
                 return false;
             }
             for (Item<?, ?> constituent : constituents) {

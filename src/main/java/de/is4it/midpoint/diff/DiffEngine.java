@@ -274,27 +274,51 @@ public final class DiffEngine {
             PrismObject<?> live, MultiValueStrategy multiValue) {
         List<String> flagged = new ArrayList<>();
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
-            List<QName> containerNames = new ArrayList<>();
-            Long valueId = null;
-            for (Object segment : mod.getPath().getSegments()) {
-                if (ItemPath.isId(segment)) {
-                    valueId = ItemPath.toId(segment);
-                    break;
-                }
-                if (!ItemPath.isName(segment)) {
-                    break;
-                }
-                containerNames.add(ItemPath.toName(segment));
-            }
-            if (valueId == null || containerNames.isEmpty()) {
-                continue; // no container-id segment: a clean whole-value add/delete, not a paired in-place edit
-            }
-            ItemPath containerPath = ItemPath.create(containerNames.toArray());
-            if (multiValue.isMerge(containerPath) && !desiredDeclaresValueAt(desired, live, mod.getPath())) {
+            if (accruedEditLevel(mod.getPath(), desired, live, multiValue) != null) {
                 flagged.add(mod.getPath().toString());
             }
         }
         return flagged;
+    }
+
+    /**
+     * The path prefix at which this delta edits an accrued value inside a merged container, or {@code null}
+     * when it does not.
+     *
+     * <p><b>Every</b> container the path descends into is examined, not just the outermost one. A delta path
+     * can cross several multi-valued containers ({@code adminGuiConfiguration/objectDetails/
+     * objectDetailsPage/1/panel/10/display/label}), and merge can be requested at any of them — a
+     * {@code --path} rule or a {@code --policy} selector naming the inner container is explicitly supported,
+     * and {@link #applyMerge} honours it at the full id-free path. Testing only the outermost level meant
+     * such a rule dropped that container's deletes without ever arming this refusal.
+     *
+     * <p>Each merged level is judged at <em>its own</em> depth: the question is whether desired declares the
+     * value being edited <em>at that level</em>. A level on {@code replace} is skipped, because editing a
+     * value in place is replace's own semantics and flagging it would refuse a perfectly ordinary update.
+     */
+    private static ItemPath accruedEditLevel(ItemPath path, PrismObject<?> desired, PrismObject<?> live,
+            MultiValueStrategy multiValue) {
+        List<?> segments = path.getSegments();
+        List<QName> containerNames = new ArrayList<>();
+        for (int i = 0; i < segments.size(); i++) {
+            Object segment = segments.get(i);
+            if (ItemPath.isName(segment)) {
+                containerNames.add(ItemPath.toName(segment));
+                continue;
+            }
+            if (!ItemPath.isId(segment) || containerNames.isEmpty()) {
+                continue;
+            }
+            // A container-id segment: the names before it name the container, the id names the value edited.
+            if (!multiValue.isMerge(ItemPath.create(containerNames.toArray()))) {
+                continue;
+            }
+            ItemPath throughThisValue = ItemPath.create(segments.subList(0, i + 1).toArray());
+            if (!desiredDeclaresValueAt(desired, live, throughThisValue)) {
+                return throughThisValue;
+            }
+        }
+        return null;
     }
 
     /**
