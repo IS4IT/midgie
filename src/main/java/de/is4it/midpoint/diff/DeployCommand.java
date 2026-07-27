@@ -186,15 +186,18 @@ public class DeployCommand implements Callable<Integer> {
                 VersionSupport.warnIfMismatch(prismContext, client);
             }
 
-            // Collect every extension schema — CLI flags, live server, and the tree — and register in one
-            // batch (prism replaces the dynamic set on each call, so it must be a single registration).
-            Map<String, Element> schemaMap = schemaOptions.collectSchemas(prismContext, client);
+            // Collect every extension schema — the tree, CLI flags, and the live server — and register in one
+            // batch (prism replaces the dynamic set on each call). Order matters: the tree/flag schemas go in
+            // first so they win the per-namespace dedupe (SchemaSupport.register) over the live read, which
+            // also stops prism warning about re-registering a schema that is both in the tree and on the server.
             Discovery.ScanResult scan = Discovery.scan(prismContext, paths);
+            Map<String, Element> schemaMap = new LinkedHashMap<>();
             for (SchemaFile schema : scan.schemas()) {
                 schemaMap.put(schema.description(), schema.schemaElement());
             }
+            schemaMap.putAll(schemaOptions.collectSchemas(prismContext, client));
             LOG.debug("scan: {} schema file(s), {} candidate object file(s), {} warning(s); "
-                    + "registering {} extension schema(s)", scan.schemas().size(), scan.objectFiles().size(),
+                    + "collected {} extension schema(s)", scan.schemas().size(), scan.objectFiles().size(),
                     scan.warnings().size(), schemaMap.size());
             SchemaSupport.register(prismContext, schemaMap);
 

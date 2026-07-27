@@ -6,8 +6,11 @@
 package de.is4it.midpoint.diff;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -66,13 +69,38 @@ final class SchemaSupport {
         return namespaces;
     }
 
-    /** Register the given {@code description -> <xsd:schema> element} map and reload. No-op if empty. */
+    /**
+     * Register the given {@code description -> <xsd:schema> element} map and reload. No-op if empty. The map
+     * is first deduped by target namespace (see {@link #dedupeByNamespace}), so a schema present under more
+     * than one source — e.g. in the deploy tree <em>and</em> read back from the live server — is registered
+     * once, instead of making prism warn about overwriting each identical definition.
+     */
     static void register(PrismContext prismContext, Map<String, Element> schemas) throws SchemaException {
         if (schemas.isEmpty()) {
             return;
         }
-        prismContext.getSchemaRegistry().registerDynamicSchemaExtensions(schemas);
+        prismContext.getSchemaRegistry().registerDynamicSchemaExtensions(dedupeByNamespace(schemas));
         prismContext.reload();
+    }
+
+    /**
+     * Keep one schema per {@code targetNamespace}, in insertion order, keeping the <b>first</b> entry seen
+     * for each namespace. Callers add local sources (the deploy tree, {@code --schema}/{@code --schema-dir})
+     * before the live-server read, so a local schema wins over the server's copy of the same namespace. A
+     * blank namespace is never collapsed — each such schema is kept as-is.
+     */
+    static Map<String, Element> dedupeByNamespace(Map<String, Element> schemas) {
+        Map<String, Element> result = new LinkedHashMap<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (Map.Entry<String, Element> entry : schemas.entrySet()) {
+            String namespace = targetNamespace(entry.getValue());
+            if (namespace == null || namespace.isBlank()) {
+                result.put(entry.getKey(), entry.getValue());   // keep every no-namespace schema
+            } else if (seen.add(namespace)) {
+                result.put(entry.getKey(), entry.getValue());   // first schema for this namespace wins
+            }
+        }
+        return result;
     }
 
     /** Pull the {@code <xsd:schema>} element out of a {@code SchemaType} object. */
