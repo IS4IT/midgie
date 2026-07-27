@@ -563,9 +563,17 @@ public final class DiffEngine {
      * under merge a content change reads as "old value gone, new value added", so the old value is
      * preserved <em>and</em> the new one is added.
      *
-     * <p>An item that diffs to a whole-value {@code replace} (single-valued items, or a wholesale
-     * container replace) has no per-value deletes to drop, so merge cannot apply; its path is returned so
-     * the caller can note that it fell back to replace.
+     * <p>A <b>single-valued</b> item can never merge: union semantics have no meaning where only one value
+     * fits. Whether it can merge is decided on the item's <em>cardinality</em>, not on the shape of its
+     * delta, because the two do not agree. prism emits a whole-value replace only for single-valued
+     * <em>properties</em> — {@code fixupDelta} is overridden in {@code PrismPropertyImpl} alone — while a
+     * changed single-valued <em>reference</em> ({@code connectorRef}, {@code resourceRef}, a nested
+     * {@code targetRef}) diffs to delete-old plus add-new. Dropping that delete would leave an add on an
+     * item that holds one value, which midPoint rejects outright ("Attempt to put more than one value to
+     * single-valued item") and which {@code --plan} cannot even apply to its own local projection.
+     *
+     * <p>The same goes for a wholesale container replace, which has no per-value deletes to drop. Either
+     * way the path is returned so the caller can note that merge fell back to replace.
      *
      * @return the paths of merge-requested items that could only be expressed as a replace
      */
@@ -577,7 +585,13 @@ public final class DiffEngine {
             if (!multiValue.isMerge(mod.getPath())) {
                 continue;
             }
+            ItemDefinition<?> definition = mod.getDefinition();
+            if (definition != null && definition.isSingleValue()) {
+                fallbacks.add(mod.getPath().toString());
+                continue;
+            }
             if (mod.getValuesToReplace() != null) {
+                // Kept for definition-less deltas, where cardinality cannot be read.
                 fallbacks.add(mod.getPath().toString());
                 continue;
             }

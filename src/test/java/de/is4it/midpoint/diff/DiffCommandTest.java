@@ -521,6 +521,43 @@ class DiffCommandTest {
         return ((AssignmentType) assignmentRealValue).getTargetRef().getOid();
     }
 
+    @Test
+    void aChangedSingleValuedReferenceUnderMergeDoesNotBecomeAnAddOnlyDelta(@TempDir Path dir) throws Exception {
+        // prism emits a whole-value replace only for single-valued *properties* (fixupDelta is overridden in
+        // PrismPropertyImpl alone); a single-valued *reference* diffs to delete-old + add-new. Dropping the
+        // delete under merge would leave an add on a single-valued item, which midPoint rejects with
+        // "Attempt to put more than one value to single-valued item" — and --plan throws the same locally
+        // while advancing its projection. Cardinality, not delta shape, decides whether merge can apply.
+        File desired = write(dir, "desired.xml", resource("aaaaaaaa-1111-1111-1111-111111111111"));
+        File live = write(dir, "live.xml", resource("bbbbbbbb-2222-2222-2222-222222222222"));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.of(true, List.of()));
+
+        ItemDelta<?, ?> connectorRef = null;
+        for (ItemDelta<?, ?> mod : result.delta().getModifications()) {
+            if (mod.getPath().lastName().getLocalPart().equals("connectorRef")) {
+                connectorRef = mod;
+            }
+        }
+        assertNotNull(connectorRef, "the changed reference must still be reconciled: " + result.delta());
+        boolean addOnly = connectorRef.getValuesToAdd() != null && !connectorRef.getValuesToAdd().isEmpty()
+                && (connectorRef.getValuesToDelete() == null || connectorRef.getValuesToDelete().isEmpty())
+                && connectorRef.getValuesToReplace() == null;
+        assertFalse(addOnly, "a single-valued reference must never end up add-only: " + connectorRef);
+        assertTrue(result.mergeFallbackPaths().stream().anyMatch(p -> p.contains("connectorRef")),
+                "and the fallback to replace must be reported: " + result.mergeFallbackPaths());
+    }
+
+    private static String resource(String connectorOid) {
+        return "<resource xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"33333333-3333-3333-3333-333333333333\">\n"
+                + "  <name>Example Resource</name>\n"
+                + "  <connectorRef oid=\"" + connectorOid + "\" type=\"c:ConnectorType\"/>\n"
+                + "</resource>";
+    }
+
     private static String role(String description) {
         return role(description, "");
     }

@@ -75,12 +75,30 @@ public final class ConnectionOptions {
 
     /** The resolved base URL: {@code --url} if given, else {@code MIDPOINT_URL}. Null when neither is set. */
     public URI url() {
+        URI raw = rawUrl();
+        if (raw == null || raw.getRawUserInfo() == null) {
+            return raw;
+        }
+        // A password in the URL never authenticates anything — the Basic header is always built from
+        // --user and the resolved password — but it would be printed by the connection/timeout errors,
+        // the debug log and the confirmation prompts. Drop it before it can reach any of them.
+        if (!warnedAboutUserInfo) {
+            warnedAboutUserInfo = true;
+            System.err.println("midgie: warning: ignoring the credentials embedded in the server URL; "
+                    + "pass them with --user and --password-file/--password-env instead.");
+        }
+        return MidpointRestClient.withoutUserInfo(raw);
+    }
+
+    private URI rawUrl() {
         if (urlOption != null) {
             return urlOption;
         }
         String env = System.getenv("MIDPOINT_URL");
         return (env != null && !env.isBlank()) ? URI.create(env.trim()) : null;
     }
+
+    private boolean warnedAboutUserInfo;
 
     /** True only when {@code --url} was passed on the command line (not merely inherited from the env). */
     public boolean isExplicitUrl() {

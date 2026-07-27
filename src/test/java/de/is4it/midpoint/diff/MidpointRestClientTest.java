@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -51,6 +52,7 @@ class MidpointRestClientTest {
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/midpoint/ws/rest/users", this::handle);
+        server.createContext("/midpoint/ws/rest/roles", this::handle);
         server.start();
         host = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/midpoint");
         client = new MidpointRestClient(host, "administrator", "s3cret", false);
@@ -181,6 +183,36 @@ class MidpointRestClientTest {
     }
 
     @Test
+    void theObjectSearchIsRetriedBecauseItIsTheReadEverythingUses() {
+        // Every object lookup is a POST {type}/search, so keying retries on "is it a GET" left the tool's
+        // primary read uncovered: a midPoint that is still starting failed the very first search however
+        // high --retries was set.
+        failuresRemaining.set(2);
+        MidpointRestClient retrying = clientWith(
+                new MidpointRestClient.Config().maxRetries(3).retryBaseDelay(Duration.ofMillis(2)));
+
+        String body = assertDoesNotThrow(() -> retrying.searchObjects("roles", "<query/>"));
+        assertTrue(body.contains("found-oid"), body);
+        assertEquals(3, flakyRequests.get(), "two 503s ridden out, then the answer");
+    }
+
+    @Test
+    void credentialsEmbeddedInTheUrlAreStrippedFromEverythingPrinted() {
+        // java.net.http accepts a userinfo URI and never authenticates with it, so it is pure leak: the
+        // connection error below is printed to stderr regardless of --quiet, straight into a CI log.
+        URI withCredentials = URI.create("http://mpuser:s3cr3t-pw@127.0.0.1:1/midpoint");
+        MidpointRestClient client = new MidpointRestClient(withCredentials, "administrator", "s3cret",
+                new MidpointRestClient.Config().maxRetries(0));
+
+        IOException ex = assertThrows(IOException.class, () -> client.getObject("users", "any"));
+        assertFalse(ex.getMessage().contains("s3cr3t-pw"), "the password must not reach the message: "
+                + ex.getMessage());
+        assertFalse(ex.getMessage().contains("mpuser"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("127.0.0.1:1"), "but the host must still be named: "
+                + ex.getMessage());
+    }
+
+    @Test
     void writesAreNotRetried() {
         failuresRemaining.set(5);
         MidpointRestClient retrying = clientWith(
@@ -241,6 +273,13 @@ class MidpointRestClientTest {
         } else if (lastPath.endsWith("/users/redirect")) {
             exchange.getResponseHeaders().add("Location", "/midpoint/");
             respond(exchange, 302, "");
+        } else if ("POST".equals(lastMethod) && lastPath.endsWith("/roles/search")) {
+            flakyRequests.incrementAndGet();
+            if (failuresRemaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+                respond(exchange, 503, "service unavailable");
+            } else {
+                respond(exchange, 200, "<objectList><object oid=\"found-oid\"/></objectList>");
+            }
         } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users/search")) {
             respond(exchange, 200, "<objectList><object oid=\"found-oid\"/></objectList>");
         } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users")) {

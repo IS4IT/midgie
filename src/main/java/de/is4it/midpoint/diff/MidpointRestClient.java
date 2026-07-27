@@ -163,7 +163,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .GET()
                 .build();
-        return send(request, "GET " + restType + "/" + oid, null);
+        return send(request, "GET " + restType + "/" + oid, null, true);
     }
 
     /** {@code GET {type}} → an {@code ObjectListType} of all objects of that type (used to read schemas). */
@@ -172,7 +172,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .GET()
                 .build();
-        return send(request, "GET " + restType, null);
+        return send(request, "GET " + restType, null, true);
     }
 
     /**
@@ -186,7 +186,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .POST(HttpRequest.BodyPublishers.ofString(queryXml, StandardCharsets.UTF_8))
                 .build();
-        return send(request, "POST " + restType + "/search", queryXml);
+        return send(request, "POST " + restType + "/search", queryXml, true);
     }
 
     /** {@code PATCH {type}/{oid}} with an {@code objectModification} body. */
@@ -196,7 +196,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(modificationXml, StandardCharsets.UTF_8))
                 .build();
-        send(request, "PATCH " + restType + "/" + oid, modificationXml);
+        send(request, "PATCH " + restType + "/" + oid, modificationXml, false);
     }
 
     /** {@code DELETE {type}/{oid}}. Throws {@link RestException} (404-aware) on failure. */
@@ -205,7 +205,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .DELETE()
                 .build();
-        send(request, "DELETE " + restType + "/" + oid, null);
+        send(request, "DELETE " + restType + "/" + oid, null, false);
     }
 
     /** {@code POST {type}} with a full object body (create). Returns the new OID from Location if present. */
@@ -215,7 +215,7 @@ public final class MidpointRestClient {
                 .header("Accept", "application/xml")
                 .POST(HttpRequest.BodyPublishers.ofString(objectXml, StandardCharsets.UTF_8))
                 .build();
-        HttpResponse<String> response = sendRaw(request, "POST " + restType, objectXml);
+        HttpResponse<String> response = sendRaw(request, "POST " + restType, objectXml, false);
         return oidFromLocation(response);
     }
 
@@ -227,18 +227,25 @@ public final class MidpointRestClient {
                 .header("Authorization", authHeader);
     }
 
-    private String send(HttpRequest request, String what, String requestBody) throws IOException {
-        return sendRaw(request, what, requestBody).body();
+    private String send(HttpRequest request, String what, String requestBody, boolean safeRead)
+            throws IOException {
+        return sendRaw(request, what, requestBody, safeRead).body();
     }
 
     /**
-     * Send the request, retrying idempotent GETs on transient failures (HTTP 503, connection refused,
-     * timeout) up to {@code maxRetries} with exponential backoff. Writes are never retried — re-running
-     * {@code apply} is the safe recovery. {@code requestBody} (null for a bodyless GET/DELETE) is logged
-     * at TRACE only, alongside the response body.
+     * Send the request, retrying idempotent reads on transient failures (HTTP 502/503/504, connection
+     * refused, timeout) up to {@code maxRetries} with exponential backoff. Writes are never retried —
+     * re-running {@code apply} is the safe recovery. {@code requestBody} (null for a bodyless GET/DELETE)
+     * is logged at TRACE only, alongside the response body.
+     *
+     * <p>{@code safeRead} is a property of the <em>call</em>, not of the HTTP verb. Every object lookup
+     * goes through {@code POST {type}/search}, so keying retries on "is it a GET" left the tool's primary
+     * read uncovered: against a midPoint that is still starting, the first search failed immediately
+     * however high {@code --retries} was set.
      */
-    private HttpResponse<String> sendRaw(HttpRequest request, String what, String requestBody) throws IOException {
-        boolean retryable = "GET".equals(request.method());
+    private HttpResponse<String> sendRaw(HttpRequest request, String what, String requestBody,
+            boolean safeRead) throws IOException {
+        boolean retryable = safeRead;
         int attempt = 0;
         while (true) {
             try {
@@ -331,8 +338,17 @@ public final class MidpointRestClient {
         return URI.create(restBase + "/" + restType);
     }
 
+    /**
+     * The REST base to address and to print, with any {@code user:password@} stripped.
+     *
+     * <p>A URL of the form {@code https://admin:s3cret@mp.example.com/midpoint} is the shape every curl user
+     * reaches for, and {@code java.net.http} accepts it — but never authenticates with it, since the client
+     * always sends its own Basic header. So the credential does nothing except travel: into the connection
+     * and timeout errors printed on stderr regardless of {@code --quiet}, into the debug log, and into the
+     * confirmation prompts. Dropping it here means no printed form of the URL can carry it.
+     */
     private static URI restBaseOf(URI host) {
-        String text = host.toString();
+        String text = withoutUserInfo(host).toString();
         while (text.endsWith("/")) {
             text = text.substring(0, text.length() - 1);
         }
@@ -340,6 +356,20 @@ public final class MidpointRestClient {
             text = text + "/ws/rest";
         }
         return URI.create(text);
+    }
+
+    /** {@code uri} with any userinfo component removed; unchanged when it carries none. */
+    static URI withoutUserInfo(URI uri) {
+        if (uri == null || uri.getRawUserInfo() == null) {
+            return uri;
+        }
+        try {
+            return new URI(uri.getScheme(), null, uri.getHost(), uri.getPort(), uri.getPath(),
+                    uri.getQuery(), uri.getFragment());
+        } catch (java.net.URISyntaxException e) {
+            // Cannot rebuild it: better to fail than to print or send the credential.
+            throw new IllegalArgumentException("could not parse the server URL: " + e.getMessage(), e);
+        }
     }
 
     private static String oidFromLocation(HttpResponse<String> response) {
