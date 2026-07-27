@@ -32,6 +32,7 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.AssignmentType;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -328,6 +329,78 @@ class DiffCommandTest {
         assertTrue(paths(result).stream().anyMatch(p -> p.contains("displayOrder")),
                 "expected the deep displayOrder delta, got: " + paths(result));
         assertFalse(deletesPath(result, "panel"), "the sibling panel must not be deleted: " + paths(result));
+    }
+
+    @Test
+    void partiallyDeclaredKeyedContainerOnReplaceIsWarnedWithTheFix(@TempDir Path dir) throws Exception {
+        // The destructive default: desired lists 1 of 2 panels, replace makes it authoritative -> the other
+        // is deleted. That must be reported up front, naming multivalue=merge as the fix, and the delta's
+        // blast radius must be counted rather than hidden behind "1 change".
+        File live = write(dir, "live.xml", sysconfigPanels("84",
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml",
+                sysconfigPanels(null, panel(null, "aielcm-delimited-values", 16)));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
+
+        assertTrue(result.inputWarnings().stream().anyMatch(w -> w.contains("declares 1 of 2 live value(s)")
+                        && w.contains("multivalue=merge")),
+                "expected a partial-container warning naming the fix: " + result.inputWarnings());
+        assertTrue(result.removedValueCount() > 0, "the removal must be counted");
+        assertNotNull(result.removalWarning(), "a removing delta must carry a loud warning");
+        assertTrue(result.removalWarning().contains("REMOVES"), result.removalWarning());
+    }
+
+    @Test
+    void aValueMissingItsNaturalKeyIsWarned(@TempDir Path dir) throws Exception {
+        // A panel with no <identifier> cannot be matched to a live entry, so it silently degrades to a
+        // whole-value change. Flag it statically, naming the key.
+        File live = write(dir, "live.xml", sysconfigPanels("84", panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml", sysconfigPanels(null,
+                "        <panel><displayOrder>16</displayOrder></panel>\n"));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.of(true, List.of()));
+
+        assertTrue(result.inputWarnings().stream()
+                        .anyMatch(w -> w.contains("natural key") && w.contains("identifier")),
+                "expected a missing-natural-key warning naming the key: " + result.inputWarnings());
+    }
+
+    @Test
+    void theKeyMatchedMergeRecipeProducesNoInputWarnings(@TempDir Path dir) throws Exception {
+        // The documented recipe (natural-keys + merge) must be quiet — warnings that cry wolf get ignored.
+        File live = write(dir, "live.xml", sysconfigPanels("84",
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml",
+                sysconfigPanels(null, panel(null, "aielcm-delimited-values", 16)));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.of(true, List.of()));
+
+        assertTrue(result.inputWarnings().isEmpty(),
+                "the key-matched merge recipe must not warn: " + result.inputWarnings());
+        assertEquals(0, result.removedValueCount(), "it removes nothing");
+        assertNull(result.removalWarning(), "so there is no removal warning");
+    }
+
+    @Test
+    void aDeclaredButUnusedNaturalKeyDoesNotWarn(@TempDir Path dir) throws Exception {
+        // AssignmentType declares naturalKey=identifier, but real assignments almost never carry one — as do
+        // inducement and authorization. Warning on every such value (and claiming their live counterparts
+        // would be deleted) is pure noise that trains people to ignore warnings, so the key only counts when
+        // the live values actually use it, and content equivalence stands in for the match.
+        File live = write(dir, "live.xml", user(assignment("1", "role-1"), assignment("2", "role-2")));
+        File desired = write(dir, "desired.xml", user(assignment(null, "role-1"), assignment(null, "role-2")));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
+
+        assertTrue(result.inputWarnings().isEmpty(),
+                "a natural key that neither side uses must not warn: " + result.inputWarnings());
     }
 
     @Test

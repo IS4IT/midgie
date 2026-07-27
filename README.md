@@ -155,7 +155,29 @@ you manage:
 ```
 
 `merge` is what keeps the siblings: without it, replace semantics treat the containers you declare as
-authoritative and delete every entry you did not list.
+authoritative and delete every entry you did not list. midgie warns when that is about to happen — see
+below.
+
+### Guard rails
+
+A partial fragment can destroy live state, so midgie reports the danger before anything is written. These
+are **advisories, not blocks** — the run proceeds; use `--dry-run` to inspect first, and `--quiet` to
+silence them.
+
+- **Blast radius.** Every summary line states what it removes (`delete …/objectDetailsPage (removes 2
+  values)`), and a removing delta prints `WARNING: this change REMOVES n values from the live object` with
+  the paths. A removed *container* value takes everything nested in it, so this is the number that matters.
+- **A value missing its natural key.** `'…/panel' value #1 does not carry its natural key (identifier), so
+  it cannot be matched to a live value` — it would be applied as a whole-value change instead of updating
+  the matching entry.
+- **A partially declared container.** `'…/panel': desired declares 1 of 4 live value(s), and this path is on
+  multivalue=replace, so the other 3 will be DELETED. Set '…/panel multivalue=merge' (with
+  equivalence=natural-keys) to update just the entries you list.`
+
+These stay quiet unless they mean something: only containers with a schema-declared natural key are checked,
+the key must actually be *in use* by the live values (plenty of types declare one that real config never
+fills in — an `assignment` or `inducement` rarely carries an `<identifier>`), and a live value that desired
+restates verbatim counts as declared. The key-matched merge recipe above produces no warnings at all.
 
 ### Connection (live modes)
 

@@ -393,6 +393,11 @@ public class DeployCommand implements Callable<Integer> {
 
     private void record(Tally tally, Fragment unit, Reconciler.Action action, Reconciler.Outcome outcome,
             boolean preview, boolean afterCreate) {
+        // Input advisories and the blast radius go to stderr per unit, so a destructive change is visible
+        // in the plan before anything is written (and still shows in a real apply).
+        for (String warning : outcome.warnings) {
+            note("warning: " + unit.objectPath() + ": " + warning);
+        }
         switch (action) {
             case CREATE:
                 tally.created++;

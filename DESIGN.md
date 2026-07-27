@@ -70,6 +70,15 @@ the midPoint source tree.
   rotation; a real password change goes through its own API, not a blind PATCH of stale ciphertext.
   (Detection is by schema type or a protected real value; a protected value nested inside a larger
   added/deleted container is not walked — rare, and noted in the code.)
+- *Blast-radius reporting and input checks* — a partial fragment can silently destroy live state, so the
+  danger is reported before any write (advisory, never blocking; `--quiet` silences it). Every summary line
+  carries the number of values it removes, and a removing delta prints a prominent `WARNING: this change
+  REMOVES n values`. On top of that, `DiffEngine.findInputWarnings` statically walks desired against live,
+  pairing keyed container values, and flags (a) a value of a keyed multi-valued container that does not carry
+  its `a:naturalKey` — it cannot be matched, so it degrades to a whole-value change — and (b) a keyed
+  container that desired only partially declares while that path is on `replace`, naming `multivalue=merge`
+  as the fix. Only keyed containers are checked, which keeps it precise and leaves the key-matched merge
+  recipe warning-free. Surfaced through `DiffResult.inputWarnings()` / `removalWarning()`.
 - *Accrued in-place merge edits* — when `merge` runs under an id/natural-key-considering strategy, prism can
   pair an accrued (live-only) value with a desired value and edit it in place rather than doing a clean
   add-and-keep; merge cannot preserve it. Detected per delta and refused by default (`--allow-inplace-merge`

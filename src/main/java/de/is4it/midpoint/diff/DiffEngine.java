@@ -26,6 +26,7 @@ import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
 import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
 import com.evolveum.midpoint.prism.key.NaturalKeyDefinition;
 import com.evolveum.midpoint.prism.path.ItemPath;
@@ -145,11 +146,17 @@ public final class DiffEngine {
         List<String> accruedInPlaceEdits = multiValue.isMergeActive()
                 ? findAccruedInPlaceEdits(delta, desired, live, multiValue) : List.of();
 
-        LOG.debug("diff {} (scope={}, {}) → {} modification(s); mergeFallback={}, protectedSkipped={}, "
-                + "accruedInPlace={}", desiredType != null ? desiredType.getSimpleName() : "?", scope,
+        // Static input checks: a fragment that omits a natural key, or only partially declares a keyed
+        // container on replace, silently destroys live state. Reported before anything is written.
+        List<String> inputWarnings = findInputWarnings(desired, live, multiValue);
+
+        LOG.debug("diff {} (scope={}, {}) → {} modification(s), removes {} value(s); mergeFallback={}, "
+                + "protectedSkipped={}, accruedInPlace={}, inputWarnings={}",
+                desiredType != null ? desiredType.getSimpleName() : "?", scope,
                 multiValue.isMergeActive() ? "merge" : "replace", delta.getModifications().size(),
-                mergeFallbacks, protectedSkipped, accruedInPlaceEdits);
-        return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits);
+                DeltaOutput.removedValueCount(delta), mergeFallbacks, protectedSkipped, accruedInPlaceEdits,
+                inputWarnings.size());
+        return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits, inputWarnings);
     }
 
     private static <O extends Objectable> ObjectDelta<O> reconcile(
@@ -395,6 +402,173 @@ public final class DiffEngine {
         return null;
     }
 
+    /**
+     * Static sanity checks on the <em>input</em>, reported before anything is written. Walks the desired
+     * object against the live one, pairing keyed container values, and flags the two ways a partial fragment
+     * silently destroys live state:
+     *
+     * <ul>
+     *   <li><b>a missing natural key</b> — a value of a keyed multi-valued container that does not carry its
+     *       key ({@code a:naturalKey}) cannot be matched to a live value, so it degrades to a whole-value
+     *       add/delete instead of an update;</li>
+     *   <li><b>a partially declared container</b> — desired lists only some of a keyed container's live
+     *       values while that path is on {@code replace}, so the unlisted ones are deleted. Names
+     *       {@code multivalue=merge} as the fix.</li>
+     * </ul>
+     *
+     * Only containers with a declared natural key are checked, which keeps this precise: those are exactly
+     * the containers a fragment is expected to address by key.
+     */
+    private static List<String> findInputWarnings(PrismObject<?> desired, PrismObject<?> live,
+            MultiValueStrategy multiValue) {
+        List<String> warnings = new ArrayList<>();
+        checkContainers(desired.getValue(), (live != null) ? live.getValue() : null,
+                ItemPath.EMPTY_PATH, multiValue, warnings);
+        return warnings;
+    }
+
+    private static void checkContainers(PrismContainerValue<?> desiredValue, PrismContainerValue<?> liveValue,
+            ItemPath prefix, MultiValueStrategy multiValue, List<String> warnings) {
+        for (Item<?, ?> item : desiredValue.getItems()) {
+            if (!(item instanceof PrismContainer<?> desiredContainer)) {
+                continue;
+            }
+            ItemDefinition<?> definition = desiredContainer.getDefinition();
+            if (definition == null || definition.isOperational()) {
+                continue;
+            }
+            ItemPath path = prefix.append(item.getElementName());
+            PrismContainer<?> liveContainer = containerAt(liveValue, item.getElementName());
+
+            if (definition.isMultiValue()) {
+                NaturalKeyDefinition naturalKey = naturalKeyOf(desiredContainer);
+                if (naturalKey != null) {
+                    checkKeyedContainer(desiredContainer, liveContainer, naturalKey, path, multiValue, warnings);
+                }
+                for (PrismContainerValue<?> child : desiredContainer.getValues()) {
+                    checkContainers(child, matchingLiveValue(liveContainer, child, naturalKey),
+                            path, multiValue, warnings);
+                }
+            } else {
+                PrismContainerValue<?> liveChild = (liveContainer != null && !liveContainer.getValues().isEmpty())
+                        ? liveContainer.getValues().iterator().next() : null;
+                for (PrismContainerValue<?> child : desiredContainer.getValues()) {
+                    checkContainers(child, liveChild, path, multiValue, warnings);
+                }
+            }
+        }
+    }
+
+    private static void checkKeyedContainer(PrismContainer<?> desiredContainer, PrismContainer<?> liveContainer,
+            NaturalKeyDefinition naturalKey, ItemPath path, MultiValueStrategy multiValue, List<String> warnings) {
+        if (liveContainer == null) {
+            return; // nothing live to be matched against or destroyed
+        }
+        // Only complain about a missing key when the key is actually in play — i.e. the live values use it.
+        // Plenty of containers declare a natural key that real config never fills in (an `assignment` or
+        // `inducement` rarely carries an <identifier>); warning on those would be pure noise.
+        boolean keyInPlay = false;
+        for (PrismContainerValue<?> live : liveContainer.getValues()) {
+            if (carriesKey(naturalKey, live)) {
+                keyInPlay = true;
+                break;
+            }
+        }
+        if (keyInPlay) {
+            int index = 0;
+            for (PrismContainerValue<?> value : desiredContainer.getValues()) {
+                index++;
+                if (!carriesKey(naturalKey, value)) {
+                    warnings.add("'" + path + "' value #" + index + " does not carry its natural key ("
+                            + keyNames(desiredContainer) + "), so it cannot be matched to a live value; it will "
+                            + "be treated as a whole-value change instead of an update of the matching entry.");
+                }
+            }
+        }
+
+        if (multiValue.isMerge(path)) {
+            return; // merge keeps live-only values, so a partial declaration is intended there
+        }
+        int unmatched = 0;
+        for (PrismContainerValue<?> live : liveContainer.getValues()) {
+            if (!declaredInDesired(desiredContainer, live, naturalKey)) {
+                unmatched++;
+            }
+        }
+        if (unmatched > 0) {
+            warnings.add("'" + path + "': desired declares " + desiredContainer.getValues().size() + " of "
+                    + liveContainer.getValues().size() + " live value(s), and this path is on "
+                    + "multivalue=replace, so the other " + unmatched + " will be DELETED. Set '" + path
+                    + " multivalue=merge' (with equivalence=natural-keys) to update just the entries you list.");
+        }
+    }
+
+    /**
+     * Whether desired declares {@code live} — by container id, by natural key, or by plain content
+     * equivalence. Content is the generous fallback that keeps this check quiet for keyless-in-practice
+     * containers, where a fragment simply restates the values it manages verbatim.
+     */
+    private static boolean declaredInDesired(PrismContainer<?> desiredContainer, PrismContainerValue<?> live,
+            NaturalKeyDefinition naturalKey) {
+        boolean keyed = naturalKey != null && carriesKey(naturalKey, live);
+        for (PrismContainerValue<?> value : desiredContainer.getValues()) {
+            if (live.getId() != null && live.getId().equals(value.getId())) {
+                return true;
+            }
+            if (keyed && carriesKey(naturalKey, value) && naturalKey.valuesMatch(live, value)) {
+                return true;
+            }
+            if (EquivalenceStrategy.REAL_VALUE.equals(live, value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The live container value matching {@code desiredValue} by container id, else by natural key. */
+    private static PrismContainerValue<?> matchingLiveValue(PrismContainer<?> liveContainer,
+            PrismContainerValue<?> desiredValue, NaturalKeyDefinition naturalKey) {
+        if (liveContainer == null) {
+            return null;
+        }
+        for (PrismContainerValue<?> live : liveContainer.getValues()) {
+            if (live.getId() != null && live.getId().equals(desiredValue.getId())) {
+                return live;
+            }
+        }
+        if (naturalKey == null || !carriesKey(naturalKey, desiredValue)) {
+            return null;
+        }
+        for (PrismContainerValue<?> live : liveContainer.getValues()) {
+            if (carriesKey(naturalKey, live) && naturalKey.valuesMatch(live, desiredValue)) {
+                return live;
+            }
+        }
+        return null;
+    }
+
+    private static PrismContainer<?> containerAt(PrismContainerValue<?> parent, QName name) {
+        if (parent == null) {
+            return null;
+        }
+        Item<?, ?> item = parent.findItem(ItemPath.create(name));
+        return (item instanceof PrismContainer<?> container) ? container : null;
+    }
+
+    /** The local names of the container's natural-key constituents, for the warning message. */
+    private static String keyNames(PrismContainer<?> container) {
+        ItemDefinition<?> definition = container.getDefinition();
+        List<QName> constituents = (definition != null) ? definition.getNaturalKeyConstituents() : null;
+        if (constituents == null || constituents.isEmpty()) {
+            return "natural key";
+        }
+        List<String> names = new ArrayList<>();
+        for (QName name : constituents) {
+            names.add(name.getLocalPart());
+        }
+        return String.join(" + ", names);
+    }
+
     /** The container's schema-declared natural key ({@code a:naturalKey}), or null when it has none. */
     private static NaturalKeyDefinition naturalKeyOf(PrismContainer<?> container) {
         ItemDefinition<?> definition = container.getDefinition();
@@ -458,13 +632,35 @@ public final class DiffEngine {
         private final List<String> mergeFallbackPaths;
         private final List<String> protectedSkippedPaths;
         private final List<String> accruedInPlaceEditPaths;
+        private final List<String> inputWarnings;
 
         DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths,
-                List<String> protectedSkippedPaths, List<String> accruedInPlaceEditPaths) {
+                List<String> protectedSkippedPaths, List<String> accruedInPlaceEditPaths,
+                List<String> inputWarnings) {
             this.delta = delta;
             this.mergeFallbackPaths = List.copyOf(mergeFallbackPaths);
             this.protectedSkippedPaths = List.copyOf(protectedSkippedPaths);
             this.accruedInPlaceEditPaths = List.copyOf(accruedInPlaceEditPaths);
+            this.inputWarnings = List.copyOf(inputWarnings);
+        }
+
+        /**
+         * Advisories about the desired input itself — a value missing its natural key, or a keyed container
+         * only partially declared while on replace (see {@code findInputWarnings}). Complete messages, ready
+         * to print; empty when the input is unambiguous.
+         */
+        public List<String> inputWarnings() {
+            return inputWarnings;
+        }
+
+        /** How many values this delta removes outright — the blast radius. */
+        public int removedValueCount() {
+            return DeltaOutput.removedValueCount(delta);
+        }
+
+        /** A loud warning naming what the delta removes, or {@code null} when it removes nothing. */
+        public String removalWarning() {
+            return DeltaOutput.removalWarning(delta);
         }
 
         public ObjectDelta<? extends Objectable> delta() {

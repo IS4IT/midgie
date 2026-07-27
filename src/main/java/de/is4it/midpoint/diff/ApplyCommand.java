@@ -193,6 +193,13 @@ public class ApplyCommand implements Callable<Integer> {
             note("midgie: warning: '" + path + "' edits an accrued (live-only) value in place; "
                     + "merge cannot preserve it, so it will be overwritten (proceeding under --allow-inplace-merge).");
         }
+        for (String warning : result.inputWarnings()) {
+            note("midgie: warning: " + warning);
+        }
+        // Blast radius, before the confirmation prompt: "N change(s)" alone hides how much is destroyed.
+        if (result.removalWarning() != null) {
+            note("midgie: " + result.removalWarning());
+        }
 
         if (!result.hasDrift()) {
             status("No changes: " + target.restType + "/" + target.oid + " already matches desired.");

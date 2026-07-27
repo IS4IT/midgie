@@ -6,6 +6,7 @@
 package de.is4it.midpoint.diff;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -43,9 +44,11 @@ final class Reconciler {
         final String modificationXml; // PATCH body
         final String createBody;      // POST body
         final ObjectDelta<? extends Objectable> delta; // the computed delta for a PATCH (for projection)
+        final List<String> warnings;  // input advisories + blast radius, for the caller to report
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
-                String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta) {
+                String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
+                List<String> warnings) {
             this.action = action;
             this.restType = restType;
             this.oid = oid;
@@ -54,6 +57,7 @@ final class Reconciler {
             this.modificationXml = modificationXml;
             this.createBody = createBody;
             this.delta = delta;
+            this.warnings = List.copyOf(warnings);
         }
     }
 
@@ -127,14 +131,19 @@ final class Reconciler {
         }
         if (!result.hasDrift()) {
             LOG.debug("{} {}: IN_SYNC", restType, targetOid);
-            return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null, null);
+            return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null, null,
+                    result.inputWarnings());
         }
         int changes = result.delta().getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
         String summary = DeltaOutput.toSummary(result.delta()).replace("\n", "; ");
+        List<String> warnings = new ArrayList<>(result.inputWarnings());
+        if (result.removalWarning() != null) {
+            warnings.add(result.removalWarning().replace("\n", "; "));
+        }
         LOG.debug("{} {}: PATCH, {} change(s): {}", restType, targetOid, changes, summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
-                result.delta());
+                result.delta(), warnings);
     }
 
     private Outcome planCreate(String restType, String oid, PrismObject<? extends Objectable> desired)
@@ -142,7 +151,7 @@ final class Reconciler {
         if (createIfAbsent) {
             LOG.debug("{} {}: CREATE (create-if-absent)", restType, oid);
             return new Outcome(Action.CREATE, restType, oid, 0, "would create",
-                    null, ApplyCommand.createBody(prismContext, desired), null);
+                    null, ApplyCommand.createBody(prismContext, desired), null, List.of());
         }
         if (oid != null && !oid.isBlank()) {
             return fail(restType, oid, "does not exist (pass --create-if-absent to create it)");
@@ -183,11 +192,11 @@ final class Reconciler {
 
     private static Outcome skip(String restType, String oid, String reason) {
         LOG.debug("{} {}: SKIP — {}", restType, oid, reason);
-        return new Outcome(Action.SKIP, restType, oid, 0, reason, null, null, null);
+        return new Outcome(Action.SKIP, restType, oid, 0, reason, null, null, null, List.of());
     }
 
     private static Outcome fail(String restType, String oid, String reason) {
         LOG.debug("{} {}: FAIL — {}", restType, oid, reason);
-        return new Outcome(Action.FAIL, restType, oid, 0, reason, null, null, null);
+        return new Outcome(Action.FAIL, restType, oid, 0, reason, null, null, null, List.of());
     }
 }

@@ -163,6 +163,12 @@ public class DiffCommand implements Callable<Integer> {
                             + "value in place; merge cannot preserve it, so it will be overwritten "
                             + "(proceeding under --allow-inplace-merge).");
                 }
+                for (String warning : result.inputWarnings()) {
+                    System.err.println("midgie: warning: " + warning);
+                }
+                if (result.removalWarning() != null) {
+                    System.err.println("midgie: " + result.removalWarning());
+                }
             }
 
             Io.writePayload(output, DeltaOutput.render(prismContext, result.delta(), format));

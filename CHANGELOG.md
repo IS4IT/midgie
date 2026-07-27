@@ -7,6 +7,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Destructive changes announce themselves.** A delta that removes values now says so: each summary line carries the count it removes (`delete … (removes 2 values)`), and `diff`/`apply`/`deploy` print a prominent `WARNING: this change REMOVES n values from the live object` listing the paths. Advisory only — midgie reports the blast radius, it does not block; use `--dry-run` to inspect first. Suppressed by `--quiet`.
+- **Static input checks on the desired object**, reported before anything is written. midgie warns when a value of a keyed multi-valued container **omits its natural key** (so it cannot be matched to a live entry and degrades to a whole-value change), and when desired **declares only some** of a keyed container's live values while that path is on `replace` — naming the fix: *"desired declares 1 of 4 live value(s) … the other 3 will be DELETED. Set '…/panel multivalue=merge' (with equivalence=natural-keys)"*. Kept precise so the warnings mean something: only containers with a schema-declared `a:naturalKey` are checked, the key must be in use by the live values (many types declare one that real config never fills in — an `assignment` or `inducement` rarely carries an `<identifier>`), and a live value restated verbatim in desired counts as declared. The documented key-matched merge recipe is warning-free.
+
 ### Fixed
 
 - **A natural-key-matched edit is no longer mistaken for an accrued-value overwrite.** Combining `equivalence=natural-keys` with `multivalue=merge` — the way to sync a single entry nested inside multi-valued containers, e.g. one GUI `panel` inside `objectDetailsPage` — was refused as an "accrued in-place edit" and needed `--allow-inplace-merge`, which switches the guard off for the whole object. The check now resolves each container-id segment of the delta path against the desired object by container id **or** by the schema's `a:naturalKey` (`panel` → `identifier`, `objectDetailsPage` → `type`, …); an edit inside a value desired declares is a managed update and passes. A key only counts when both values actually carry its constituents, so a container whose natural key is absent (e.g. an `assignment` with no `identifier`) still triggers the guard as before.

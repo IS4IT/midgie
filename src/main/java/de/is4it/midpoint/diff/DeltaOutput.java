@@ -50,7 +50,7 @@ final class DeltaOutput {
         return prismContext.jsonSerializer().serializeRealValue(modification, ObjectFactory.F_OBJECT_MODIFICATION);
     }
 
-    /** A human-readable, one-line-per-change list (or "No differences."). */
+    /** A human-readable, one-line-per-change list (or "No differences."), with the removed-value count. */
     static String toSummary(ObjectDelta<? extends Objectable> delta) {
         if (delta.isEmpty()) {
             return "No differences.";
@@ -61,8 +61,52 @@ final class DeltaOutput {
                 out.append('\n');
             }
             out.append(operationLabel(mod)).append(' ').append(mod.getPath());
+            int removed = size(mod.getValuesToDelete());
+            if (removed > 0) {
+                // Spell out the blast radius: "delete <path>" alone reads like one small change even when it
+                // takes whole container values (and everything nested in them) with it.
+                out.append("  (removes ").append(removed).append(removed == 1 ? " value" : " values").append(')');
+            }
         }
         return out.toString();
+    }
+
+    /**
+     * How many values this delta removes outright ({@code valuesToDelete} across every modification). A
+     * removed <em>container</em> value takes everything nested inside it, so this is the number that matters
+     * when judging whether a change is destructive.
+     */
+    static int removedValueCount(ObjectDelta<? extends Objectable> delta) {
+        int removed = 0;
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            removed += size(mod.getValuesToDelete());
+        }
+        return removed;
+    }
+
+    /**
+     * A loud warning when the delta removes values, or {@code null} when it removes nothing. Advisory only —
+     * midgie reports the blast radius but does not block; use {@code --dry-run} to inspect first.
+     */
+    static String removalWarning(ObjectDelta<? extends Objectable> delta) {
+        int removed = removedValueCount(delta);
+        if (removed == 0) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder("WARNING: this change REMOVES " + removed
+                + (removed == 1 ? " value" : " values") + " from the live object");
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            int count = size(mod.getValuesToDelete());
+            if (count > 0) {
+                out.append("\n    - ").append(mod.getPath()).append(" (").append(count)
+                        .append(count == 1 ? " value" : " values").append(')');
+            }
+        }
+        return out.toString();
+    }
+
+    private static int size(java.util.Collection<?> values) {
+        return (values != null) ? values.size() : 0;
     }
 
     private static String operationLabel(ItemDelta<?, ?> mod) {
