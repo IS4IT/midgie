@@ -49,6 +49,16 @@ final class PlanStore {
     private PlanStore() {
     }
 
+    /**
+     * Marks a plan that is being written. Present on disk only between the first file and the last, so a
+     * plan whose run died half way through is recognisable as the partial thing it is.
+     *
+     * <p>Without it, an aborted {@code --plan} left a directory of valid-looking files that
+     * {@code --apply-plan} replayed to the end and reported as a complete success — half a tree deployed,
+     * exit 0.
+     */
+    private static final String INCOMPLETE_MARKER = ".midgie-plan-incomplete";
+
     /** True if {@code dir} already holds plan files (so a fresh plan is never mixed into a stale one). */
     static boolean hasPlanFiles(File dir) {
         String[] names = dir.list();
@@ -63,11 +73,56 @@ final class PlanStore {
         return false;
     }
 
-    /** Write one unit's body. {@code oid} is used verbatim in the name; a null OID falls back to the name. */
-    static void write(File dir, int sequence, String restType, String oid, String name, Kind kind, String body)
-            throws IOException {
+    /** True if {@code dir} holds a plan that was never finished. */
+    static boolean isIncomplete(File dir) {
+        return new File(dir, INCOMPLETE_MARKER).isFile();
+    }
+
+    /** Start writing a plan: nothing in {@code dir} counts as usable until {@link #markComplete}. */
+    static void markIncomplete(File dir) throws IOException {
+        Files.createDirectories(dir.toPath());
+        Files.writeString(new File(dir, INCOMPLETE_MARKER).toPath(),
+                "midgie is writing this plan; it is incomplete until this file is gone."
+                        + System.lineSeparator(), StandardCharsets.UTF_8);
+    }
+
+    /** The plan is whole and may be replayed. */
+    static void markComplete(File dir) throws IOException {
+        Files.deleteIfExists(new File(dir, INCOMPLETE_MARKER).toPath());
+    }
+
+    /** Delete the files of an unfinished plan, so a re-run does not need manual cleanup. */
+    static int discardIncomplete(File dir) throws IOException {
+        File[] files = dir.listFiles((d, name) -> name.endsWith(".create.xml") || name.endsWith(".patch.xml"));
+        int removed = 0;
+        for (File file : (files != null) ? files : new File[0]) {
+            if (Files.deleteIfExists(file.toPath())) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    /**
+     * Write one unit's body.
+     *
+     * <p>{@code oid} names the file for a PATCH, because that is the address {@code --apply-plan} will send
+     * it to; a create has no OID yet and falls back to the sanitised object name. A PATCH without an OID is
+     * refused rather than silently named after the object: the plan would read as valid under review and
+     * then issue {@code PATCH /ws/rest/roles/<Name>}, which is not an address, at replay time.
+     *
+     * <p>The sequence is padded to {@code width} digits so that filename order — which is what
+     * {@link #read} sorts on — is apply order for a plan of any size. At a fixed three digits, unit 1000
+     * sorts before unit 999 and a large tree replays out of dependency order.
+     */
+    static void write(File dir, int sequence, int width, String restType, String oid, String name, Kind kind,
+            String body) throws IOException {
+        if (kind == Kind.PATCH && (oid == null || oid.isBlank())) {
+            throw new IOException("cannot plan a patch of " + restType + "/" + name
+                    + " without an OID: a patch is addressed by OID, and the plan would fail on replay.");
+        }
         String token = (oid != null && !oid.isBlank()) ? oid : sanitize(name);
-        String fileName = String.format("%03d-%s-%s.%s.xml", sequence, restType, token,
+        String fileName = String.format("%0" + Math.max(3, width) + "d-%s-%s.%s.xml", sequence, restType, token,
                 kind == Kind.CREATE ? "create" : "patch");
         Files.createDirectories(dir.toPath());
         Files.writeString(new File(dir, fileName).toPath(), body + System.lineSeparator(), StandardCharsets.UTF_8);
@@ -78,6 +133,10 @@ final class PlanStore {
     static List<Entry> read(File dir) throws IOException {
         if (!dir.isDirectory()) {
             throw new IOException("--apply-plan directory does not exist: " + dir);
+        }
+        if (isIncomplete(dir)) {
+            throw new IOException("the plan in " + dir + " was never finished — the run that wrote it failed "
+                    + "part way through. Re-run --plan; replaying it would apply only part of the tree.");
         }
         File[] files = dir.listFiles((d, name) -> name.endsWith(".create.xml") || name.endsWith(".patch.xml"));
         if (files == null) {
@@ -105,6 +164,16 @@ final class PlanStore {
         String[] parts = stem.split("-", 3); // NNN - type - token(oid, may contain '-')
         if (parts.length < 3) {
             throw new IOException("not a plan file (expected NNN-<type>-<oid>.<kind>.xml): " + name);
+        }
+        // The point of --apply-plan is that what was reviewed is what runs, and both of these go into the
+        // request URI by plain concatenation. A plan directory that was renamed, hand-edited or shipped
+        // through CI as an artifact must not be able to retarget a write to another collection or a
+        // truncated OID.
+        if (!parts[1].matches("[A-Za-z]+")) {
+            throw new IOException("not a REST collection name in plan file '" + name + "': " + parts[1]);
+        }
+        if (!parts[2].matches("[A-Za-z0-9._-]+")) {
+            throw new IOException("not a usable object token in plan file '" + name + "': " + parts[2]);
         }
         String body = Files.readString(file.toPath(), StandardCharsets.UTF_8);
         return new Entry(kind, parts[1], parts[2], body);

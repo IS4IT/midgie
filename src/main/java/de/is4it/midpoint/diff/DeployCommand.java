@@ -775,52 +775,72 @@ public class DeployCommand implements Callable<Integer> {
     // --- plan (write reviewable files, no server writes) ---
 
     private Integer runPlan(Reconciler reconciler, List<Fragment> units) throws Exception {
-        if (PlanStore.hasPlanFiles(planDir)) {
+        if (PlanStore.isIncomplete(planDir)) {
+            // An unfinished plan cannot be replayed anyway, so there is nothing to protect; refusing until
+            // the operator deletes it by hand only makes a failed run harder to repeat.
+            int discarded = PlanStore.discardIncomplete(planDir);
+            note("note: discarded " + discarded + " file(s) of an unfinished plan in " + planDir + ".");
+        } else if (PlanStore.hasPlanFiles(planDir)) {
             System.err.println("midgie: --plan directory " + planDir
                     + " already contains plan files; use an empty (or new) directory.");
             return EXIT_ERROR;
         }
+        // Marked from the first file to the last: a run that dies half way leaves the marker behind, and
+        // --apply-plan then refuses the partial plan instead of replaying part of the tree as a success.
+        PlanStore.markIncomplete(planDir);
+        int width = String.valueOf(units.size()).length();
         Map<String, PrismObject<? extends Objectable>> projected = new HashMap<>();
         Tally tally = new Tally();
         int seq = 0;
         for (Fragment unit : units) {
             seq++;
-            PrismObject<? extends Objectable> desired = unit.object();
-            String key = unit.identityKey();
-            Reconciler.Outcome outcome = projected.containsKey(key)
-                    ? reconciler.planAgainst(desired, projected.get(key), strategyFor(unit))
-                    : reconciler.plan(desired, strategyFor(unit));
+            try {
+                PrismObject<? extends Objectable> desired = unit.object();
+                String key = unit.identityKey();
+                Reconciler.Outcome outcome = projected.containsKey(key)
+                        ? reconciler.planAgainst(desired, projected.get(key), strategyFor(unit))
+                        : reconciler.plan(desired, strategyFor(unit));
 
-            switch (outcome.action) {
-                case CREATE:
-                    PlanStore.write(planDir, seq, outcome.restType, outcome.oid, unit.name(),
-                            PlanStore.Kind.CREATE, outcome.createBody);
-                    projected.put(key, desired.clone());
-                    tally.created++;
-                    reportUnit(unit, "would-create", "", false);
-                    break;
-                case PATCH:
-                    PlanStore.write(planDir, seq, outcome.restType, outcome.oid, unit.name(),
-                            PlanStore.Kind.PATCH, outcome.modificationXml);
-                    if (projected.containsKey(key)) {
-                        projected.put(key, applyDelta(projected.get(key), outcome.delta));
-                    }
-                    tally.patched++;
-                    reportUnit(unit, "would-patch", outcome.changes + " change(s)", false);
-                    break;
-                case IN_SYNC:
-                    tally.inSync++;
-                    reportUnit(unit, "in-sync", "", false);
-                    break;
-                case SKIP:
-                    tally.skipped++;
-                    reportUnit(unit, "skip", safe(outcome.detail), false);
-                    break;
-                case FAIL:
-                default:
-                    tally.failed++;
-                    reportUnit(unit, "error", safe(outcome.detail), true);
-                    break;
+                switch (outcome.action) {
+                    case CREATE:
+                        PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid, unit.name(),
+                                PlanStore.Kind.CREATE, outcome.createBody);
+                        projected.put(key, desired.clone());
+                        tally.created++;
+                        reportUnit(unit, "would-create", "", false);
+                        break;
+                    case PATCH:
+                        PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid, unit.name(),
+                                PlanStore.Kind.PATCH, outcome.modificationXml);
+                        if (projected.containsKey(key)) {
+                            projected.put(key, applyDelta(projected.get(key), outcome.delta));
+                        }
+                        tally.patched++;
+                        reportUnit(unit, "would-patch", outcome.changes + " change(s)", false);
+                        break;
+                    case IN_SYNC:
+                        tally.inSync++;
+                        reportUnit(unit, "in-sync", "", false);
+                        break;
+                    case SKIP:
+                        tally.skipped++;
+                        reportUnit(unit, "skip", safe(outcome.detail), false);
+                        break;
+                    case FAIL:
+                    default:
+                        tally.failed++;
+                        reportUnit(unit, "error", safe(outcome.detail), true);
+                        break;
+                }
+            } catch (Exception e) {
+                // One unit that cannot be planned must not abandon the loop mid-write: the plan would be
+                // both partial and unexplained. Record it and carry on, as the apply pass does.
+                if (isFatal(e)) {
+                    throw e;
+                }
+                tally.failed++;
+                reportUnit(unit, "error", safe(e.getMessage()), true);
+                LOG.debug("planning {} {} failed", unit.typeName(), unit.identityLabel(), e);
             }
         }
         emitSummary(tally, true);
@@ -828,8 +848,11 @@ public class DeployCommand implements Callable<Integer> {
             status("Wrote " + tally.changed() + " plan file(s) to " + planDir + ".");
         }
         if (tally.failed > 0) {
+            note("note: the plan in " + planDir + " is incomplete and will not be replayed; fix the errors "
+                    + "above and re-run --plan.");
             return EXIT_ERROR;
         }
+        PlanStore.markComplete(planDir);
         return tally.changed() > 0 ? 1 : 0;
     }
 
