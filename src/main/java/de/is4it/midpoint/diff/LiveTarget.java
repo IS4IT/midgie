@@ -13,7 +13,7 @@ import com.evolveum.midpoint.util.exception.SchemaException;
 /**
  * The REST address of an object to fetch/patch: its collection type ({@code users}, {@code roles}, …)
  * and OID, resolved from the desired object (plus an optional {@code --oid} override). Shared by the
- * {@code diff --host} and {@code apply} live paths.
+ * {@code diff --url} and {@code apply} live paths.
  */
 public final class LiveTarget {
 

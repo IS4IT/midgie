@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 # Test rig: a real midPoint server for exercising midgie over REST
-# (the future `diff --host` / `apply` live modes).
+# (the future `diff --url` / `apply` live modes).
 #
 #
 # IMPORTANT: the midPoint image tag (MP_VER) must match <midpoint.version> in

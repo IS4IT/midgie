@@ -48,7 +48,7 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 
 ## Commands
 
-`midgie` has three subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them. All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--host`).
+`midgie` has three subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them. All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
 
 > Each object is compared with **itself**, not another object: its *desired* state (how you want it) against its *current* state (how it is now), and the delta transforms current → desired. If both sides carry an OID and the OIDs differ, the run is refused.
 
@@ -56,41 +56,41 @@ In live mode all three address the object by OID (its `oid`, or `--oid`); if it 
 
 ### `diff` — the minimal delta
 
-Emits the `ObjectModificationType`. The current state is a local `CURRENT` file (offline) or, with `--host`, a `GET` over REST (fetched by the desired object's `oid`, or `--oid`). Pass `-` for either path to read from stdin.
+Emits the `ObjectModificationType`. The current state is a local `CURRENT` file (offline) or, with `--url`, a `GET` over REST (fetched by the desired object's `oid`, or `--oid`). Pass `-` for either path to read from stdin.
 
 ```bash
 # Offline: desired vs a saved copy of its current state
 bin/midgie diff desired.xml current.xml        # -> itemDelta on stdout (exit 1 if they differ)
 
 # Live: desired vs its current state on a running midPoint
-bin/midgie diff desired.xml --host https://mp.example/midpoint --user administrator
+bin/midgie diff desired.xml --url https://mp.example/midpoint --user administrator
 ```
 
-An explicit `CURRENT` file means offline; `--host` (or `MIDPOINT_URL`) means live — the two together are an error, and a host inherited only from `MIDPOINT_URL` is a fallback that a `CURRENT` file overrides (so an env var never breaks a file diff).
+An explicit `CURRENT` file means offline; `--url` (or `MIDPOINT_URL`) means live — the two together are an error, and a URL inherited only from `MIDPOINT_URL` is a fallback that a `CURRENT` file overrides (so an env var never breaks a file diff).
 
 ### `apply` — reconcile one live object
 
 Fetches the object's current state, computes the delta, shows what would change, and — after confirmation — `PATCH`es it. Idempotent (nothing is sent when already in sync); `--create-if-absent` `POST`s the object if it does not exist yet (operational/metadata items stripped first); `--dry-run` reports without writing (exit `1` if it would change anything); `--yes`/`-y` skips the prompt (required in non-interactive use).
 
 ```bash
-bin/midgie apply desired.xml --host https://mp.example/midpoint --user administrator --create-if-absent
+bin/midgie apply desired.xml --url https://mp.example/midpoint --user administrator --create-if-absent
 ```
 
 ### `deploy` — reconcile a folder tree
 
-Walks a folder tree of desired-state object XML, sorts it by dependency, and either prints the apply order (offline) or reconciles it against a live server (`--host`).
+Walks a folder tree of desired-state object XML, sorts it by dependency, and either prints the apply order (offline) or reconciles it against a live server (`--url`).
 
 ```bash
 bin/midgie deploy config/          # offline: print the dependency-ordered apply plan
-bin/midgie deploy config/ --host https://mp.example/midpoint --user administrator --dry-run   # preview the changes
-bin/midgie deploy config/ --host https://mp.example/midpoint --user administrator --create-if-absent --yes   # apply
-bin/midgie deploy config/ --host … --create-if-absent --plan out/   # write the changes to out/ for review
-bin/midgie deploy --apply-plan out/ --host … --yes                  # replay a reviewed plan
+bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator --dry-run   # preview the changes
+bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator --create-if-absent --yes   # apply
+bin/midgie deploy config/ --url … --create-if-absent --plan out/   # write the changes to out/ for review
+bin/midgie deploy --apply-plan out/ --url … --yes                  # replay a reviewed plan
 ```
 
 The order is two-tier: extension **schemas** first (raw `.xsd` inputs and exported `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered so extension attributes resolve), then **objects** (sorted by their reference OIDs). Objects are identified by OID, or by type+name when they carry no OID, so several files may declare *fragments* of one object — each applied individually. A genuine contradiction between fragments (a different type under one OID, or a single-valued item set to two values) is an error; same-object non-overlapping fragments are fine.
 
-With `--host`, each unit is reconciled file-by-file in that order — look up the current object by a search (so a missing object doesn't 404), diff the fragment (`--scope present`), then `PATCH`, or `POST` to create with `--create-if-absent` (an OID-less object is reconciled by type+name with `--match-by-name`). It is sequential, so a role is created before the user that references it, and re-running is idempotent. Writing is gated: a single confirmation prompt by default (`--yes` to bypass, `--confirm-each-apply` to prompt per change, `--dry-run` to preview without writing; a non-interactive session without `--yes` refuses). Exit codes: offline `0`/`2`; apply `0` (all created/patched/in-sync/skipped or declined) / `2` (any unit failed); `--dry-run` `0` in-sync / `1` would change something / `2` error.
+With `--url`, each unit is reconciled file-by-file in that order — look up the current object by a search (so a missing object doesn't 404), diff the fragment (`--scope present`), then `PATCH`, or `POST` to create with `--create-if-absent` (an OID-less object is reconciled by type+name with `--match-by-name`). It is sequential, so a role is created before the user that references it, and re-running is idempotent. Writing is gated: a single confirmation prompt by default (`--yes` to bypass, `--confirm-each-apply` to prompt per change, `--dry-run` to preview without writing; a non-interactive session without `--yes` refuses). Exit codes: offline `0`/`2`; apply `0` (all created/patched/in-sync/skipped or declined) / `2` (any unit failed); `--dry-run` `0` in-sync / `1` would change something / `2` error.
 
 Three more flags round it out: **`--retry`** re-applies the failed units until they stabilise (catches references the static OID graph can't order — by name, filter, or expression); **`--plan <dir>`** writes the ordered changes as numbered `create`/`patch` files for review or GitOps, and **`--apply-plan <dir>`** replays them verbatim; **`--policy <file>`** is a central file of `<selector> key=value` lines keyed on the object/item — a single glob over `Type/Name/item…` (or `oid:<oid>/item…`) with `*` (one segment) and `**` (any depth) at any level, most-specific selector wins — for when part of the tree needs, say, `scope=full` on one object or `multivalue=merge` on a container. The object XML stays pure. Full design in [`DESIGN.md`](DESIGN.md#deploy--apply-a-folder-tree).
 
@@ -183,7 +183,7 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 
 | flag | meaning |
 |---|---|
-| `--host URL` | midPoint base URL (or `MIDPOINT_URL`), e.g. `https://mp.example/midpoint`. A trailing `/ws/rest` is accepted. |
+| `--url URL` | midPoint base URL (or `MIDPOINT_URL`), e.g. `https://mp.example/midpoint`. A trailing `/ws/rest` is accepted. |
 | `--user USER` | REST user (or `MIDPOINT_USER`). |
 | `--password`, `--password-env VAR`, `--password-file FILE` | Password sources; resolved in the order **`--password` → `--password-env` → `--password-file` → `MIDPOINT_PASSWORD` → interactive prompt**. Prefer anything but `--password` (it is visible in `ps`/shell history). |
 | `--oid OID` | Object to fetch/patch. Defaults to the OID in the desired object. |
@@ -220,7 +220,7 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 
 | var | equivalent of |
 |---|---|
-| `MIDPOINT_URL` | `--host` |
+| `MIDPOINT_URL` | `--url` |
 | `MIDPOINT_USER` | `--user` |
 | `MIDPOINT_PASSWORD` | password (after the `--password*` flags, before the prompt) |
 | `MIDGIE_JAR` | JAR path used by the `bin/midgie` launcher |

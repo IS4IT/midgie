@@ -18,10 +18,10 @@ import org.slf4j.LoggerFactory;
 import picocli.CommandLine.Option;
 
 /**
- * Shared live-mode connection flags for the {@code diff} and {@code apply} subcommands. When a host is
+ * Shared live-mode connection flags for the {@code diff} and {@code apply} subcommands. When a URL is
  * set the command talks to a running midPoint over REST instead of reading a local CURRENT file.
  *
- * <p>Host/user/password default from the {@code MIDPOINT_URL} / {@code MIDPOINT_USER} /
+ * <p>URL/user/password default from the {@code MIDPOINT_URL} / {@code MIDPOINT_USER} /
  * {@code MIDPOINT_PASSWORD} environment variables. The password is resolved without putting it on the
  * command line (which leaks into {@code ps} and shell history), in this order: {@code --password} (kept,
  * but discouraged) → {@code --password-env VAR} → {@code --password-file FILE} → {@code MIDPOINT_PASSWORD}
@@ -31,10 +31,10 @@ public final class ConnectionOptions {
 
     private static final Logger LOG = LoggerFactory.getLogger(ConnectionOptions.class);
 
-    @Option(names = "--host", paramLabel = "URL",
+    @Option(names = "--url", paramLabel = "URL",
             description = "midPoint base URL for live mode (or the MIDPOINT_URL env var), e.g. "
                     + "http://localhost:12080/midpoint. A trailing /ws/rest is accepted.")
-    URI hostOption;
+    URI urlOption;
 
     @Option(names = {"--user", "-u"}, paramLabel = "USER", description = "REST user (or the MIDPOINT_USER env var).")
     String userOption;
@@ -73,23 +73,23 @@ public final class ConnectionOptions {
                     + "(useful while the server is starting).")
     int retries;
 
-    /** The resolved host: {@code --host} if given, else {@code MIDPOINT_URL}. Null when neither is set. */
-    public URI host() {
-        if (hostOption != null) {
-            return hostOption;
+    /** The resolved base URL: {@code --url} if given, else {@code MIDPOINT_URL}. Null when neither is set. */
+    public URI url() {
+        if (urlOption != null) {
+            return urlOption;
         }
         String env = System.getenv("MIDPOINT_URL");
         return (env != null && !env.isBlank()) ? URI.create(env.trim()) : null;
     }
 
-    /** True only when {@code --host} was passed on the command line (not merely inherited from the env). */
-    public boolean isExplicitHost() {
-        return hostOption != null;
+    /** True only when {@code --url} was passed on the command line (not merely inherited from the env). */
+    public boolean isExplicitUrl() {
+        return urlOption != null;
     }
 
-    /** True when live mode is available (a host was given on the CLI or via MIDPOINT_URL). */
+    /** True when live mode is available (a URL was given on the CLI or via MIDPOINT_URL). */
     public boolean isLive() {
-        return host() != null;
+        return url() != null;
     }
 
     private String user() {
@@ -111,14 +111,14 @@ public final class ConnectionOptions {
         if (password == null) {
             return null; // resolvePassword() already explained why
         }
-        LOG.debug("live mode: host={}, user={}, insecure={}, cacert={}, timeout={}s, retries={}",
-                host(), user, insecure, caCert, timeoutSeconds, retries);
+        LOG.debug("live mode: url={}, user={}, insecure={}, cacert={}, timeout={}s, retries={}",
+                url(), user, insecure, caCert, timeoutSeconds, retries);
         MidpointRestClient.Config config = new MidpointRestClient.Config()
                 .insecure(insecure)
                 .caCert(caCert)
                 .requestTimeout(java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds)))
                 .maxRetries(retries);
-        return new MidpointRestClient(host(), user, password, config);
+        return new MidpointRestClient(url(), user, password, config);
     }
 
     /** Resolve the password from the most-explicit source available, or {@code null} (with an error). */
@@ -157,7 +157,7 @@ public final class ConnectionOptions {
         }
         Console console = System.console();
         if (console != null) {
-            char[] entered = console.readPassword("Password for %s at %s: ", user(), host());
+            char[] entered = console.readPassword("Password for %s at %s: ", user(), url());
             if (entered != null && entered.length > 0) {
                 LOG.debug("password source: interactive prompt");
                 return new String(entered);

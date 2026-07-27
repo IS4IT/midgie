@@ -184,7 +184,7 @@ public final class SchemaOptions {
     }
 
     /**
-     * A 401 (auth), a redirect (a misconfigured {@code --host}), or a connection/timeout failure means the
+     * A 401 (auth), a redirect (a misconfigured {@code --url}), or a connection/timeout failure means the
      * whole live operation is doomed and will be reported clearly by the object fetch, so the schema-read
      * warning would just be noise. A 403 (or anything else) is kept — the object may still be readable while
      * {@code /schemas} is not.

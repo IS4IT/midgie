@@ -1,7 +1,7 @@
 # TODO — possible improvements
 
 Hardening and polish for `midgie`. None of these are bugs — the tool is functional (offline
-`diff`, `diff --host`, `apply` with create/patch/idempotency, and two-layer extension schema). Priority
+`diff`, `diff --url`, `apply` with create/patch/idempotency, and two-layer extension schema). Priority
 is value × how exposed the gap is. ⭐ marks a good first cluster (small, independent, high-value).
 
 ## A. Safety on `apply` (it mutates a live server) — done
@@ -40,7 +40,7 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] **Classgraph `Unsafe` startup warnings** — the `bin/midgie` launcher adds `--sun-misc-unsafe-memory-access=allow` on JDK 23+ (the flag is unknown to JDK ≤ 22, which doesn't warn). The warnings go to the native stderr, bypassing `System.err`, so an in-process filter is impossible — verified empirically. Direct-JAR users: `JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
 
 ## G. Test coverage gaps — done
-- [x] **Command-layer offline tests** — `CliTest` drives the real CLI offline: missing LIVE, `--host` vs LIVE exclusion, bad `--scope`/`--equivalence`/`--multivalue`/`--path`/`--format` → exit 2, `apply` without `--host`/password → exit 2, plus drift/no-drift exit codes.
+- [x] **Command-layer offline tests** — `CliTest` drives the real CLI offline: missing LIVE, `--url` vs LIVE exclusion, bad `--scope`/`--equivalence`/`--multivalue`/`--path`/`--format` → exit 2, `apply` without `--url`/password → exit 2, plus drift/no-drift exit codes.
 - [x] **Golden-file test** (`GoldenOutputTest`) pins the exact `ObjectModificationType` XML; equivalence metadata-sensitivity added to `DiffCommandTest` (`scope=full` delete already covered there).
 
 ## H. `deploy` — apply a whole folder tree in dependency order (done)
@@ -49,7 +49,7 @@ A new subcommand that discovers desired-state object XML under one or more paths
 
 **Increment 1 (built): read-only discovery + schema-aware dependency sort.** `deploy <path...>` discovers the tree, sorts it, and prints the apply order; offline it never writes. The order is **two tiers**: extension *schemas* first (raw `.xsd` inputs and deployable `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered — all sources in one batch, since prism's `registerDynamicSchemaExtensions` replaces the dynamic set — so objects using extension attributes parse), then *objects* (grouped by identity — OID, else type+name — and sorted by outbound reference OIDs). Several files may be *fragments* of one object, each its own apply unit; a genuine contradiction (a different type under one OID, or a single-valued item with differing values) is an error, but same-identity non-overlapping fragments are fine. Cycles are broken and warned, not fatal. New classes: `DeployCommand`, `Discovery`, `SchemaFile`, `Fragment`, `DeployObject`, `ReferenceCollector`, `TopoSort`; `SchemaOptions` gained a `collectSchemas`/`newBaseContext` split.
 
-**Increment 2 (built): the apply loop + `--dry-run`.** With `--host`, each unit is reconciled file-by-file in the sorted order — search for the current object (by OID, or by type+name for `--match-by-name`), diff the fragment (`--scope present`), then PATCH, or POST with `--create-if-absent`. Sequential, so a role is created before the user that references it. Writing is gated: a single up-front confirmation by default (`--yes` to bypass, `--confirm-each-apply` per change, `--dry-run` to preview; non-interactive without `--yes` refuses). New: `Reconciler`, `MidpointRestClient.searchObjects`. Existence is checked by search (not `GET`) so a missing object is an empty result, not a 404 that midPoint logs — shared in `LiveLookup`, and adopted by `diff --host`/`apply` too.
+**Increment 2 (built): the apply loop + `--dry-run`.** With `--url`, each unit is reconciled file-by-file in the sorted order — search for the current object (by OID, or by type+name for `--match-by-name`), diff the fragment (`--scope present`), then PATCH, or POST with `--create-if-absent`. Sequential, so a role is created before the user that references it. Writing is gated: a single up-front confirmation by default (`--yes` to bypass, `--confirm-each-apply` per change, `--dry-run` to preview; non-interactive without `--yes` refuses). New: `Reconciler`, `MidpointRestClient.searchObjects`. Existence is checked by search (not `GET`) so a missing object is an empty result, not a 404 that midPoint logs — shared in `LiveLookup`, and adopted by `diff --url`/`apply` too.
 
 **Increment 3 (built): retry, saved plans, strategy policy.** `--retry` re-applies the failed set round after round until it stops making progress, then fails on anything stuck (catches by-name/filter refs the static graph can't order). `--plan <dir>` writes the ordered per-object changes as `NNN-<type>-<oid>.{create,patch}.xml` files (reconciling against a local projection so a second fragment of a new object becomes a patch); `--apply-plan <dir>` replays them verbatim (POST creates, PATCH patches, in filename order). `--policy <file>` maps `<selector> key=value` lines — a glob over `Type/Name/item…` with `*`/`**` at any level, most-specific wins — to a per-object/item diff strategy. New: `PlanStore`, `Policy`, `GlobPath`; `Reconciler` gained per-call strategy + `planAgainst`.
 

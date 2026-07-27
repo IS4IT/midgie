@@ -32,19 +32,19 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * End-to-end tests against a running midPoint (the {@code docker/} rig). They drive the real CLI over
- * REST, so they cover the live paths — {@code diff --host}, {@code apply}, create-if-absent, idempotency —
+ * REST, so they cover the live paths — {@code diff --url}, {@code apply}, create-if-absent, idempotency —
  * that the offline unit tests cannot. When the rig is unreachable the whole class is skipped, so
  * {@code mvn test} stays green without docker.
  *
- * <p>Connection defaults match {@code docker/.env}; override with {@code -Dmpdiff.it.host=...},
- * {@code -Dmpdiff.it.user=...}, {@code -Dmpdiff.it.password=...}. Uses one throwaway user (a fixed OID,
+ * <p>Connection defaults match {@code docker/.env}; override with {@code -Dmidgie.it.url=...},
+ * {@code -Dmidgie.it.user=...}, {@code -Dmidgie.it.password=...}. Uses one throwaway user (a fixed OID,
  * name {@code zz-it-user}) that is deleted before and after the run.
  */
 class LiveIntegrationTest {
 
-    private static final String HOST = System.getProperty("mpdiff.it.host", "http://localhost:12080/midpoint");
-    private static final String USER = System.getProperty("mpdiff.it.user", "administrator");
-    private static final String PASSWORD = System.getProperty("mpdiff.it.password", "T3stPw890uio");
+    private static final String HOST = System.getProperty("midgie.it.url", "http://localhost:12080/midpoint");
+    private static final String USER = System.getProperty("midgie.it.user", "administrator");
+    private static final String PASSWORD = System.getProperty("midgie.it.password", "T3stPw890uio");
 
     private static final String NS = "http://midpoint.evolveum.com/xml/ns/public/common/common-3";
     private static final String ADMIN_OID = "00000000-0000-0000-0000-000000000002";
@@ -85,26 +85,26 @@ class LiveIntegrationTest {
 
         // 1) create-if-absent -> POST creates the object (--yes: the test runs non-interactively)
         File v1 = writeUser(dir, "v1", "IT User One");
-        CliResult create = run("apply", v1.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        CliResult create = run("apply", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
         assertEquals(0, create.exit, create.err);
         assertTrue(create.out.contains("Created"), "expected 'Created', got: " + create.out);
         assertTrue(client.getObject("users", TEST_OID).contains("IT User One"), "server should hold the created user");
 
-        // 2) diff --host sees the drift and emits a replace of fullName
+        // 2) diff --url sees the drift and emits a replace of fullName
         File v2 = writeUser(dir, "v2", "IT User Two");
-        CliResult diff = run("diff", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--format", "summary");
+        CliResult diff = run("diff", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--format", "summary");
         assertEquals(1, diff.exit, diff.err); // 1 == drift
         assertTrue(diff.out.contains("replace fullName"), "expected 'replace fullName', got: " + diff.out);
 
         // 3) apply -> PATCH the change
-        CliResult apply = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        CliResult apply = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
         assertEquals(0, apply.exit, apply.err);
         assertTrue(apply.out.contains("Applied"), "expected 'Applied', got: " + apply.out);
         assertTrue(client.getObject("users", TEST_OID).contains("IT User Two"), "server should hold the patched value");
 
         // 4) re-apply the same desired state -> idempotent no-op (no PATCH). No --yes needed: a no-op
         //    never reaches the confirmation.
-        CliResult again = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD);
+        CliResult again = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD);
         assertEquals(0, again.exit, again.err);
         assertTrue(again.out.contains("No changes"), "re-apply must be a no-op, got: " + again.out);
     }
@@ -117,10 +117,10 @@ class LiveIntegrationTest {
         // Create the user (with --yes), then try to apply a change WITHOUT --yes. The test JVM has no
         // console, so apply must refuse (exit 2) and leave the value untouched.
         run("apply", writeUser(dir, "a", "Refuse One").getPath(),
-                "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+                "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
 
         CliResult refused = run("apply", writeUser(dir, "b", "Refuse Two").getPath(),
-                "--host", HOST, "-u", USER, "-p", PASSWORD);
+                "--url", HOST, "-u", USER, "-p", PASSWORD);
         assertEquals(2, refused.exit, refused.out + refused.err);
         assertTrue(refused.err.contains("--yes"), "should point the user at --yes, got: " + refused.err);
         assertTrue(client.getObject("users", TEST_OID).contains("Refuse One"), "value must be unchanged");
@@ -133,15 +133,15 @@ class LiveIntegrationTest {
 
         // create-if-absent --dry-run on a missing object -> would change -> exit 1, and it stays absent.
         File v1 = writeUser(dir, "v1", "Dry One");
-        CliResult dryCreate = run("apply", v1.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult dryCreate = run("apply", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--create-if-absent", "--dry-run");
         assertEquals(1, dryCreate.exit, dryCreate.err);
         assertFalse(testUserExists(), "dry-run must not create the object");
 
         // create it for real, then dry-run a change -> would change -> exit 1, delta printed, not applied.
-        run("apply", v1.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        run("apply", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
         File v2 = writeUser(dir, "v2", "Dry Two");
-        CliResult dryPatch = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult dryPatch = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--dry-run", "--format", "summary");
         assertEquals(1, dryPatch.exit, dryPatch.err);
         assertTrue(dryPatch.out.contains("replace fullName"), "dry-run prints the delta, got: " + dryPatch.out);
@@ -149,15 +149,15 @@ class LiveIntegrationTest {
         assertTrue(client.getObject("users", TEST_OID).contains("Dry One"), "dry-run must not change the object");
 
         // same dry-run with --quiet -> exit 1, delta still on stdout, but no advisory note on stderr.
-        CliResult dryQuiet = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult dryQuiet = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--dry-run", "--format", "summary", "--quiet");
         assertEquals(1, dryQuiet.exit, dryQuiet.err);
         assertTrue(dryQuiet.out.contains("replace fullName"), "quiet keeps the delta payload");
         assertFalse(dryQuiet.err.contains("NOT applied"), "quiet suppresses the advisory note, got: " + dryQuiet.err);
 
         // apply for real, then dry-run again -> in sync -> exit 0.
-        run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--yes");
-        CliResult drySync = run("apply", v2.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        CliResult drySync = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
         assertEquals(0, drySync.exit, drySync.err);
     }
 
@@ -170,7 +170,7 @@ class LiveIntegrationTest {
         File desired = dir.resolve("admin.xml").toFile();
         Files.writeString(desired.toPath(), adminXml, StandardCharsets.UTF_8);
 
-        CliResult diff = run("diff", desired.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--format", "summary");
+        CliResult diff = run("diff", desired.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--format", "summary");
         assertEquals(0, diff.exit, diff.err); // 0 == no differences
         assertTrue(diff.out.contains("No differences"), "expected 'No differences', got: " + diff.out);
     }
@@ -195,7 +195,7 @@ class LiveIntegrationTest {
         writeDeployTree(dir);
 
         // create-if-absent --yes -> POSTs the role, then the user that assigns it, in that order.
-        CliResult create = run("deploy", dir.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult create = run("deploy", dir.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--create-if-absent", "--yes");
         assertEquals(0, create.exit, create.err);
         assertTrue(create.out.contains("created"), "expected 'created' lines, got: " + create.out);
@@ -207,7 +207,7 @@ class LiveIntegrationTest {
         assertTrue(client.getObject("users", DEPLOY_USER_OID).contains("zz-it-deploy-user"));
 
         // Re-run as a dry-run -> everything already matches -> in-sync, exit 0 (idempotent).
-        CliResult dry = run("deploy", dir.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult dry = run("deploy", dir.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--create-if-absent", "--dry-run");
         assertEquals(0, dry.exit, dry.out + dry.err);
         assertTrue(dry.out.contains("in-sync"), "re-deploy must be a no-op, got: " + dry.out);
@@ -220,7 +220,7 @@ class LiveIntegrationTest {
         writeDeployTree(dir);
 
         // No --yes and no console -> deploy must refuse after the preview and write nothing.
-        CliResult refused = run("deploy", dir.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult refused = run("deploy", dir.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--create-if-absent");
         assertEquals(2, refused.exit, refused.out + refused.err);
         assertTrue(refused.err.contains("--yes"), "should point the user at --yes, got: " + refused.err);
@@ -235,13 +235,13 @@ class LiveIntegrationTest {
         // Seed a role with a known OID and name.
         Path seed = java.nio.file.Files.createDirectories(dir.resolve("seed"));
         Files.writeString(seed.resolve("role.xml"), role(DEPLOY_MATCH_OID, "AOM Role", "orig"), StandardCharsets.UTF_8);
-        run("deploy", seed.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        run("deploy", seed.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
 
         // Deploy an OID-less fragment with the SAME name and a changed description; --match-by-name finds
         // it by name and PATCHes it.
         Path aom = java.nio.file.Files.createDirectories(dir.resolve("aom"));
         Files.writeString(aom.resolve("role.xml"), role(null, "AOM Role", "changed"), StandardCharsets.UTF_8);
-        CliResult patched = run("deploy", aom.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult patched = run("deploy", aom.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--match-by-name", "--yes");
         assertEquals(0, patched.exit, patched.err);
         assertTrue(patched.out.contains("patched"), "match-by-name should patch the match, got: " + patched.out);
@@ -258,20 +258,20 @@ class LiveIntegrationTest {
         Files.writeString(tree.resolve("role.xml"), role(null, COMBO_NAME, "v1"), StandardCharsets.UTF_8);
 
         // No match yet: --match-by-name finds nothing, --create-if-absent then POSTs it.
-        CliResult created = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult created = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--match-by-name", "--create-if-absent", "--yes");
         assertEquals(0, created.exit, created.err);
         assertTrue(created.out.contains("created"), "no match -> create, got: " + created.out);
 
         // Re-run identical: --match-by-name now finds it by name -> in-sync (no duplicate created).
-        CliResult resynced = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult resynced = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--match-by-name", "--create-if-absent", "--yes");
         assertEquals(0, resynced.exit, resynced.err);
         assertTrue(resynced.out.contains("in-sync"), "re-run must match, not create again, got: " + resynced.out);
 
         // Change the fragment: match -> patch.
         Files.writeString(tree.resolve("role.xml"), role(null, COMBO_NAME, "v2"), StandardCharsets.UTF_8);
-        CliResult patched = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult patched = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--match-by-name", "--create-if-absent", "--yes");
         assertEquals(0, patched.exit, patched.err);
         assertTrue(patched.out.contains("patched"), "changed fragment -> patch, got: " + patched.out);
@@ -288,19 +288,19 @@ class LiveIntegrationTest {
         Path plan = dir.resolve("plan");
 
         // --plan writes create files for the fresh tree and touches nothing on the server (exit 1 = would change).
-        CliResult planned = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult planned = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--create-if-absent", "--plan", plan.toString());
         assertEquals(1, planned.exit, planned.err);
         assertFalse(exists("roles", DEPLOY_ROLE_OID), "--plan must not write to the server");
         assertTrue(Files.list(plan).anyMatch(p -> p.toString().endsWith(".create.xml")), "expected create files");
 
         // --apply-plan replays them: the role (lower sequence) is POSTed before the user that assigns it.
-        CliResult applied = run("deploy", "--apply-plan", plan.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        CliResult applied = run("deploy", "--apply-plan", plan.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
         assertEquals(0, applied.exit, applied.err);
         assertTrue(exists("roles", DEPLOY_ROLE_OID) && exists("users", DEPLOY_USER_OID), "both objects created");
 
         // Re-plan now that they exist -> nothing to change -> exit 0.
-        CliResult again = run("deploy", tree.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult again = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--create-if-absent", "--plan", dir.resolve("plan2").toString());
         assertEquals(0, again.exit, again.out + again.err);
     }
@@ -313,18 +313,18 @@ class LiveIntegrationTest {
         // Seed a role that carries a description.
         Path seed = java.nio.file.Files.createDirectories(dir.resolve("seed"));
         Files.writeString(seed.resolve("r.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", "seeded"), StandardCharsets.UTF_8);
-        run("deploy", seed.toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        run("deploy", seed.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
 
         // Desired state omits the description. Under the default --scope present it is left alone (in-sync).
         Path tree = java.nio.file.Files.createDirectories(dir.resolve("tree").resolve("roles"));
         Files.writeString(tree.resolve("r.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", null), StandardCharsets.UTF_8);
-        CliResult present = run("deploy", dir.resolve("tree").toString(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        CliResult present = run("deploy", dir.resolve("tree").toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
         assertEquals(0, present.exit, present.out + present.err);
 
         // A policy forcing scope=full on the role makes it a full replace -> the description drifts -> exit 1.
         Path policy = dir.resolve("policy.txt");
         Files.writeString(policy, "RoleType/* scope=full\n", StandardCharsets.UTF_8);
-        CliResult full = run("deploy", dir.resolve("tree").toString(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult full = run("deploy", dir.resolve("tree").toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--policy", policy.toString(), "--dry-run");
         assertEquals(1, full.exit, full.out + full.err);
     }
@@ -337,19 +337,19 @@ class LiveIntegrationTest {
         // Seed a role with an OID, name, and description.
         File seed = dir.resolve("seed.xml").toFile();
         Files.writeString(seed.toPath(), role(DEPLOY_ROLE_OID, "IT Deploy Role", "orig"), StandardCharsets.UTF_8);
-        run("deploy", seed.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        run("deploy", seed.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
 
         // An OID-less desired with the same name and a changed description.
         File oidless = dir.resolve("oidless.xml").toFile();
         Files.writeString(oidless.toPath(), role(null, "IT Deploy Role", "changed"), StandardCharsets.UTF_8);
 
         // Without --match-by-name there is no OID to address -> error.
-        CliResult noFlag = run("diff", oidless.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD);
+        CliResult noFlag = run("diff", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD);
         assertEquals(2, noFlag.exit);
         assertTrue(noFlag.err.contains("match-by-name"), noFlag.err);
 
         // With --match-by-name it resolves by name and sees the drift.
-        CliResult matched = run("diff", oidless.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult matched = run("diff", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--match-by-name", "--format", "summary");
         assertEquals(1, matched.exit, matched.err);
         assertTrue(matched.out.contains("replace description"), matched.out);
@@ -362,11 +362,11 @@ class LiveIntegrationTest {
 
         File seed = dir.resolve("seed.xml").toFile();
         Files.writeString(seed.toPath(), role(DEPLOY_ROLE_OID, "IT Deploy Role", "orig"), StandardCharsets.UTF_8);
-        run("deploy", seed.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        run("deploy", seed.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
 
         File oidless = dir.resolve("oidless.xml").toFile();
         Files.writeString(oidless.toPath(), role(null, "IT Deploy Role", "changed"), StandardCharsets.UTF_8);
-        CliResult applied = run("apply", oidless.getPath(), "--host", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult applied = run("apply", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--match-by-name", "--yes");
         assertEquals(0, applied.exit, applied.err);
         assertTrue(applied.out.contains("Applied"), applied.out);

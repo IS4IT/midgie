@@ -35,13 +35,13 @@ import picocli.CommandLine.Parameters;
 
 /**
  * The {@code deploy} subcommand: discover a tree of desired-state object XML, sort it by dependency, and
- * either print the apply order (offline) or reconcile each unit against a live server ({@code --host}).
+ * either print the apply order (offline) or reconcile each unit against a live server ({@code --url}).
  *
  * <p>The order is two-tier: extension <b>schemas</b> (sorted by {@code <xsd:import>} dependency and
  * registered so objects using extension attributes parse), then <b>objects</b> (grouped by identity —
  * OID, else type+name — and sorted by outbound reference OIDs).
  *
- * <p>With {@code --host} each unit is reconciled file-by-file (look up current state, diff the fragment
+ * <p>With {@code --url} each unit is reconciled file-by-file (look up current state, diff the fragment
  * {@code --scope present}, PATCH, or POST to create with {@code --create-if-absent}), in that order, so a
  * role is created before the user that references it. {@code --retry} re-applies the failed set until it
  * stabilises; {@code --plan <dir>} writes the changes as reviewable files and {@code --apply-plan <dir>}
@@ -56,7 +56,7 @@ import picocli.CommandLine.Parameters;
         name = "deploy",
         mixinStandardHelpOptions = true,
         versionProvider = VersionProvider.class,
-        description = "Discover a folder tree, sort by dependency, and print the apply order or apply it (--host)."
+        description = "Discover a folder tree, sort by dependency, and print the apply order or apply it (--url)."
 )
 public class DeployCommand implements Callable<Integer> {
 
@@ -79,7 +79,7 @@ public class DeployCommand implements Callable<Integer> {
     ConnectionOptions connectionOptions;
 
     @Option(names = "--dry-run",
-            description = "Compute and print every change but do not write. Needs --host. Exits 1 if anything would change.")
+            description = "Compute and print every change but do not write. Needs --url. Exits 1 if anything would change.")
     boolean dryRun;
 
     @Option(names = {"--yes", "-y"},
@@ -103,11 +103,11 @@ public class DeployCommand implements Callable<Integer> {
     boolean retry;
 
     @Option(names = "--plan", paramLabel = "DIR",
-            description = "Write the ordered per-object changes (create/patch files) to DIR instead of applying. Needs --host.")
+            description = "Write the ordered per-object changes (create/patch files) to DIR instead of applying. Needs --url.")
     File planDir;
 
     @Option(names = "--apply-plan", paramLabel = "DIR",
-            description = "Replay a plan directory written by --plan (POST creates, PATCH patches, in order). Needs --host.")
+            description = "Replay a plan directory written by --plan (POST creates, PATCH patches, in order). Needs --url.")
     File applyPlanDir;
 
     @Option(names = "--policy", paramLabel = "FILE",
@@ -155,7 +155,7 @@ public class DeployCommand implements Callable<Integer> {
                 || retry || planDir != null || applyPlanDir != null || policyFile != null;
         if (!live && writeFlags) {
             System.err.println("midgie: --dry-run/--yes/--create-if-absent/--match-by-name/--retry/"
-                    + "--plan/--apply-plan/--policy need --host; without a host, deploy only prints the plan.");
+                    + "--plan/--apply-plan/--policy need --url; without it, deploy only prints the plan.");
             return EXIT_ERROR;
         }
         if (applyPlanDir == null && (paths == null || paths.isEmpty())) {
@@ -613,7 +613,7 @@ public class DeployCommand implements Callable<Integer> {
         Console console = System.console();
         boolean interactive = console != null;
         String answer = interactive
-                ? console.readLine("Apply %d change(s) to %s? [y/N] ", changeCount, connectionOptions.host())
+                ? console.readLine("Apply %d change(s) to %s? [y/N] ", changeCount, connectionOptions.url())
                 : null;
         switch (ApplyCommand.decideConfirmation(false, interactive, answer)) {
             case PROCEED:

@@ -42,7 +42,7 @@ class CliTest {
 
     @Test
     void liveFileAndHostAreMutuallyExclusive() {
-        Result r = run("diff", A, B, "--host", DEAD_HOST);
+        Result r = run("diff", A, B, "--url", DEAD_HOST);
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("not both"), r.err);
     }
@@ -71,12 +71,12 @@ class CliTest {
     void applyWithoutHostExitsTwo() {
         Result r = run("apply", A);
         assertEquals(2, r.exit);
-        assertTrue(r.err.contains("--host"), r.err);
+        assertTrue(r.err.contains("--url"), r.err);
     }
 
     @Test
     void applyHostWithoutPasswordExitsTwo() {
-        Result r = run("apply", A, "--host", DEAD_HOST, "--user", "u");
+        Result r = run("apply", A, "--url", DEAD_HOST, "--user", "u");
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("--password"), r.err);
     }

@@ -1,7 +1,7 @@
 # Test rig: a real midPoint server (Docker Compose)
 
 Spins up a midPoint server backed by PostgreSQL so `midgie` can be exercised
-against a live repository over REST — the target for the upcoming `diff --host` and
+against a live repository over REST — the target for the upcoming `diff --url` and
 `apply` live modes. Adapted from the `connector-sap` rig (itself from
 [Evolveum/midpoint-docker](https://github.com/Evolveum/midpoint-docker)), stripped to
 just the midPoint + PostgreSQL stack.
@@ -42,7 +42,7 @@ together, then rebuild.
 Versions and the port are pinned in `docker/.env`: `MP_VER` (midPoint image tag),
 `PG_VER` (PostgreSQL major version), `MP_PORT` (GUI/REST host port).
 
-## Smoke test (the exact call `--host` will make)
+## Smoke test (the exact call `--url` will make)
 
 Once `mp_server` is up, fetch the built-in `administrator` user over REST — the same
 `GET /ws/rest/{type}/{oid}` the live diff mode will use:
@@ -64,11 +64,11 @@ Point the live modes straight at the rig — they GET/PATCH over REST for you:
 ```bash
 # diff a desired object against the live one
 java -jar target/midgie.jar diff desired.xml \
-  --host http://localhost:12080/midpoint -u administrator -p T3stPw890uio
+  --url http://localhost:12080/midpoint -u administrator -p T3stPw890uio
 
 # reconcile it (PATCH; create if absent)
 java -jar target/midgie.jar apply desired.xml \
-  --host http://localhost:12080/midpoint -u administrator -p T3stPw890uio --create-if-absent
+  --url http://localhost:12080/midpoint -u administrator -p T3stPw890uio --create-if-absent
 ```
 
 Or diff two local files offline (no server): `java -jar target/midgie.jar diff desired.xml live.xml`.
@@ -84,5 +84,5 @@ docker compose -f docker/docker-compose.yml up -d   # rig up  -> live tests run
 mvn test                                            # rig down -> they report Skipped
 ```
 
-Connection defaults match `docker/.env`; override with `-Dmpdiff.it.host=…`, `-Dmpdiff.it.user=…`,
-`-Dmpdiff.it.password=…`. The tests use one throwaway user (`zz-it-user`), deleted before and after the run.
+Connection defaults match `docker/.env`; override with `-Dmidgie.it.url=…`, `-Dmidgie.it.user=…`,
+`-Dmidgie.it.password=…`. The tests use one throwaway user (`zz-it-user`), deleted before and after the run.

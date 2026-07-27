@@ -92,7 +92,7 @@ class DeployRetryTest {
     // --- helpers ---
 
     private int deploy(Path dir, String... extra) {
-        String[] base = {"deploy", dir.toString(), "--host", host, "-u", "administrator", "-p", "x",
+        String[] base = {"deploy", dir.toString(), "--url", host, "-u", "administrator", "-p", "x",
                 "--yes", "--quiet", "--no-live-schema"};
         String[] args = new String[base.length + extra.length];
         System.arraycopy(base, 0, args, 0, base.length);

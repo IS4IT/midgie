@@ -31,7 +31,7 @@ import com.evolveum.prism.xml.ns._public.query_3.QueryType;
  * for something that does not exist is a normal empty result, whereas a {@code GET} on a missing OID
  * returns 404 <em>and</em> makes midPoint log an {@code ObjectNotFoundException} stacktrace — noise that
  * adds up fast when {@code apply}/{@code deploy} probe for existence before create-if-absent. Shared by
- * {@code diff --host}, {@code apply}, and {@code deploy}; all HTTP stays in {@link MidpointRestClient}.
+ * {@code diff --url}, {@code apply}, and {@code deploy}; all HTTP stays in {@link MidpointRestClient}.
  */
 final class LiveLookup {
 

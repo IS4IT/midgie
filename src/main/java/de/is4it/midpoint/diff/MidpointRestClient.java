@@ -26,7 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Minimal midPoint REST client for the live modes ({@code diff --host}, {@code apply}). This is the
+ * Minimal midPoint REST client for the live modes ({@code diff --url}, {@code apply}). This is the
  * only HTTP-touching class — the diff engine stays REST-free (see DESIGN.md layering). Uses the JDK
  * {@code java.net.http} client, so no extra dependency.
  *
@@ -245,12 +245,12 @@ public final class MidpointRestClient {
                     continue;
                 }
                 if (status >= 300 && status < 400) {
-                    // A redirect on the REST base almost always means --host is off (missing context path or
+                    // A redirect on the REST base almost always means --url is off (missing context path or
                     // wrong scheme). Following it would chase an HTML page, not the API, so report it clearly.
                     String location = response.headers().firstValue("Location").orElse("(no Location header)");
                     LOG.debug("{}  redirected (HTTP {}) to '{}'", what, status, location);
                     throw new RestException(status, what + " — the server redirected (HTTP " + status + ") to '"
-                            + location + "'. Point --host at the exact midPoint REST base: it usually needs the "
+                            + location + "'. Point --url at the exact midPoint REST base: it usually needs the "
                             + "application context path (e.g. http://host:port/midpoint) and the matching scheme "
                             + "(http vs https).");
                 }

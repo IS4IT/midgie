@@ -29,14 +29,14 @@ check() { # label expected actual
 }
 
 echo ">> waiting for midPoint via the TLS proxy (rides out startup 502s/connection-refusals)..."
-run --host "$BASE" --insecure --retries 30 || true
+run --url "$BASE" --insecure --retries 30 || true
 
 echo ">> TLS checks"
-run --host "$BASE"  --cacert "$CA"; check "cacert trusts the CA-signed server"          1 $?
-run --host "$BASE"                ; check "default trust store rejects our private CA"   2 $?
-run --host "$BASE"  --insecure    ; check "insecure ignores the untrusted cert"          1 $?
-run --host "$OTHER" --cacert "$CA"; check "cacert enforces hostname (mp-other not SAN)"  2 $?
-run --host "$OTHER" --insecure    ; check "insecure bypasses the hostname mismatch"      1 $?
+run --url "$BASE"  --cacert "$CA"; check "cacert trusts the CA-signed server"          1 $?
+run --url "$BASE"                ; check "default trust store rejects our private CA"   2 $?
+run --url "$BASE"  --insecure    ; check "insecure ignores the untrusted cert"          1 $?
+run --url "$OTHER" --cacert "$CA"; check "cacert enforces hostname (mp-other not SAN)"  2 $?
+run --url "$OTHER" --insecure    ; check "insecure bypasses the hostname mismatch"      1 $?
 
 echo ">> $fails failure(s)"
 exit "$fails"

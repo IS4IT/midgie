@@ -28,7 +28,7 @@ import picocli.CommandLine.Parameters;
  * midPoint's REST {@code PATCH} consumes. This is not a comparison of two different objects: both inputs
  * are the same object (same OID) at two points in time, and the delta transforms current &rarr; desired.
  *
- * <p>The current-state object comes either from a local CURRENT file (offline mode) or, with {@code --host},
+ * <p>The current-state object comes either from a local CURRENT file (offline mode) or, with {@code --url},
  * fetched from a running midPoint over REST. Either way the diff itself runs locally via {@link DiffEngine}.
  * Exit codes: {@code 0} = no differences, {@code 1} = differences found (drift), {@code 2} = error.
  */
@@ -50,7 +50,7 @@ public class DiffCommand implements Callable<Integer> {
 
     @Parameters(index = "1", arity = "0..1", paramLabel = "CURRENT",
             description = "The same object as it is now (current state), as a local XML file. "
-                    + "Omit when using --host, which fetches the current state from the server.")
+                    + "Omit when using --url, which fetches the current state from the server.")
     File currentFile;
 
     @Mixin
@@ -102,12 +102,12 @@ public class DiffCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
 
-        // A CURRENT file means offline; an explicit --host means live. A host inherited only from
+        // A CURRENT file means offline; an explicit --url means live. A URL inherited only from
         // MIDPOINT_URL is a fallback that a CURRENT file overrides (so an env var doesn't break file diffs).
         boolean live;
         if (currentFile != null) {
-            if (connectionOptions.isExplicitHost()) {
-                System.err.println("midgie: provide either a CURRENT file or --host, not both.");
+            if (connectionOptions.isExplicitUrl()) {
+                System.err.println("midgie: provide either a CURRENT file or --url, not both.");
                 return EXIT_ERROR;
             }
             live = false;
@@ -115,11 +115,11 @@ public class DiffCommand implements Callable<Integer> {
             live = true;
         } else {
             System.err.println("midgie: offline diff needs a CURRENT file, "
-                    + "or set --host (or MIDPOINT_URL) for live mode.");
+                    + "or set --url (or MIDPOINT_URL) for live mode.");
             return EXIT_ERROR;
         }
 
-        LOG.debug("diff mode: {}", live ? "live (--host)" : "offline (CURRENT file)");
+        LOG.debug("diff mode: {}", live ? "live (--url)" : "offline (CURRENT file)");
         MidpointRestClient client = null;
         if (live) {
             client = connectionOptions.newClient();

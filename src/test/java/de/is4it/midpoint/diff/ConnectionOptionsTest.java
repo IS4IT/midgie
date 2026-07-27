@@ -55,11 +55,11 @@ class ConnectionOptionsTest {
     @Test
     void explicitHostIsLiveAndFlagged() {
         ConnectionOptions options = new ConnectionOptions();
-        assertFalse(options.isExplicitHost());
+        assertFalse(options.isExplicitUrl());
 
-        options.hostOption = URI.create("http://localhost:12080/midpoint");
-        assertTrue(options.isExplicitHost());
+        options.urlOption = URI.create("http://localhost:12080/midpoint");
+        assertTrue(options.isExplicitUrl());
         assertTrue(options.isLive());
-        assertEquals(options.hostOption, options.host());
+        assertEquals(options.urlOption, options.url());
     }
 }
