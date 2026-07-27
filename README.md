@@ -121,7 +121,41 @@ The contract lets CI gate on drift without parsing output:
 `merge` is designed for `real-value`. Under an id/natural-key-considering strategy prism can pair a
 live-only value with a desired one and emit a deep in-place edit that merge cannot preserve; that is
 detected per delta and **refused by default** (use `--allow-inplace-merge` to proceed, or `real-value` for
-a clean union).
+a clean union). An edit inside a value that desired *declares* — matched by container id, or by the schema's
+natural key — is a managed update and is not refused (see below).
+
+#### Syncing an item nested inside a multi-valued container
+
+To manage **one entry** deep inside multi-valued containers — say a single GUI panel at
+`adminGuiConfiguration/objectDetails/objectDetailsPage[type=UserType]/panel[identifier=my-panel]` — combine
+`equivalence=natural-keys` with `multivalue=merge`:
+
+```
+# midgie.policy
+SystemConfigurationType/SystemConfiguration  equivalence=natural-keys multivalue=merge
+```
+
+The midPoint schema declares an `a:naturalKey` for these containers (`panel` → `identifier`,
+`objectDetailsPage` → `type`, and ~100 more), so prism matches your id-less fragment against the live values
+by key and emits a single deep delta — e.g. `replace …/objectDetailsPage[84]/panel[284]/displayOrder` —
+leaving sibling entries and unmentioned items untouched. Your fragment only needs the key items plus what
+you manage:
+
+```xml
+<systemConfiguration>
+  <name>SystemConfiguration</name>
+  <adminGuiConfiguration><objectDetails><objectDetailsPage>
+    <type>c:UserType</type>
+    <panel>
+      <identifier>my-panel</identifier>
+      <displayOrder>16</displayOrder>
+    </panel>
+  </objectDetailsPage></objectDetails></adminGuiConfiguration>
+</systemConfiguration>
+```
+
+`merge` is what keeps the siblings: without it, replace semantics treat the containers you declare as
+authoritative and delete every entry you did not list.
 
 ### Connection (live modes)
 

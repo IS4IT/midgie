@@ -306,6 +306,31 @@ class DiffCommandTest {
     }
 
     @Test
+    void mergeDoesNotFlagKeyMatchedEditNestedInMultiValuedContainers(@TempDir Path dir) throws Exception {
+        // Targeting one panel nested in a multi-valued objectDetailsPage: the desired fragment carries no
+        // container ids, so under natural-keys prism pairs its values with the live ones (objectDetailsPage
+        // by <type>, panel by <identifier> — both schema-declared natural keys) and emits a deep in-place
+        // edit. That is the intended managed update, not an accrued value being overwritten, so it must not
+        // be flagged — otherwise the recipe needs --allow-inplace-merge, which disables the guard everywhere.
+        File live = write(dir, "live.xml", sysconfigPanels("84",
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml",
+                sysconfigPanels(null, panel(null, "aielcm-delimited-values", 16)));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.of(true, List.of()));
+
+        assertTrue(result.accruedInPlaceEditPaths().isEmpty(),
+                "a natural-key-matched edit is a managed update, not an accrued overwrite: "
+                        + result.accruedInPlaceEditPaths());
+        assertTrue(result.hasDrift(), "the displayOrder change must still surface");
+        assertTrue(paths(result).stream().anyMatch(p -> p.contains("displayOrder")),
+                "expected the deep displayOrder delta, got: " + paths(result));
+        assertFalse(deletesPath(result, "panel"), "the sibling panel must not be deleted: " + paths(result));
+    }
+
+    @Test
     void mergeDoesNotFlagInPlaceEditOfManagedValue(@TempDir Path dir) throws Exception {
         // assignment[2] is present in BOTH live and desired (managed); only its targetRef changed. That is a
         // legitimate in-place update of a value the desired state owns, not an accrued-value footgun.
@@ -382,6 +407,32 @@ class DiffCommandTest {
 
     private static List<String> paths(DiffEngine.DiffResult result) {
         return result.delta().getModifications().stream().map(mod -> mod.getPath().toString()).toList();
+    }
+
+    /**
+     * A {@code panel} entry keyed by its natural key {@code identifier}. {@code id} mirrors a real server
+     * object (repository-assigned container ids); pass null for a hand-written desired fragment, which has none.
+     */
+    private static String panel(String id, String identifier, Integer displayOrder) {
+        return "        <panel" + (id != null ? " id=\"" + id + "\"" : "") + ">\n"
+                + "          <identifier>" + identifier + "</identifier>\n"
+                + (displayOrder != null ? "          <displayOrder>" + displayOrder + "</displayOrder>\n" : "")
+                + "        </panel>\n";
+    }
+
+    /** A systemConfiguration carrying the given panels in the UserType objectDetailsPage (both multi-valued). */
+    private static String sysconfigPanels(String pageId, String... panels) {
+        return "<systemConfiguration xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"00000000-0000-0000-0000-000000000001\">\n"
+                + "  <name>SystemConfiguration</name>\n"
+                + "  <adminGuiConfiguration><objectDetails>\n"
+                + "      <objectDetailsPage" + (pageId != null ? " id=\"" + pageId + "\"" : "") + ">\n"
+                + "        <type>c:UserType</type>\n"
+                + String.join("", panels)
+                + "      </objectDetailsPage>\n"
+                + "  </objectDetails></adminGuiConfiguration>\n"
+                + "</systemConfiguration>";
     }
 
     /** A systemConfiguration named SystemConfiguration whose single-valued deploymentInformation holds one child. */

@@ -73,7 +73,13 @@ the midPoint source tree.
 - *Accrued in-place merge edits* — when `merge` runs under an id/natural-key-considering strategy, prism can
   pair an accrued (live-only) value with a desired value and edit it in place rather than doing a clean
   add-and-keep; merge cannot preserve it. Detected per delta and refused by default (`--allow-inplace-merge`
-  to proceed). See "Strategy flags".
+  to proceed). See "Strategy flags". An edit is only *accrued* when desired does not declare the value the
+  path descends through: each container-id segment is resolved against desired by container id, or — since a
+  hand-written fragment carries no ids — by the schema's `a:naturalKey`, and a key only counts when both
+  values actually carry its constituents (an absent key would otherwise match everything and disable the
+  guard). This is what makes `equivalence=natural-keys` + `multivalue=merge` the way to sync one entry nested
+  inside multi-valued containers (e.g. a single GUI `panel` inside an `objectDetailsPage`) without needing
+  `--allow-inplace-merge`.
 
 ## Commands / modes (layered)
 

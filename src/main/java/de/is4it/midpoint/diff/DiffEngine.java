@@ -27,6 +27,7 @@ import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
+import com.evolveum.midpoint.prism.key.NaturalKeyDefinition;
 import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.prism.xml.ns._public.types_3.ProtectedStringType;
@@ -142,7 +143,7 @@ public final class DiffEngine {
         // cannot express as a union), which silently overwrites the accrued value. Report those paths so
         // the command layer can refuse by default. Empty for a clean real-value union of accrued values.
         List<String> accruedInPlaceEdits = multiValue.isMergeActive()
-                ? findAccruedInPlaceEdits(delta, desired, multiValue) : List.of();
+                ? findAccruedInPlaceEdits(delta, desired, live, multiValue) : List.of();
 
         LOG.debug("diff {} (scope={}, {}) → {} modification(s); mergeFallback={}, protectedSkipped={}, "
                 + "accruedInPlace={}", desiredType != null ? desiredType.getSimpleName() : "?", scope,
@@ -255,14 +256,15 @@ public final class DiffEngine {
      * never sees such a deep edit, so the accrued value is silently overwritten rather than preserved.
      *
      * <p>The signature is a path that descends into a merge container via a container-id segment (name path
-     * before the first id = the container; the id = the value being edited) whose id is <em>not</em> present
-     * in the desired object. An in-place edit of a value that <em>is</em> in desired is a legitimate managed
-     * update (the user's desired state carries that value), so it is not reported.
+     * before the first id = the container; the id = the value being edited) whose value the desired object
+     * does <em>not</em> declare. An in-place edit of a value that <em>is</em> declared in desired is a
+     * legitimate managed update (the user's desired state carries that value), so it is not reported — see
+     * {@link #desiredDeclaresValueAt}, which matches by container id <em>or</em> by the schema's natural key.
      *
      * @return the paths of accrued in-place edits — empty for a clean real-value union
      */
     private static List<String> findAccruedInPlaceEdits(ObjectDelta<?> delta, PrismObject<?> desired,
-            MultiValueStrategy multiValue) {
+            PrismObject<?> live, MultiValueStrategy multiValue) {
         List<String> flagged = new ArrayList<>();
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
             List<QName> containerNames = new ArrayList<>();
@@ -281,25 +283,129 @@ public final class DiffEngine {
                 continue; // no container-id segment: a clean whole-value add/delete, not a paired in-place edit
             }
             ItemPath containerPath = ItemPath.create(containerNames.toArray());
-            if (multiValue.isMerge(containerPath) && !desiredHasContainerValue(desired, containerPath, valueId)) {
+            if (multiValue.isMerge(containerPath) && !desiredDeclaresValueAt(desired, live, mod.getPath())) {
                 flagged.add(mod.getPath().toString());
             }
         }
         return flagged;
     }
 
-    /** Whether the desired object carries a container value with {@code valueId} at {@code containerPath}. */
-    private static boolean desiredHasContainerValue(PrismObject<?> desired, ItemPath containerPath, Long valueId) {
-        Item<?, ?> item = desired.findItem(containerPath);
+    /**
+     * Whether the desired object declares every container value the delta path descends through — i.e. the
+     * edit lands inside managed state rather than on an accrued (live-only) value.
+     *
+     * <p>Each container-id segment of the path is resolved against the desired object one level at a time:
+     * the value is matched <b>by container id</b>, or — when that fails — <b>by the schema's natural key</b>
+     * ({@code a:naturalKey}, e.g. {@code panel} keyed by {@code identifier}, {@code objectDetailsPage} by
+     * {@code type}), comparing the live value at that id against the values desired declares. The key match
+     * is what makes an id-less desired fragment work: a hand-written fragment carries no container ids, so
+     * under a natural-key strategy prism pairs its values with the live ones and emits a deep in-place edit
+     * — which is exactly the intended managed update, not an accrued value being overwritten.
+     */
+    private static boolean desiredDeclaresValueAt(PrismObject<?> desired, PrismObject<?> live, ItemPath path) {
+        PrismContainerValue<?> desiredParent = desired.getValue();
+        PrismContainerValue<?> liveParent = (live != null) ? live.getValue() : null;
+        List<QName> names = new ArrayList<>();
+        for (Object segment : path.getSegments()) {
+            if (ItemPath.isName(segment)) {
+                names.add(ItemPath.toName(segment));
+                continue;
+            }
+            if (!ItemPath.isId(segment)) {
+                return false; // an exotic segment (e.g. a reference deref): not something we can vouch for
+            }
+            ItemPath containerPath = ItemPath.create(names.toArray());
+            names.clear();
+            if (containerPath.isEmpty()) {
+                return false;
+            }
+            Item<?, ?> desiredItem = desiredParent.findItem(containerPath);
+            if (!(desiredItem instanceof PrismContainer<?> desiredContainer)) {
+                return false; // desired does not declare this container at all -> the value is live-only
+            }
+            PrismContainerValue<?> liveValue =
+                    containerValueById(liveParent, containerPath, ItemPath.toId(segment));
+            PrismContainerValue<?> match =
+                    matchingDesiredValue(desiredContainer, liveValue, ItemPath.toId(segment));
+            if (match == null) {
+                return false;
+            }
+            desiredParent = match;
+            liveParent = liveValue;
+        }
+        return true;
+    }
+
+    /** The desired container value matching {@code valueId} — by container id, else by natural key. */
+    private static PrismContainerValue<?> matchingDesiredValue(PrismContainer<?> desiredContainer,
+            PrismContainerValue<?> liveValue, Long valueId) {
+        for (PrismContainerValue<?> value : desiredContainer.getValues()) {
+            if (valueId.equals(value.getId())) {
+                return value;
+            }
+        }
+        NaturalKeyDefinition naturalKey = naturalKeyOf(desiredContainer);
+        if (liveValue == null || naturalKey == null || !carriesKey(naturalKey, liveValue)) {
+            return null;
+        }
+        for (PrismContainerValue<?> value : desiredContainer.getValues()) {
+            // Both sides must actually carry the key, else the comparison is vacuous: a container whose
+            // natural key is absent from both values (e.g. an assignment with no <identifier>) would
+            // "match" everything and silently disable the accrued-value guard.
+            if (carriesKey(naturalKey, value) && naturalKey.valuesMatch(liveValue, value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    /** Whether {@code value} actually carries the natural key's constituent item(s) — a discriminating key. */
+    private static boolean carriesKey(NaturalKeyDefinition naturalKey, PrismContainerValue<?> value) {
+        try {
+            Collection<Item<?, ?>> constituents = naturalKey.getConstituents(value);
+            if (constituents == null || constituents.isEmpty()) {
+                return false;
+            }
+            for (Item<?, ?> constituent : constituents) {
+                if (constituent == null || !constituent.hasAnyValue()) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** The container value carrying {@code valueId} at {@code containerPath} under {@code parent}, or null. */
+    private static PrismContainerValue<?> containerValueById(PrismContainerValue<?> parent,
+            ItemPath containerPath, Long valueId) {
+        if (parent == null) {
+            return null;
+        }
+        Item<?, ?> item = parent.findItem(containerPath);
         if (!(item instanceof PrismContainer<?> container)) {
-            return false; // the whole container is absent from desired, so the value is live-only (accrued)
+            return null;
         }
         for (PrismContainerValue<?> value : container.getValues()) {
             if (valueId.equals(value.getId())) {
-                return true;
+                return value;
             }
         }
-        return false;
+        return null;
+    }
+
+    /** The container's schema-declared natural key ({@code a:naturalKey}), or null when it has none. */
+    private static NaturalKeyDefinition naturalKeyOf(PrismContainer<?> container) {
+        ItemDefinition<?> definition = container.getDefinition();
+        if (definition == null) {
+            return null;
+        }
+        try {
+            return definition.getNaturalKeyInstance();
+        } catch (RuntimeException e) {
+            return null; // a definition that does not support natural keys
+        }
     }
 
     /**

@@ -9,6 +9,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A natural-key-matched edit is no longer mistaken for an accrued-value overwrite.** Combining `equivalence=natural-keys` with `multivalue=merge` — the way to sync a single entry nested inside multi-valued containers, e.g. one GUI `panel` inside `objectDetailsPage` — was refused as an "accrued in-place edit" and needed `--allow-inplace-merge`, which switches the guard off for the whole object. The check now resolves each container-id segment of the delta path against the desired object by container id **or** by the schema's `a:naturalKey` (`panel` → `identifier`, `objectDetailsPage` → `type`, …); an edit inside a value desired declares is a managed update and passes. A key only counts when both values actually carry its constituents, so a container whose natural key is absent (e.g. an `assignment` with no `identifier`) still triggers the guard as before.
+
 - **Extension schema is deduped by target namespace before registration.** A schema present both in the deploy tree (or `--schema`) and on the live server was collected and registered twice, so prism logged a wall of `Overwriting existing definition …` warnings on `deploy` / `diff --host` / `apply`. It is now registered once — the local/tree copy winning over the live read — so that noise is gone; any genuine cross-import re-registration warnings still surface.
 
 ## [0.3.0] - 2026-07-25
