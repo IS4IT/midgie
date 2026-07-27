@@ -29,7 +29,7 @@ services:
           - mp-tls     # in the cert SAN — cacert verification succeeds
           - mp-other   # NOT in the SAN — used to prove hostname verification / --insecure bypass
     ports:
-      - "12443:8443"   # optional: reach the TLS endpoint from the host for manual debugging
+      - "127.0.0.1:12443:8443"   # loopback only: reach the TLS endpoint from the host for manual debugging
 
   # The client under test: runs docker/tls/run-tls-tests.sh, then exits with the result.
   mp_diff:

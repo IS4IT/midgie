@@ -116,6 +116,15 @@
                                     <mainClass>de.is4it.midpoint.diff.Main</mainClass>
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                <!-- Without these, colliding NOTICE/LICENSE resources are last-one-wins and
+                                     the fat jar ships one of each, dropping the Apache-2.0 NOTICE files it
+                                     is required to redistribute (Apache-2.0 section 4(d)). -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer">
+                                    <!-- No generated header: it would assert an Apache copyright over
+                                         midgie, which is EUPL-1.2. Only the third-party notices belong. -->
+                                    <addHeader>false</addHeader>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheLicenseResourceTransformer"/>
                             </transformers>
                         </configuration>
                     </execution>
@@ -126,6 +135,24 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
+                <configuration>
+                    <!-- Blank out the ambient connection environment. ConnectionOptions honours these, so a
+                         developer or CI runner that exports them turned the offline CLI tests into live
+                         reads against whatever server happened to be configured: 20 tests failed, and the
+                         "offline" deploy tests made real network calls. A blank value reads as unset. -->
+                    <environmentVariables>
+                        <MIDPOINT_URL/>
+                        <MIDPOINT_USER/>
+                        <MIDPOINT_PASSWORD/>
+                    </environmentVariables>
+                    <systemPropertyVariables>
+                        <!-- docker/.env stays the single source of truth for the rig's port. Hard-coding it
+                             here too meant that changing MP_PORT made reachable() fail, all 13 live tests
+                             skip, and `mvn verify` stay green with the whole REST surface untested while
+                             the rig was up and healthy. -->
+                        <midgie.it.url>http://localhost:${MP_PORT}/midpoint</midgie.it.url>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
 
             <!-- Fail the build if docker/.env's MP_VER drifts from <midpoint.version>. The compile-time
@@ -140,8 +167,11 @@
                         <phase>validate</phase>
                         <goals><goal>run</goal></goals>
                         <configuration>
+                            <exportAntProperties>true</exportAntProperties>
                             <target>
                                 <loadproperties srcFile="docker/.env"/>
+                                <!-- Ant properties are write-once, so this only applies when .env omits it. -->
+                                <property name="MP_PORT" value="12080"/>
                                 <fail message="midPoint version drift: docker/.env MP_VER=${MP_VER} != pom midpoint.version=${midpoint.version}. Bump both together.">
                                     <condition>
                                         <not><equals arg1="${MP_VER}" arg2="${midpoint.version}"/></not>

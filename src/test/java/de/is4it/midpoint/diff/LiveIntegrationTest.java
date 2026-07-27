@@ -62,7 +62,10 @@ class LiveIntegrationTest {
 
     @BeforeAll
     static void connect() {
-        client = new MidpointRestClient(URI.create(HOST), USER, PASSWORD, true);
+        // Not insecure: the rig is plain http, and --insecure sets a JVM-global property the JDK latches
+        // on first use of java.net.http — so this one call disabled hostname verification for every later
+        // test in the same surefire JVM, and whether it took effect depended on class order.
+        client = new MidpointRestClient(URI.create(HOST), USER, PASSWORD, false);
         rigUp = reachable();
         if (rigUp) {
             deleteTestUser(); // start from a known-clean state

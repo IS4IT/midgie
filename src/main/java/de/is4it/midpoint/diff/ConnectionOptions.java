@@ -111,7 +111,11 @@ public final class ConnectionOptions {
     }
 
     private String user() {
-        return (userOption != null) ? userOption : System.getenv("MIDPOINT_USER");
+        if (userOption != null) {
+            return userOption;
+        }
+        String env = System.getenv("MIDPOINT_USER");
+        return (env != null && !env.isBlank()) ? env : null;
     }
 
     /** Build a REST client, or print an error and return {@code null} if the connection args are invalid. */
@@ -168,8 +172,10 @@ public final class ConnectionOptions {
                 return null;
             }
         }
+        // Blank means unset, as it does for MIDPOINT_URL. An empty variable is not a password, and taking
+        // it as one turns "no password given" into an authentication failure against the server.
         String envPassword = System.getenv("MIDPOINT_PASSWORD");
-        if (envPassword != null) {
+        if (envPassword != null && !envPassword.isBlank()) {
             LOG.debug("password source: MIDPOINT_PASSWORD env var");
             return envPassword;
         }

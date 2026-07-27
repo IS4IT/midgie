@@ -41,6 +41,7 @@ else
 fi
 version=$("$JAVA" -version 2>&1 | awk -F\" '/version/ { print $2; exit }')
 major=${version%%.*}
+major=${major%%-*}   # an early-access JDK reports "24-ea"; the qualifier is not part of the major
 case $major in
     '' | *[!0-9]*) major=0 ;;
 esac

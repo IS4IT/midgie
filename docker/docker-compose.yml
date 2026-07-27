@@ -80,7 +80,9 @@ services:
         condition: service_healthy
     command: ["/opt/midpoint/bin/midpoint.sh", "container"]
     ports:
-      - "${MP_PORT:-12080}:8080"
+      # Loopback only: this rig runs with the administrator password from .env, and publishing on
+      # every interface serves an admin-credentialed midPoint to whatever network the laptop is on.
+      - "127.0.0.1:${MP_PORT:-12080}:8080"
     environment:
       - MP_SET_midpoint_administrator_initialPassword=T3stPw890uio
       - MP_SET_midpoint_repository_jdbcUsername=midpoint

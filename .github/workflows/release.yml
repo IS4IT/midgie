@@ -25,10 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: '17'
@@ -60,9 +60,12 @@ jobs:
           fi
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: midgie ${{ env.VERSION }}
           body_path: release-notes.md
           files: midgie-${{ env.VERSION }}.jar
           fail_on_unmatched_files: true
+          # The tag filter admits pre-releases (v0.4.0-rc1). Without this an RC is published as a normal
+          # release and becomes the repository's "Latest", so releases/latest/download hands it to everyone.
+          prerelease: ${{ contains(env.VERSION, '-') }}
