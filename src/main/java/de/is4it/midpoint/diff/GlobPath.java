@@ -29,14 +29,30 @@ final class GlobPath {
         this.segments = segments;
     }
 
-    /** Parse a {@code /}-separated glob. Blank segments are dropped; {@code prefix:} is stripped from literals. */
+    /** Parse a pure item-path glob, where every segment is an item name. */
     static GlobPath parse(String text) {
+        return parse(text, 0);
+    }
+
+    /**
+     * Parse a {@code /}-separated glob whose first {@code identitySegments} segments name an <em>object</em>
+     * ({@code Type/Name}) rather than an item. Blank segments are dropped.
+     *
+     * <p>The distinction matters because {@code prefix:} stripping must not reach an object name. midPoint's
+     * own naming convention puts colons in names ({@code Reconciliation: OpenDJ}), and stripping there made
+     * a rule for {@code RoleType/IT:Helpdesk} silently target an unrelated role called {@code Helpdesk} —
+     * or, with a space after the colon, match nothing at all.
+     */
+    static GlobPath parse(String text, int identitySegments) {
         List<String> segs = new ArrayList<>();
+        int index = 0;
         for (String raw : text.split("/")) {
             String seg = raw.trim();
-            if (!seg.isEmpty()) {
-                segs.add(normalize(seg));
+            if (seg.isEmpty()) {
+                continue;
             }
+            segs.add(index < identitySegments ? seg : normalize(seg));
+            index++;
         }
         return new GlobPath(segs);
     }
@@ -97,10 +113,18 @@ final class GlobPath {
     }
 
     /**
-     * Positive when {@code this} is more specific than {@code other}: more literal segments first, then fewer
-     * {@code **}, then a longer literal prefix before the first wildcard. Zero when equally specific.
+     * Positive when {@code this} is more specific than {@code other}: an {@code oid:} anchor first, then more
+     * literal segments, then fewer {@code **}, then a longer literal prefix before the first wildcard. Zero
+     * when equally specific.
      */
     int compareSpecificity(GlobPath other) {
+        // An oid: head names exactly one object, so it is more specific than any pattern however many
+        // literals that pattern has. Without this tier 'RoleType/Manager scope=full' outranked
+        // 'oid:<X> scope=present' — the object the operator pinned was full-replaced anyway.
+        int byOid = Boolean.compare(pinsOneObject(), other.pinsOneObject());
+        if (byOid != 0) {
+            return byOid;
+        }
         int byLiteral = Integer.compare(literalCount(), other.literalCount());
         if (byLiteral != 0) {
             return byLiteral;
@@ -110,6 +134,11 @@ final class GlobPath {
             return byGlobstar;
         }
         return Integer.compare(literalPrefixLength(), other.literalPrefixLength());
+    }
+
+    /** Whether this selector is anchored to a single object by OID. */
+    private boolean pinsOneObject() {
+        return !segments.isEmpty() && segments.get(0).startsWith("oid:");
     }
 
     private int literalCount() {

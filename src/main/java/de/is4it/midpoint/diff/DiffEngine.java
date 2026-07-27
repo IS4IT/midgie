@@ -776,19 +776,40 @@ public final class DiffEngine {
             return false;
         }
 
-        /** Whether the container at {@code containerPath} should merge. The most-specific matching rule wins. */
+        /**
+         * Whether the container at {@code containerPath} should merge. The most-specific matching rule wins,
+         * resolved in two tiers: a matching identity-scoped rule (from the {@code --policy} file) first, and
+         * only if none matches, the per-path CLI rules.
+         *
+         * <p>The tiers exist because the two kinds of glob are not comparable. An identity-scoped selector
+         * carries one or two extra {@code Type}/{@code Name} segments that a {@code --path} glob has none of,
+         * so ranking them together on literal count and prefix length let a deep {@code --path} outrank the
+         * central policy — while the documented layering is the other way round: the CLI flags are the
+         * baseline, and the policy is what varies it per object.
+         */
         public boolean isMerge(ItemPath containerPath) {
             List<String> itemNames = localNames(containerPath);
+            PathRule best = mostSpecific(itemNames, true);
+            if (best == null) {
+                best = mostSpecific(itemNames, false);
+            }
+            return (best != null) ? best.merge : globalMerge;
+        }
+
+        private PathRule mostSpecific(List<String> itemNames, boolean identityScoped) {
             PathRule best = null;
             for (PathRule rule : rules) {
-                boolean matched = rule.identityScoped
+                if (rule.identityScoped != identityScoped) {
+                    continue;
+                }
+                boolean matched = identityScoped
                         ? matchesWithIdentity(rule.glob, itemNames)
                         : rule.glob.matches(itemNames);
                 if (matched && (best == null || rule.glob.compareSpecificity(best.glob) > 0)) {
                     best = rule;
                 }
             }
-            return (best != null) ? best.merge : globalMerge;
+            return best;
         }
 
         private boolean matchesWithIdentity(GlobPath glob, List<String> itemNames) {

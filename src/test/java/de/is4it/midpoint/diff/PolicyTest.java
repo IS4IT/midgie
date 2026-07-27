@@ -113,6 +113,52 @@ class PolicyTest {
     }
 
     @Test
+    void anOidSelectorPinsOneObjectAndBeatsAPattern(@TempDir Path dir) throws Exception {
+        // The point of an oid: rule is to make one object an exception to a broader rule — which is exactly
+        // the case that lost. Ranked purely on literal count, 'RoleType/Manager' (two literals) outranked
+        // 'oid:X' (one), so the object the operator pinned to present was full-replaced anyway.
+        Policy nameFirst = load(dir, "RoleType/Manager scope=full", "oid:" + OID + " scope=present");
+        assertEquals(DiffEngine.Scope.PRESENT,
+                nameFirst.resolveFor("RoleType", "Manager", OID, baseline()).scope);
+
+        Policy oidFirst = load(dir, "oid:" + OID + " scope=present", "RoleType/Manager scope=full");
+        assertEquals(DiffEngine.Scope.PRESENT, oidFirst.resolveFor("RoleType", "Manager", OID, baseline()).scope,
+                "and the outcome does not depend on the order of the lines");
+
+        assertEquals(DiffEngine.Scope.FULL,
+                oidFirst.resolveFor("RoleType", "Manager", "another-oid", baseline()).scope,
+                "a different object still gets the type-wide rule");
+    }
+
+    @Test
+    void aColonInAnObjectNameIsPartOfTheName(@TempDir Path dir) throws Exception {
+        // midPoint's own convention puts colons in names ("Reconciliation: OpenDJ"). Stripping 'prefix:' from
+        // the name segment made the rule target an unrelated object called 'Helpdesk'.
+        Policy policy = load(dir, "RoleType/IT:Helpdesk scope=full");
+
+        assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("RoleType", "IT:Helpdesk", OID, baseline()).scope);
+        assertEquals(DiffEngine.Scope.PRESENT, policy.resolveFor("RoleType", "Helpdesk", OID, baseline()).scope,
+                "and must not leak onto the role whose name is only the suffix");
+    }
+
+    @Test
+    void aPolicyRuleOutranksAnEquallySpecificCliFlag(@TempDir Path dir) throws Exception {
+        // README calls the CLI flags the baseline the policy is layered over. For item-level multivalue the
+        // layering was inverted: ties break on list position, and the baseline was seeded first.
+        StrategyOptions.Resolved cliReplace = new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
+                EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.MultiValueStrategy.of(false, java.util.List.of(
+                        new DiffEngine.MultiValueStrategy.PathRule(ItemPath.fromString("assignment"), false))),
+                false);
+
+        Policy policy = load(dir, "*/*/assignment multivalue=merge");
+
+        assertTrue(policy.resolveFor("RoleType", "Manager", OID, cliReplace).multiValue
+                        .isMerge(ItemPath.fromString("assignment")),
+                "the policy rule must win the tie it was written to win");
+    }
+
+    @Test
     void objectNamesWithSpacesAreSupported(@TempDir Path dir) throws Exception {
         Policy policy = load(dir, "RoleType/IT Deploy Role scope=full");
         assertEquals(DiffEngine.Scope.FULL,

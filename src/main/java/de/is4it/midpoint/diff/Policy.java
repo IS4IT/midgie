@@ -103,7 +103,8 @@ final class Policy {
         if (selectorText.endsWith(":")) {
             selectorText = selectorText.substring(0, selectorText.length() - 1).strip();
         }
-        GlobPath selector = GlobPath.parse(selectorText);
+        // The leading Type/Name segments name an object, so 'prefix:' stripping must not reach them.
+        GlobPath selector = GlobPath.parse(selectorText, identityDepth(selectorText));
         if (selectorText.isEmpty() || selector.isEmpty()) {
             throw new IOException("policy line " + lineNumber + " has an empty selector: " + line);
         }
@@ -141,8 +142,12 @@ final class Policy {
      * {@code Type/Name}).
      */
     private static boolean isItemLevel(String selectorText, GlobPath selector) {
-        int identityDepth = selectorText.startsWith("oid:") ? 1 : 2;
-        return selector.containsGlobstar() || selector.size() > identityDepth;
+        return selector.containsGlobstar() || selector.size() > identityDepth(selectorText);
+    }
+
+    /** How many leading segments identify the object: one for {@code oid:X}, else {@code Type/Name}. */
+    private static int identityDepth(String selectorText) {
+        return selectorText.startsWith("oid:") ? 1 : 2;
     }
 
     private static boolean validValue(String key, String value) {
@@ -191,8 +196,11 @@ final class Policy {
         Rule allowInplaceRule = null;
         Rule globalMergeRule = null;
 
-        List<DiffEngine.MultiValueStrategy.PathRule> itemRules =
-                new ArrayList<>(baseline.multiValue.pathRules());
+        // Policy rules first, CLI --path rules after. MultiValueStrategy.isMerge breaks a specificity tie by
+        // list position, so seeding the baseline ahead of the policy made an equally specific policy rule
+        // lose to the flag it was written to override — inverting the documented "the CLI is the baseline"
+        // layering, and replacing values the policy asked to merge.
+        List<DiffEngine.MultiValueStrategy.PathRule> itemRules = new ArrayList<>();
 
         for (Rule rule : rules) {
             if (rule.itemLevel) {
@@ -227,6 +235,7 @@ final class Policy {
             }
         }
 
+        itemRules.addAll(baseline.multiValue.pathRules());
         DiffEngine.MultiValueStrategy multiValue =
                 DiffEngine.MultiValueStrategy.of(globalMerge, itemRules, identity);
         return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace);
