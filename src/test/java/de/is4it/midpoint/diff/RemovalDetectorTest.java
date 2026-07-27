@@ -10,15 +10,21 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.evolveum.midpoint.prism.PrismContext;
+import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.prism.delta.ItemDelta;
+import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
+import com.evolveum.midpoint.xml.ns._public.common.common_3.RoleType;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -46,9 +52,7 @@ class RemovalDetectorTest {
         Path file = dir.resolve("role.xml");
         Files.writeString(file, role("<subtype>alpha</subtype>\n  <subtype>beta</subtype>"), StandardCharsets.UTF_8);
         String first = commit(dir);
-        if (first == null) {
-            return; // git unavailable here
-        }
+        Assumptions.assumeTrue(first != null, "git is not usable here");
         Files.writeString(file, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
 
         List<RemovalDetector.Removal> removals = detect(dir, first, file);
@@ -63,9 +67,7 @@ class RemovalDetectorTest {
         Path file = dir.resolve("role.xml");
         Files.writeString(file, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
         String first = commit(dir);
-        if (first == null) {
-            return;
-        }
+        Assumptions.assumeTrue(first != null, "git is not usable here");
 
         assertTrue(detect(dir, first, file).isEmpty(), "an unchanged file removes nothing");
     }
@@ -79,9 +81,7 @@ class RemovalDetectorTest {
         Files.writeString(kept, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
         Files.writeString(extra, role("<description>from the extra fragment</description>"), StandardCharsets.UTF_8);
         String first = commit(dir);
-        if (first == null) {
-            return;
-        }
+        Assumptions.assumeTrue(first != null, "git is not usable here");
         Files.delete(extra);
         run(dir, "git", "add", "-A");
         run(dir, "git", "commit", "-qm", "drop the extra fragment");
@@ -108,9 +108,7 @@ class RemovalDetectorTest {
         Files.writeString(other, "<role xmlns=\"" + NS + "\" oid=\"55555555-0000-0000-0000-00000000cccc\">\n"
                 + "  <name>Other</name>\n</role>", StandardCharsets.UTF_8);
         String first = commit(dir);
-        if (first == null) {
-            return;
-        }
+        Assumptions.assumeTrue(first != null, "git is not usable here");
         Files.delete(only);
         run(dir, "git", "add", "-A");
         run(dir, "git", "commit", "-qm", "delete the only fragment");
@@ -127,6 +125,57 @@ class RemovalDetectorTest {
     }
 
     @Test
+    void aNestedValueMovedToASiblingFragmentIsNotARemoval(@TempDir Path dir) throws Exception {
+        // The survivor subtraction has to work at the depth the removal is reported at. Diffing a fragment
+        // against an empty object yields whole-container adds ('deploymentInformation'), while the removal
+        // side recurses into the container ('deploymentInformation/headerColor') — so a survivor set built
+        // from the former can never match the latter, and --prune deletes a value the sibling declares and
+        // the apply pass just wrote. Top-level items (name, subtype, description) happen to work either way,
+        // which is exactly why this went unnoticed.
+        Path a = dir.resolve("sysconfig-a.xml");
+        Path b = dir.resolve("sysconfig-b.xml");
+        Files.writeString(a, sysconfig("<deploymentInformation><name>Prod</name></deploymentInformation>"),
+                StandardCharsets.UTF_8);
+        Files.writeString(b, sysconfig("<deploymentInformation><headerColor>navy</headerColor>"
+                + "</deploymentInformation>"), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        // The operator moves headerColor from b to a — nothing is removed from the object as a whole.
+        Files.writeString(a, sysconfig("<deploymentInformation><name>Prod</name>"
+                + "<headerColor>navy</headerColor></deploymentInformation>"), StandardCharsets.UTF_8);
+        Files.writeString(b, sysconfig("<deploymentInformation><customerName>ACME</customerName>"
+                + "</deploymentInformation>"), StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, a, b);
+
+        assertTrue(removals.isEmpty(), "the sibling fragment still declares headerColor: " + removals);
+    }
+
+    @Test
+    void anObjectsNameIsNeverOfferedForDeletion(@TempDir Path dir) throws Exception {
+        // A deleted fragment that carried <name> alongside a sibling identifying the object by OID only:
+        // dismantling it item by item puts 'delete name' in the prune delta, which midPoint's repo rejects —
+        // failing the whole prune group — or, worse, leaves the object nameless.
+        Path gone = dir.resolve("role-named.xml");
+        Path kept = dir.resolve("role-extra.xml");
+        Files.writeString(gone, role("<description>from the named fragment</description>"), StandardCharsets.UTF_8);
+        Files.writeString(kept, "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
+                + "  <subtype>alpha</subtype>\n</role>", StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.delete(gone);
+        run(dir, "git", "add", "-A");
+        run(dir, "git", "commit", "-qm", "drop the named fragment");
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, kept);
+
+        assertFalse(removals.stream().anyMatch(r -> r.path.contains("name")),
+                "the object's name must never be a removal candidate: " + removals);
+        assertTrue(removals.stream().anyMatch(r -> r.path.contains("description")),
+                "but its own description still is: " + removals);
+    }
+
+    @Test
     void aLongValueIsComparedByContentNotByATruncatedString(@TempDir Path dir) throws Exception {
         // The survivor subtraction must compare real values, not rendered text. Two descriptions that agree
         // for the first 120 characters and differ after would collapse to the same rendered key, hiding a
@@ -137,9 +186,7 @@ class RemovalDetectorTest {
         Files.writeString(kept, role("<description>" + shared + "A</description>"), StandardCharsets.UTF_8);
         Files.writeString(extra, role("<subtype>" + shared + "B</subtype>"), StandardCharsets.UTF_8);
         String first = commit(dir);
-        if (first == null) {
-            return;
-        }
+        Assumptions.assumeTrue(first != null, "git is not usable here");
         Files.delete(extra);
         run(dir, "git", "add", "-A");
         run(dir, "git", "commit", "-qm", "drop the extra fragment");
@@ -148,6 +195,38 @@ class RemovalDetectorTest {
 
         assertEquals(1, removals.size(), "the long subtype is genuinely removed: " + removals);
         assertTrue(removals.get(0).path.contains("subtype"), removals.get(0).toString());
+    }
+
+    @Test
+    void thePruneDeltaOnlyEverDeletesAndOnlyWhatItCanAddress() throws Exception {
+        // This builds the itemDeltas --prune PATCHes into a live server. DESIGN's central safety claim — that
+        // pruning is "structurally unable to reach accrued or foreign state" — rests on it emitting nothing
+        // but deletes, and only for removals that carry a definition.
+        PrismObject<? extends com.evolveum.midpoint.prism.Objectable> object =
+                prismContext.parseObject(role("<subtype>alpha</subtype>"));
+        com.evolveum.midpoint.prism.Item<?, ?> subtype =
+                object.findItem(com.evolveum.midpoint.prism.path.ItemPath.fromString("subtype"));
+        com.evolveum.midpoint.prism.path.ItemPath path =
+                com.evolveum.midpoint.prism.path.ItemPath.fromString("subtype");
+
+        RemovalDetector.Removal prunable = new RemovalDetector.Removal("RoleType/Removal Probe", "subtype",
+                "alpha", "role.xml", RoleType.class, OID, "Removal Probe", subtype.getDefinition(), path,
+                subtype.getValues().get(0));
+        RemovalDetector.Removal noDefinition = new RemovalDetector.Removal("RoleType/Removal Probe",
+                "extension/weird", "?", "role.xml", RoleType.class, OID, "Removal Probe", null, path,
+                subtype.getValues().get(0));
+
+        assertNull(RemovalDetector.pruneDelta(prismContext, OID, List.of()), "nothing to prune, no delta");
+        assertNull(RemovalDetector.pruneDelta(prismContext, OID, List.of(noDefinition)),
+                "a removal with no definition cannot be turned into a delta");
+
+        ObjectDelta<?> delta = RemovalDetector.pruneDelta(prismContext, OID, List.of(prunable, noDefinition));
+        assertEquals(1, delta.getModifications().size(), "only the prunable removal: " + delta);
+        ItemDelta<?, ?> only = delta.getModifications().iterator().next();
+        assertEquals(1, only.getValuesToDelete().size(), "one value deleted");
+        assertNull(only.getValuesToAdd(), "a prune never adds");
+        assertNull(only.getValuesToReplace(), "and never replaces");
+        assertEquals(OID, delta.getOid());
     }
 
     // --- helpers ---
@@ -165,6 +244,11 @@ class RemovalDetectorTest {
     private static String role(String body) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
                 + "  <name>Removal Probe</name>\n  " + body + "\n</role>";
+    }
+
+    private static String sysconfig(String body) {
+        return "<systemConfiguration xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
+                + "  <name>SystemConfiguration</name>\n  " + body + "\n</systemConfiguration>";
     }
 
     /** Commit everything in {@code dir}, returning the resulting revision, or null when git is unusable. */

@@ -104,12 +104,15 @@ final class GitRevision {
     }
 
     /**
-     * The repository's root commit — its stable identity across clones and remotes. When a repository has
-     * several roots (orphan branches, unrelated histories merged in) the reachable ones are sorted and the
-     * first is taken, so the result stays deterministic.
+     * The repository's root commit — its stable identity across clones and remotes.
+     *
+     * <p>Followed along <b>first parents</b> only. Taking the lexicographically first of all reachable roots
+     * would change identity the moment an unrelated history is merged in (a {@code git subtree add}, a
+     * vendored template): the state row would silently start over from zero and the old row would linger.
+     * The first-parent root is the line the branch actually descends from, and a merge cannot move it.
      */
     String rootCommit() {
-        String out = cached("roots", "rev-list", "--max-parents=0", "HEAD");
+        String out = cached("roots", "rev-list", "--first-parent", "--max-parents=0", "HEAD");
         if (out == null || out.isBlank()) {
             return null;
         }
@@ -140,10 +143,39 @@ final class GitRevision {
     }
 
     /**
+     * Whether {@code revision} is a commit this repository actually has.
+     *
+     * <p>Worth asking before comparing against it: a squash-merge, rebase, force-push or {@code gc} can make
+     * the recorded revision unreachable, and every {@code git show} against it then fails the same way a file
+     * that simply did not exist yet does. Without this check the two are indistinguishable, and "last-applied
+     * cannot be recovered" silently reads as "nothing was removed".
+     */
+    boolean hasRevision(String revision) {
+        return isCommitish(revision)
+                && cached("verify-" + revision, "rev-parse", "--verify", "--quiet", revision + "^{commit}") != null;
+    }
+
+    /**
+     * Whether {@code revision} is safe to hand to git as a revision argument.
+     *
+     * <p>The revision comes off the network — it is read from the {@code midgie-state} object on the server —
+     * so it is not trusted input. git takes anything starting with {@code -} as an option, and options such
+     * as {@code --output=<file>} write files; requiring a bare commit sha means the value can never be
+     * anything but a revision.
+     */
+    private static boolean isCommitish(String revision) {
+        return revision != null && revision.matches("[0-9a-fA-F]{7,40}");
+    }
+
+    /**
      * The content of {@code repoRelativePath} as of {@code revision}, or {@code null} when the file did not
      * exist then (a file added since) or the revision is unreachable.
      */
     String fileAt(String revision, String repoRelativePath) {
+        if (!isCommitish(revision)) {
+            LOG.debug("refusing to read a file at '{}': not a commit sha", revision);
+            return null;
+        }
         return run("show", revision + ":" + repoRelativePath);
     }
 
@@ -154,14 +186,25 @@ final class GitRevision {
      * <p>The pathspec is {@code .} because git resolves pathspecs against the process's working directory,
      * which here is the tree itself; the output is still repository-relative, which is what
      * {@code git show <rev>:<path>} needs.
+     *
+     * <p>The output format is pinned rather than taken as it comes: {@code core.quotePath=false} keeps a
+     * non-ASCII filename from arriving C-quoted, {@code diff.relative=false} overrides a user's global
+     * setting that would make the paths cwd-relative, and {@code -z} separates them with NUL so no filename
+     * can be split or trimmed. Each of those would otherwise make the follow-up {@code git show} fail and
+     * that fragment's removals go silently missing.
      */
     List<String> deletedSince(String revision) {
-        String out = run("diff", "--diff-filter=D", "--name-only", "-M", revision, "--", ".");
         List<String> paths = new ArrayList<>();
+        if (!isCommitish(revision)) {
+            LOG.debug("refusing to diff against '{}': not a commit sha", revision);
+            return paths;
+        }
+        String out = run("-c", "core.quotePath=false", "-c", "diff.relative=false",
+                "diff", "--diff-filter=D", "--name-only", "-M", "-z", revision, "--", ".");
         if (out != null) {
-            for (String line : out.split("\\R")) {
-                if (!line.isBlank()) {
-                    paths.add(line.trim());
+            for (String path : out.split("\0")) {
+                if (!path.isBlank()) {
+                    paths.add(path);
                 }
             }
         }
@@ -228,11 +271,14 @@ final class GitRevision {
                 return null;
             }
             String out = stdout.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            stderr.cancel(true);
             if (process.exitValue() != 0) {
-                LOG.debug("git {} exited {}", String.join(" ", args), process.exitValue());
+                // Several callers degrade to "detection off" on a null result, so without git's own reason
+                // an unreachable revision or a misconfigured identity cannot be diagnosed at any log level.
+                LOG.debug("git {} exited {}: {}", String.join(" ", args), process.exitValue(),
+                        drained(stderr));
                 return null;
             }
+            stderr.cancel(true);
             return out.strip();
         } catch (IOException | java.util.concurrent.ExecutionException
                 | java.util.concurrent.TimeoutException e) {
@@ -245,6 +291,18 @@ final class GitRevision {
             if (started != null && started.isAlive()) {
                 started.destroyForcibly();
             }
+        }
+    }
+
+    /** git's own error text, for the debug log — never worth failing over if it cannot be read. */
+    private static String drained(Future<String> stderr) {
+        try {
+            return stderr.get(TIMEOUT_SECONDS, TimeUnit.SECONDS).strip();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "";
+        } catch (Exception e) {
+            return "";
         }
     }
 

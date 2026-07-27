@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -47,11 +48,19 @@ class GitRevisionTest {
     }
 
     @Test
-    void anExplicitAppNameOverridesTheDerivation(@TempDir Path dir) {
-        DeploymentIdentity identity = DeploymentIdentity.of(dir.toFile(), "my-app");
+    void anExplicitAppNameOverridesTheDerivationButStillNeedsHistory(@TempDir Path dir) throws Exception {
+        // --app replaces the derived *key*, not the requirement for history: recovering last-applied still
+        // reads previous content out of git. Claiming tracking is available without a repository would make
+        // the run report no removals and look identical to a healthy one.
+        DeploymentIdentity outside = DeploymentIdentity.of(dir.toFile(), "my-app");
+        assertFalse(outside.isAvailable(), "--app cannot manufacture history that is not there");
+        assertNotNull(outside.unavailableReason(), "and the user must be told why");
 
-        assertTrue(identity.isAvailable(), "--app works even where git cannot identify the tree");
-        assertEquals("my-app", identity.key());
+        Files.writeString(dir.resolve("a.xml"), "<x/>", StandardCharsets.UTF_8);
+        Assumptions.assumeTrue(initRepository(dir), "git is not usable here");
+        DeploymentIdentity inside = DeploymentIdentity.of(dir.toFile(), "my-app");
+        assertTrue(inside.isAvailable(), "inside a real repository the override applies");
+        assertEquals("my-app", inside.key(), "and it replaces the root-commit derivation");
     }
 
     @Test
@@ -60,9 +69,7 @@ class GitRevisionTest {
         // repository with a sub-tree and check the key is <root>/<prefix> and stable across calls.
         Path tree = Files.createDirectories(dir.resolve("config"));
         Files.writeString(tree.resolve("a.xml"), "<x/>", StandardCharsets.UTF_8);
-        if (!initRepository(dir)) {
-            return; // git unavailable in this environment: the degradation cases above already cover us
-        }
+        Assumptions.assumeTrue(initRepository(dir), "git is not usable here");
 
         GitRevision git = GitRevision.of(dir.toFile());
         String root = git.rootCommit();
@@ -87,9 +94,7 @@ class GitRevisionTest {
         // The heart of delete detection: what a file said at an earlier revision, and which files went away.
         Files.writeString(dir.resolve("keep.xml"), "<keep/>", StandardCharsets.UTF_8);
         Files.writeString(dir.resolve("gone.xml"), "<gone/>", StandardCharsets.UTF_8);
-        if (!initRepository(dir)) {
-            return;
-        }
+        Assumptions.assumeTrue(initRepository(dir), "git is not usable here");
         GitRevision git = GitRevision.of(dir.toFile());
         String first = git.head();
 
@@ -101,6 +106,27 @@ class GitRevisionTest {
         assertTrue(git.deletedSince(first).contains("gone.xml"), "the deleted file is reported");
         assertFalse(git.deletedSince(first).contains("keep.xml"), "the surviving file is not");
         assertEquals("<gone/>", git.fileAt(first, "gone.xml"), "and its old content is still readable");
+    }
+
+    @Test
+    void aRecordedRevisionIsVerifiedAndCanNeverActAsAGitOption(@TempDir Path dir) throws Exception {
+        // The revision is read back from the midgie-state object on the server, so it is not trusted input.
+        // git treats a leading '-' as an option, and options like --output=<file> write files as the
+        // deploying user; requiring a bare sha means a planted row can only ever be rejected.
+        Files.writeString(dir.resolve("a.xml"), "<x/>", StandardCharsets.UTF_8);
+        Assumptions.assumeTrue(initRepository(dir), "git is not usable here");
+        GitRevision git = GitRevision.of(dir.toFile());
+        Path planted = dir.resolve("pwned.txt");
+
+        assertTrue(git.deletedSince("--output=" + planted).isEmpty(), "an option-shaped revision is refused");
+        assertNull(git.fileAt("--output=" + planted, "a.xml"), "and cannot read a file either");
+        assertFalse(Files.exists(planted), "git must never have been handed it");
+
+        // And an unreachable revision is distinguishable from a reachable one, so "cannot recover
+        // last-applied" is never mistaken for "nothing was removed".
+        assertFalse(git.hasRevision("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"), "an unknown commit");
+        assertFalse(git.hasRevision("--all"), "and a non-sha is not a revision at all");
+        assertTrue(git.hasRevision(git.head()), "while the real HEAD is recognised");
     }
 
     /** Create a repository with one commit. Returns false when git is not usable here. */
@@ -132,9 +158,7 @@ class GitRevisionTest {
         Path nested = Files.createDirectories(dir.resolve("a/b"));
         File file = nested.resolve("c.xml").toFile();
         Files.writeString(file.toPath(), "<x/>", StandardCharsets.UTF_8);
-        if (!initRepository(dir)) {
-            return;
-        }
+        Assumptions.assumeTrue(initRepository(dir), "git is not usable here");
         assertEquals("a/b/c.xml", GitRevision.of(dir.toFile()).repoRelative(file));
     }
 }

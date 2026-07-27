@@ -55,16 +55,18 @@ final class DeploymentIdentity {
         }
         GitRevision git = GitRevision.of(dir);
 
-        if (appOverride != null && !appOverride.isBlank()) {
-            // An explicit name still wants git alongside it, since recovering last-applied needs history.
-            return new DeploymentIdentity(appOverride.trim(), appOverride.trim(), null, git);
-        }
+        // History is checked before the override, not after. --app replaces the *key*, but recovering
+        // last-applied still reads the previous revision out of git, so without usable history a named
+        // deployment would report tracking as available and then quietly detect nothing at all.
         if (!git.isRepository()) {
             return unavailable("the tree is not in a git repository (or git is not available)", git);
         }
         if (git.isShallow()) {
             return unavailable("this is a shallow clone, whose history cannot identify the repository "
                     + "or recover previous content — fetch the full history (e.g. fetch-depth: 0)", git);
+        }
+        if (appOverride != null && !appOverride.isBlank()) {
+            return new DeploymentIdentity(appOverride.trim(), appOverride.trim(), null, git);
         }
         String root = git.rootCommit();
         if (root == null) {

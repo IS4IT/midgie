@@ -144,8 +144,23 @@ public class DeployCommand implements Callable<Integer> {
     // Resolved once per run.
     private StrategyOptions.Resolved globalStrategy;
     private Policy policy;
-    /** Set when the operator declined a prompt: nothing was written, so nothing may be recorded. */
-    private boolean declined;
+    /**
+     * Why this run did not land the whole tree, or {@code null} when it did. A declined prompt, a declined
+     * unit and a skipped unit all mean part of the desired state never reached the server — and both of the
+     * things that follow the apply assume it did. Pruning would delete "leftovers" computed against a tree
+     * that was never applied, and recording the revision would move the baseline past removals nobody acted
+     * on, making them undetectable for ever.
+     */
+    private String notFullyApplied;
+
+    /** Set when last-applied cannot be recovered at all, so no comparison this run means anything. */
+    private boolean detectionBroken;
+
+    private void markNotFullyApplied(String reason) {
+        if (notFullyApplied == null) {
+            notFullyApplied = reason;
+        }
+    }
 
     @Override
     public Integer call() {
@@ -266,7 +281,17 @@ public class DeployCommand implements Callable<Integer> {
             if (prune && !removals.isEmpty() && planDir == null) {
                 if (dryRun) {
                     exit = (exit == 0) ? 1 : exit; // would change something
-                } else if (exit == 0) {
+                } else if (exit != 0) {
+                    warn("not removing anything — the apply did not succeed; the values stay detectable "
+                            + "on the next run.");
+                } else if (notFullyApplied != null) {
+                    // The removal set says "the tree declares this no longer". That is only a safe thing to
+                    // delete once the tree has actually been applied: until then the server is missing
+                    // whatever the declined or skipped units would have written.
+                    warn("not removing anything — " + notFullyApplied + ", so the server does not hold the "
+                            + "tree the removal set was computed against; the values stay detectable on the "
+                            + "next run.");
+                } else {
                     // Gate separately: when the apply pass had nothing to do it returns without prompting,
                     // so without this a --prune run could delete with no confirmation at all.
                     Integer stop = confirmPrune(removals.size());
@@ -277,8 +302,13 @@ public class DeployCommand implements Callable<Integer> {
                     }
                 }
             }
-            if (exit == 0 && planDir == null && !dryRun && !declined) {
-                recordRevision(prismContext, client, tracking);
+            if (exit == 0 && planDir == null && !dryRun) {
+                if (notFullyApplied == null && !detectionBroken) {
+                    recordRevision(prismContext, client, tracking);
+                } else if (tracking.canRecord() && notFullyApplied != null) {
+                    note("note: not recording the deployed revision — " + notFullyApplied
+                            + "; anything dropped from the tree stays detectable on the next run.");
+                }
             }
             return exit;
         } catch (Exception e) {
@@ -339,6 +369,11 @@ public class DeployCommand implements Callable<Integer> {
         try {
             table = SyncState.find(prismContext, client);
         } catch (Exception e) {
+            // Every other "cannot detect" branch says so. Staying silent here — the likely cause is the
+            // deploy account having no read on lookupTables — makes a run with tracking quietly dead look
+            // exactly like a healthy one.
+            note("note: removals cannot be detected — could not read " + SyncState.TABLE_NAME + ": "
+                    + safe(e.getMessage()));
             LOG.debug("could not read {}", SyncState.TABLE_NAME, e);
             return new Tracking(identity, null, null, null);
         }
@@ -371,8 +406,20 @@ public class DeployCommand implements Callable<Integer> {
         if (!tracking.canDetect()) {
             return List.of();
         }
-        RemovalDetector detector = new RemovalDetector(prismContext, tracking.identity.git(),
-                baseRevision(tracking.lastRevision));
+        GitRevision git = tracking.identity.git();
+        String base = baseRevision(tracking.lastRevision);
+        if (!git.hasRevision(base)) {
+            // Every git show against an unreachable revision fails exactly as it does for a file that did not
+            // exist yet, so without this check the run would print nothing, look clean, and then record a new
+            // baseline — turning "we cannot tell what was removed" into "nothing was removed", permanently.
+            detectionBroken = true;
+            warn("the last deployed revision " + base + " is not in this repository (history rewritten, "
+                    + "squash-merged, or fetched shallow), so removals cannot be detected this run. "
+                    + "Nothing will be removed and the recorded revision is left alone. To start over, "
+                    + "delete the '" + tracking.identity.key() + "' row from " + SyncState.TABLE_NAME + ".");
+            return List.of();
+        }
+        RemovalDetector detector = new RemovalDetector(prismContext, git, base);
         List<RemovalDetector.Removal> removals = detector.detect(units);
         for (RemovalDetector.Orphan orphan : detector.orphaned()) {
             // The whole object left the tree. midgie does not delete objects, and taking one apart value by
@@ -406,12 +453,16 @@ public class DeployCommand implements Callable<Integer> {
      */
     private int applyPrune(PrismContext prismContext, MidpointRestClient client,
             List<RemovalDetector.Removal> removals) {
+        int unprunable = 0;
         Map<String, List<RemovalDetector.Removal>> byObject = new LinkedHashMap<>();
         for (RemovalDetector.Removal removal : removals) {
             if (removal.isPrunable()) {
                 byObject.computeIfAbsent(removal.objectLabel, key -> new ArrayList<>()).add(removal);
             } else {
-                note("warning: cannot remove " + removal + " — no item definition for it.");
+                // Counts as a prune failure: left unsaid, the revision would advance past it and the value
+                // would never be offered again.
+                warn("cannot remove " + removal + " — no item definition for it.");
+                unprunable++;
             }
         }
 
@@ -423,7 +474,7 @@ public class DeployCommand implements Callable<Integer> {
                 String restType = ObjectTypes.getRestTypeFromClass(first.objectClass);
                 String oid = resolvePruneTarget(prismContext, client, first, restType);
                 if (oid == null) {
-                    note("warning: cannot address " + entry.getKey() + " to remove "
+                    warn("cannot address " + entry.getKey() + " to remove "
                             + group.size() + " value(s); skipped.");
                     failed++;
                     continue;
@@ -440,13 +491,13 @@ public class DeployCommand implements Callable<Integer> {
                 client.patchObject(restType, oid, DeltaOutput.toModificationXml(prismContext, delta));
                 status("  pruned       " + entry.getKey() + "  " + group.size() + " value(s)");
             } catch (Exception e) {
-                note("warning: could not remove " + group.size() + " value(s) from " + entry.getKey()
+                warn("could not remove " + group.size() + " value(s) from " + entry.getKey()
                         + ": " + safe(e.getMessage()));
                 LOG.debug("prune failed for {}", entry.getKey(), e);
                 failed++;
             }
         }
-        return failed;
+        return failed + unprunable;
     }
 
     /**
@@ -639,6 +690,7 @@ public class DeployCommand implements Callable<Integer> {
                         && (action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH)) {
                     if (!promptEach(action, outcome)) {
                         tally.skipped++;
+                        markNotFullyApplied("one or more units were declined");
                         reportUnit(unit, "skipped", "declined", false);
                         continue;
                     }
@@ -684,6 +736,9 @@ public class DeployCommand implements Callable<Integer> {
                 break;
             case SKIP:
                 tally.skipped++;
+                if (!preview) {
+                    markNotFullyApplied("one or more units were skipped");
+                }
                 reportUnit(unit, preview ? "skip" : "skipped", safe(outcome.detail), false);
                 break;
             case FAIL:
@@ -896,8 +951,11 @@ public class DeployCommand implements Callable<Integer> {
             case PROCEED:
                 return null;
             case ABORTED:
+                // Recording now would move the baseline past the very values the operator asked to look at
+                // first, so the next run would find nothing to review.
+                markNotFullyApplied("the prune was declined");
                 System.err.println("midgie: aborted — nothing was removed.");
-                return 0;   // the apply itself succeeded, so its revision is still recorded below
+                return 0;
             case NON_INTERACTIVE:
             default:
                 System.err.println("midgie: refusing to remove values without confirmation in a "
@@ -916,7 +974,7 @@ public class DeployCommand implements Callable<Integer> {
             case PROCEED:
                 return null;
             case ABORTED:
-                declined = true;
+                markNotFullyApplied("the apply was declined");
                 System.err.println("midgie: aborted — nothing was applied.");
                 return 0;
             case NON_INTERACTIVE:
@@ -1048,6 +1106,15 @@ public class DeployCommand implements Callable<Integer> {
         if (!quiet) {
             System.err.println("midgie: " + message);
         }
+    }
+
+    /**
+     * A warning {@code --quiet} does not swallow. Reserved for the cases where what midgie wrote or deleted
+     * is not what the command line asked for — silencing those turns "removed nothing" into a green run that
+     * looks identical to a healthy one.
+     */
+    private void warn(String message) {
+        System.err.println("midgie: warning: " + message);
     }
 
     private static String safe(String value) {
