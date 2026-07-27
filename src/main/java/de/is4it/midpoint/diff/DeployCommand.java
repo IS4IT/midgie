@@ -183,6 +183,13 @@ public class DeployCommand implements Callable<Integer> {
             System.err.println("midgie: use either --plan or --apply-plan, not both.");
             return EXIT_ERROR;
         }
+        if (connectionOptions.oid != null) {
+            // Inherited from the shared connection mixin, but deploy addresses each object by the OID in its
+            // own file. Accepting a write-affecting flag and ignoring it is worse than rejecting it.
+            System.err.println("midgie: --oid applies to 'diff' and 'apply', which address one object; "
+                    + "deploy takes the OID from each file.");
+            return EXIT_ERROR;
+        }
         boolean live = connectionOptions.isLive();
         LOG.debug("deploy: live={}, dryRun={}, createIfAbsent={}, matchByName={}, retry={}, plan={}, "
                 + "applyPlan={}, policy={}", live, dryRun, createIfAbsent, matchByName, retry,

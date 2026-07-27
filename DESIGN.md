@@ -29,7 +29,8 @@ The core is ~5 lines:
 
 ```java
 // Base schema is loaded from the classpath — no Spring, no DB, no running midPoint.
-// The (File) constructor overload registers extra/extension XSDs from a directory (--schema-dir).
+// Extension XSDs (--schema-dir / --schema / read from the live server) are registered afterwards,
+// in a single registerDynamicSchemaExtensions batch -- see "Schema" below.
 PrismContext ctx = new MidPointPrismContextFactory().createInitializedPrismContext();
 
 PrismObject<?> desired = ctx.parseObject(desiredFile);
@@ -51,7 +52,7 @@ Confirmed API facts (source references are into `/Volumes/Daten/git/midpoint`):
 | `MidPointPrismContextFactory` | `com.evolveum.midpoint.schema.MidPointPrismContextFactory` — ctors `()` and `(File extraSchemaDir)` (infra/schema:56, :60); `createInitializedPrismContext()` (infra/schema:179) throws `SchemaException, SAXException, IOException` |
 | `PrismContext.parseObject(File)` | returns `PrismObject<T>` (see `TestParsePasswordPolicy`, `TestParseGenericObject`). Modern form: `ctx.parserFor(file).xml().parse()` |
 | `PrismObject.diff(other, EquivalenceStrategy)` | returns `ObjectDelta<T>` (`com.evolveum.midpoint.prism.delta.ObjectDelta`); see `TestDiffEquals:456` |
-| `EquivalenceStrategy.REAL_VALUE` | ignores operational/metadata items **and container ids** — the default for config diffing (proven in `TestParseDiffPatch`). The `_CONSIDER_DIFFERENT_IDS[_NATURAL_KEYS]` variants turn container-id / natural-key matching **on**, which makes the diff *pair* multi-valued entries and edit them in place; id-agnostic plain `REAL_VALUE` instead emits clean whole-value add/delete. Merge defaults to plain `REAL_VALUE` for that reason (see "Strategy flags"); the id-considering variants are still selectable via `--equivalence` for exploration, with a warning |
+| `EquivalenceStrategy.REAL_VALUE` | ignores operational/metadata items **and container ids** — the default for config diffing (proven in `TestParseDiffPatch`). The `_CONSIDER_DIFFERENT_IDS[_NATURAL_KEYS]` variants turn container-id / natural-key matching **on**, which makes the diff *pair* multi-valued entries and edit them in place; id-agnostic plain `REAL_VALUE` instead emits clean whole-value add/delete. Merge defaults to plain `REAL_VALUE` for that reason (see "Strategy flags"); the id-considering variants are still selectable via `--equivalence` for exploration (`natural-keys`, the experimental preset, warns) |
 | `DeltaConvertor.toObjectModificationType(ObjectDelta)` | `com.evolveum.midpoint.schema.DeltaConvertor` (infra/schema:237) → `com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType`. Also `toObjectDeltaType` (:259) and `toItemDeltaTypes` (:429) |
 | `Item.diffModifications(other, strategy)` | returns `List<ItemDelta>` — useful for a **scoped** per-item diff (see `TestDiffEquals:565`) |
 
@@ -78,22 +79,31 @@ the midPoint source tree.
   `DiffEngine` run with last-applied in the live slot, so no new diff logic exists. It works per **fragment
   file**, which is what makes it correct for objects assembled from several files: a deleted fragment yields
   exactly the values it contributed (the object is never a deletion candidate — `SystemConfiguration` is
-  `indestructible` anyway), minus anything a surviving sibling still declares. **Reporting only**; `--prune`
-  would be a later, opt-in step. State lives in a `midgie-state` `LookupTableType` created solely by
-  `midgie init` — never implicitly, so midgie leaves no unexplained object behind — and that object carries
-  `--prune` then applies the detected removals: opt-in, `--dry-run`-able, gated by its own confirmation
-  (the apply pass returns without prompting when it has nothing to do, so a prune-only run would otherwise
-  delete unconfirmed), and run *after* the tree is applied. Its delta is assembled only from values that were
-  in last-applied (`RemovalDetector.pruneDelta`), which is what makes it structurally unable to reach accrued
-  or foreign state. `init --write-policy` seeds a starter policy from the tree, suggesting
-  natural-keys+merge only for containers that are keyed **and carry the key** — `NaturalKeys` holds that
-  judgement, shared with the input warnings, because a declared-but-unused key (`assignment`'s `identifier`)
-  makes prism pair unrelated values. The state object carries
-  `indestructible`, a `description`/`documentation` aimed at an admin who has never heard of the tool,
-  `subtype=midgie`, and a `lifecycleState` an admin can set to `archived` to switch tracking off. Identity is
-  the repository's root commit plus the tree's path within it: content-addressed, so every clone agrees
-  regardless of its remotes (`--app` overrides; shallow clones are refused, since their apparent root is only
-  the grafted boundary). `GitRevision`, `DeploymentIdentity`, `SyncState`, `RemovalDetector`, `InitCommand`.
+  `indestructible` anyway), minus anything a surviving sibling still declares — checked per removal against
+  the surviving fragments themselves, at the removal's own depth, since a survivor set enumerated by diffing
+  a fragment against an empty object yields whole-container paths that no nested removal could ever match.
+  Reported by default; deleting is opt-in. State lives in a `midgie-state` `LookupTableType` created solely
+  by `midgie init` — never implicitly, so midgie leaves no unexplained object behind.
+
+  `--prune` then applies the detected removals: `--dry-run`-able, gated by its own confirmation (the apply
+  pass returns without prompting when it has nothing to do, so a prune-only run would otherwise delete
+  unconfirmed), and run *after* the tree is applied — and only when the tree really was applied, since a
+  declined or partly skipped run leaves the server holding something the removal set was not computed
+  against. Its delta is assembled only from values that were in last-applied (`RemovalDetector.pruneDelta`),
+  which is what makes it structurally unable to reach accrued or foreign state; an object's `name`, and any
+  mandatory item, is never a candidate. `init --write-policy` seeds a starter policy from the tree,
+  suggesting natural-keys+merge only for containers that are keyed **and carry the whole key** —
+  `NaturalKeys` holds that judgement, shared with the input warnings, because a declared-but-unused key
+  (`assignment`'s `identifier`) makes prism pair unrelated values, and half a composite key (`kind` without
+  `intent`) discriminates nothing. The state object carries `indestructible`, a `description`/`documentation`
+  aimed at an admin who has never heard of the tool, `subtype=midgie`, and a `lifecycleState` an admin can
+  set to `archived` to switch tracking off. The recorded revision is verified before anything is compared
+  against it, and validated as a commit sha before it reaches git's argv — it arrives over the network, and
+  an unreachable revision must not read as "nothing was removed". Identity is the repository's root commit
+  (along first parents, so merging an unrelated history does not change it) plus the tree's path within it:
+  content-addressed, so every clone agrees regardless of its remotes. `--app` overrides the key, not the
+  need for history; shallow clones are refused either way, since their apparent root is only the grafted
+  boundary. `GitRevision`, `DeploymentIdentity`, `SyncState`, `RemovalDetector`, `InitCommand`.
 - *Blast-radius reporting and input checks* — a partial fragment can silently destroy live state, so the
   danger is reported before any write (advisory, never blocking; `--quiet` silences it). Every summary line
   carries the number of values it removes, and a removing delta prints a prominent `WARNING: this change
@@ -116,22 +126,28 @@ the midPoint source tree.
 
 ## Commands / modes (layered)
 
-**v1 = the offline core.** Live and apply are thin adapters added in a second increment.
+**v1 = the offline core.** Live and apply are thin adapters added in a second increment; `deploy` and
+`init` came later still. All four subcommands are listed here.
 
 - `midgie diff <desired.xml> <live.xml>` → itemDelta XML on stdout. No REST, no server.
 - `midgie diff <desired.xml> --url <url> --user <u> --password <p> [--oid <oid>]` → GET the
   current object (type + OID read from the desired file if not given), diff, emit itemDelta.
 - `midgie apply <desired.xml> --url … [--create-if-absent]` → diff then
-  `PATCH /ws/rest/{type}/{oid}`; on a GET-404 with `--create-if-absent`, `POST /ws/rest/{type}` the whole
+  `PATCH /ws/rest/{type}/{oid}`; when the search finds nothing and `--create-if-absent` is set, `POST /ws/rest/{type}` the whole
   object (operational/metadata items stripped first). This is the reconciler. Because it writes, it shows
   the pending change and confirms first: it prompts interactively, or refuses in a non-interactive session
   unless `--yes`/`-y` is given. `--dry-run` prints the delta and changes nothing.
+- `midgie deploy <tree> [--url …]` → discover a folder tree, sort it by dependency, and print the apply
+  order or reconcile it object by object. Its own section below.
+- `midgie init --url …` → create the `midgie-state` object that delete detection needs, and optionally seed
+  a starter `--policy` file for a tree (`--write-policy`). Never implicit: `deploy` reports that tracking is
+  off rather than creating anything.
 
 Connection details default from `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD`. To keep the
 password off the command line (it leaks into `ps` and shell history), resolve it — in order — from
 `--password`, `--password-env <VAR>`, `--password-file <FILE>`, `MIDPOINT_PASSWORD`, or an interactive
 prompt. REST failures carry an actionable hint (401 auth, 403 authz, connection refused). `--timeout`
-sets the per-request timeout; `--retries <n>` retries idempotent reads on 502/503/504 / connection-refused
+sets the per-request timeout; `--retries <n>` retries idempotent reads (including the `POST {type}/search` every object lookup uses) on 502/503/504 / connection-refused
 / timeout with exponential backoff (rides out a server that is still starting). For https, `--cacert <FILE>`
 verifies the server against a CA certificate; `--insecure` trusts any cert and skips hostname verification.
 The `docker/tls/` rig (an nginx TLS proxy in front of midPoint + a client container) exercises these
@@ -246,7 +262,7 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 
 ## How a promotion pipeline consumes it
 
-That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — apply a folder tree" below — increment 1, the read-only discovery + schema-aware dependency sort, is built), so it runs in one JVM with a schema-aware dependency sort instead of an external per-file loop that re-pays the prism bootstrap each time. Env-specific value templating stays a pipeline pre-step (render the tree, then `deploy` it). Packaged as a Kubernetes Job on the midPoint image, `deploy` is "item #2" of the midpoint-k8s delivery plan.
+That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — apply a folder tree" below, built through the apply, plan and policy increments), so it runs in one JVM with a schema-aware dependency sort instead of an external per-file loop that re-pays the prism bootstrap each time. Env-specific value templating stays a pipeline pre-step (render the tree, then `deploy` it). Packaged as a Kubernetes Job on the midPoint image, `deploy` is "item #2" of the midpoint-k8s delivery plan.
 
 ## Build order (recommended)
 

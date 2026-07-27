@@ -1,8 +1,9 @@
 # TODO — possible improvements
 
-Hardening and polish for `midgie`. None of these are bugs — the tool is functional (offline
-`diff`, `diff --url`, `apply` with create/patch/idempotency, and two-layer extension schema). Priority
-is value × how exposed the gap is. ⭐ marks a good first cluster (small, independent, high-value).
+Hardening and polish for `midgie`. None of these are bugs — the tool is functional: offline `diff`,
+`diff --url`, `apply` with create/patch/idempotency, `deploy` over a folder tree (plan, policy, retry,
+delete detection and `--prune`), `init`, and two-layer extension schema. Priority is value × how exposed
+the gap is. ⭐ marks a good first cluster (small, independent, high-value).
 
 ## A. Safety on `apply` (it mutates a live server) — done
 - [x] ⭐ **Confirm before applying** — prompts interactively; `--yes`/`-y` bypasses; refuses in a non-interactive session without `--yes`.
@@ -17,7 +18,7 @@ is value × how exposed the gap is. ⭐ marks a good first cluster (small, indep
 - [x] ⭐ **Keep the password off the CLI** — resolved from `--password` → `--password-env VAR` → `--password-file FILE` → `MIDPOINT_PASSWORD` → interactive prompt.
 - [x] **Env-var config** — `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD` default the connection (an explicit LIVE file still wins over an env host, so file diffs aren't broken).
 - [x] **Clearer REST errors** — 401 (auth) / 403 (authz) / connection-refused / timeout carry an actionable hint; the best-effort schema-read stays quiet on 401/connection so the real error shows once.
-- [x] **Configurable timeouts + retry/backoff** — `--timeout <seconds>` (per-request) and `--retries <n>` (GET-only, on 503/connection-refused/timeout with exponential backoff); writes are never auto-retried.
+- [x] **Configurable timeouts + retry/backoff** — `--timeout <seconds>` (per-request) and `--retries <n>` on 502/503/504/connection-refused/timeout with exponential backoff. Retryability is a property of the call, not the HTTP verb: reads retry (including the `POST {type}/search` every object lookup uses), writes never do.
 - [x] **Real TLS verification** — `--cacert <FILE>` verifies the server against a CA cert; `--insecure` now also bypasses hostname mismatch. Verified end-to-end by the `docker/tls/` rig (nginx TLS proxy + private CA + a client container running the smoke tests).
 
 ## D. Correctness edges (each also wants a test)
@@ -60,7 +61,33 @@ A new subcommand that discovers desired-state object XML under one or more paths
 - [x] **Plan / intermediate deltas** — `--dry-run` prints the plan + deltas and changes nothing (exit 1 on drift); `--plan <dir>` writes ordered, numbered per-object create/patch files for review; `deploy --apply-plan <dir>` replays them in order (the "apply a saved change" mode).
 - [x] **Tests** — unit: sort correctness, discovery skips non-objects, same-identity fragments group, contradictions error, the reconcile decision table, the REST search, policy selector matching / most-specific-wins / validation, plan-file round-trip, and stub-server retry convergence. Integration (`docker/` rig): deploy a small tree with dependency order + idempotent re-run, `--match-by-name`, the non-interactive refuse, the `--plan`→`--apply-plan` round-trip, and a `--policy` per-object override.
 
-## I. Optional / deferred
+## I. Delete detection, `--prune` and `init` (done)
+
+Three-way merge against what midgie last applied, so `merge` can be honest about removals. A two-way diff
+cannot see a removal at all: drop a value from a file and the delta comes out empty while the value lives
+on. Comparing desired against **last-applied** — `git show <lastRev>:<file>` for a version-controlled tree —
+separates "you removed this" from "someone else added it". Full design in DESIGN.md.
+
+- [x] ⭐ **Value-level detection** — per fragment file, so an object assembled from several files works
+  without a special case: a deleted fragment yields exactly the values it contributed, minus anything a
+  surviving sibling still declares. The object itself is never a deletion candidate, and neither is its
+  `name` or any mandatory item.
+- [x] **Deployment identity** — the repository's first-parent root commit plus the tree's path within it:
+  content-addressed, so every clone and remote agrees. `--app` overrides the key; not-a-repository and
+  shallow clones disable detection with a note either way, since recovering last-applied needs history.
+- [x] **Server-side state** — a `midgie-state` `LookupTableType`, one row per deployment, created only by
+  `midgie init`. Self-describing and `indestructible`; `lifecycleState=archived` switches tracking off.
+  The recorded revision is verified before use and validated as a commit sha before reaching git's argv.
+- [x] **`--prune`** — applies the detected removals: opt-in, `--dry-run`-able, separately confirmed, run
+  after the tree is applied and only when the whole tree really was applied. Its delta is built solely from
+  values that were in last-applied, so it cannot reach accrued or foreign state.
+- [x] **`init --write-policy`** — seeds a starter policy from the tree, suggesting natural-keys + merge only
+  for containers that are keyed *and* carry the whole key.
+- [x] **Tests** — `RemovalDetectorTest` (dropped value, still-declared value, nested value moved between
+  fragments, deleted fragment, orphaned object, `pruneDelta` shape), `GitRevisionTest` (degradation outside
+  a repository, identity derivation, revision verification and the argv guard), plus the rig.
+
+## J. Optional / deferred
 
 - [ ] **Fragment union engine (optional).** Merge all fragments of one object into a single desired object and reconcile it **once** (one PATCH per object) instead of file-by-file. This would make cross-file **multi-valued** composition correct by default (today two files sharing a multi-valued container clobber under the default replace — now *warned* at group time), give an atomic create (POST the whole object rather than POST-a-partial-then-PATCH), and make apply order-independent within an object. **Deferred** because the file-by-file `--scope present` fix already stops single-valued fragments from clobbering, so the remaining gain is niche; it also trades the clean "deploy a file ≡ apply that file" model for "deploy an object ≡ apply the merged desired", and needs a schema-aware `PrismObject` union (an extension of `DeployObject.collectSingleValued`/`collectMultiValued`). Revisit if the split-list pattern — or atomic create / order-independence — becomes a real need.
 

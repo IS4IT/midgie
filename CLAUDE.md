@@ -4,17 +4,22 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## What this is
 
-`midgie` — a standalone, schema-aware CLI that computes the minimal `itemDelta` between two
-midPoint objects and emits the `ObjectModificationType` XML that midPoint's REST `PATCH` consumes. It is
-a thin wrapper around midPoint's own `PrismObject.diff`. **Read `DESIGN.md` first — it is the full,
-self-contained brief** (modes, flags, two-layer schema handling, output/exit codes, verification).
+`midgie` — a standalone, schema-aware CLI that reconciles midPoint configuration held as object XML. At its
+core it computes the minimal `itemDelta` between a desired and a current object and emits the
+`ObjectModificationType` XML that midPoint's REST `PATCH` consumes, wrapping midPoint's own
+`PrismObject.diff`; on top of that sit a live apply and a folder-tree deploy. **Read `DESIGN.md` first — it
+is the full, self-contained brief** (modes, flags, two-layer schema handling, output/exit codes,
+verification).
 
-Status: **offline core + live modes + extension schema working.** `DiffEngine` computes the reconciling
-delta (`--scope`, `--multivalue`/`--path`, `--equivalence`); `diff` emits the `ObjectModificationType`
-(offline LIVE file or `--url` GET); `apply` reconciles a live object (`PATCH`, `--create-if-absent`
-`POST`, `--dry-run`, idempotent). Extension schema registers from `--schema-dir` (raw XSDs), `--schema`
-(SchemaType XML), and — in live mode — automatically from the server (`SchemaOptions.buildContext`). All
-HTTP lives in `MidpointRestClient`; the engine stays REST-free. Verified against the `docker/` rig.
+Status: **all four subcommands built.** `DiffEngine` computes the reconciling delta (`--scope`,
+`--multivalue`/`--path`, `--equivalence`); `diff` emits the `ObjectModificationType` (offline CURRENT file
+or `--url`); `apply` reconciles one live object (`PATCH`, `--create-if-absent` `POST`, `--dry-run`,
+idempotent); `deploy` discovers a folder tree, sorts it by dependency and reconciles it, with `--plan`/
+`--apply-plan`, `--policy`, `--retry`, and three-way delete detection with `--prune`; `init` creates the
+`midgie-state` object that detection needs and can seed a starter policy. Extension schema registers from
+`--schema-dir` (raw XSDs), `--schema` (SchemaType XML), and — in live mode — automatically from the server
+(`SchemaOptions.buildContext`). All HTTP lives in `MidpointRestClient`; the engine stays REST-free.
+Verified against the `docker/` rig.
 
 ## Commands
 

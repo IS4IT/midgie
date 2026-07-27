@@ -52,7 +52,7 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 
 > Each object is compared with **itself**, not another object: its *desired* state (how you want it) against its *current* state (how it is now), and the delta transforms current → desired. If both sides carry an OID and the OIDs differ, the run is refused.
 
-In live mode all three address the object by OID (its `oid`, or `--oid`); if it has none, **`--match-by-name`** resolves it on the server by type + name (a single match) — opt-in everywhere, since resolving a write target by name is deliberately explicit.
+In live mode `diff` and `apply` address the object by OID (its `oid`, or `--oid`), and `deploy` by the OID in each file; if it has none, **`--match-by-name`** resolves it on the server by type + name (a single match) — opt-in everywhere, since resolving a write target by name is deliberately explicit.
 
 ### `diff` — the minimal delta
 
@@ -101,7 +101,7 @@ bin/midgie init --url https://mp.example/midpoint --user administrator config/
 That creates a `midgie-state` lookup table which records, per tree, the revision last applied. `deploy` never creates it — until you run `init`, deploy behaves exactly as before and simply notes that detection is off. Afterwards each deploy records what it applied and reports what has since disappeared:
 
 ```
-midgie: 1 value(s) deployed at 2d58fd57e470… are no longer declared by the tree (not removed — reported only):
+midgie: 1 value(s) deployed at 2d58fd57e470… are no longer declared by the tree (reported only — pass --prune to remove them):
 midgie:   33333333-…-aaaa  subtype = beta (was in roles/manager.xml)
 ```
 
@@ -124,7 +124,7 @@ A tree is identified by its repository's **root commit** plus its path inside th
 bin/midgie init config/ --url … --write-policy midgie.policy
 ```
 
-It walks the tree and suggests `equivalence=natural-keys multivalue=merge` for each object that declares a multi-valued container the schema gives a natural key **and whose values actually carry it** — commenting which containers prompted each line. That last condition matters: `assignment` and `inducement` declare an `identifier` that real config usually omits, and suggesting key matching there would be actively wrong (prism pairs unrelated values and the accrued-value guard refuses the result). The file is a starting point to review, not a finished policy, and an existing file is never overwritten.
+It walks the tree and, for each object that declares a multi-valued container the schema gives a natural key **and whose values actually carry the whole key**, writes one object-level line (`<Type>/<Name>  equivalence=natural-keys`) plus a per-container line (`<Type>/<Name>/<container>  multivalue=merge`) — commenting which containers prompted each line. The merge rules are deliberately scoped to those paths rather than to the whole object. That "actually carry it" condition matters: `assignment` and `inducement` declare an `identifier` that real config usually omits, and a composite key like `kind + intent` is often written with only the `kind` — suggesting key matching in either case would be actively wrong, since prism then pairs unrelated values and the accrued-value guard refuses the result. The file is a starting point to review, not a finished policy, and an existing file is never overwritten.
 
 The state object describes and protects itself: it is `indestructible` (midPoint refuses to delete it — clear the flag first if you really mean to), carries a `description`/`documentation` explaining it to an admin who has never heard of midgie, and is marked `subtype=midgie`. To switch tracking off without deleting anything, set its `lifecycleState` to `archived`. Losing it is harmless — detection simply stops until `init` recreates it; midgie never deletes anything as a result.
 
@@ -145,6 +145,8 @@ The contract lets CI gate on drift without parsing output:
 | `apply` (real write) | applied, created, in sync, or declined | — | error |
 | `deploy --dry-run` / `--plan` | nothing to change | would change something | error |
 | `deploy` (real apply) | all applied/in-sync/skipped/declined | — | a unit failed, or error |
+| `deploy` (offline, no `--url`) | printed the apply order | — | error |
+| `init` | created, or already present | — | error |
 
 ## Flags
 
@@ -169,7 +171,7 @@ natural key — is a managed update and is not refused (see below).
 The defaults (`replace` + `real-value`) make a run **converge** and keep **drift visible**, which is why they are the defaults. `merge` buys safety from accidental deletion, but it gives up both, so turn it on deliberately and per path rather than globally:
 
 - **It cannot express an edit.** A content change reads as *old value gone, new value added*, and merge drops the deletion — so it keeps both. With live `subtype=[alpha]` and desired `[beta]` you get `[alpha, beta]`, not `[beta]`.
-- **It cannot express a removal, and hides that fact.** Dropping an entry from your file no longer removes it from the server, and because the delta comes out empty `diff` reports `No differences.` and exits `0`. Drift detection and the CI exit-code gate stop seeing anything the file does not declare — leftover state is never reported, so "clean it up later" quietly becomes "never find out".
+- **It cannot express a removal.** Dropping an entry from your file no longer removes it from the server, and because the delta comes out empty `diff` reports `No differences.` and exits `0`. Drift detection and the CI exit-code gate stop seeing anything the file does not declare. `deploy` closes this for a version-controlled tree — it compares against what it last applied and reports the values you dropped (`--prune` removes them) — but `diff` and `apply`, which have no such history, still cannot see a removal at all.
 
 Rule of thumb: keep a path on **replace** when your file is authoritative for that list, and use **merge** where your file is a *fragment* contributing entries to a list that others (or the server) also fill — which is exactly the nested-container case below. `natural-keys` is likewise opt-in: it is prism-`@Experimental`, and many types declare a natural key that real config never fills in (an `assignment` rarely carries an `<identifier>`), so as a blanket setting it makes prism pair unrelated values.
 
@@ -181,8 +183,13 @@ To manage **one entry** deep inside multi-valued containers — say a single GUI
 
 ```
 # midgie.policy
-SystemConfigurationType/SystemConfiguration  equivalence=natural-keys multivalue=merge
+SystemConfigurationType/SystemConfiguration  equivalence=natural-keys
+SystemConfigurationType/SystemConfiguration/**/panel  multivalue=merge
 ```
+
+Scoped to the container that needs it rather than to the whole object — the same shape
+`init --write-policy` generates, and what the guidance above means by "turn it on deliberately and per
+path".
 
 The midPoint schema declares an `a:naturalKey` for these containers (`panel` → `identifier`,
 `objectDetailsPage` → `type`, and ~100 more), so prism matches your id-less fragment against the live values
@@ -235,11 +242,11 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 | `--url URL` | midPoint base URL (or `MIDPOINT_URL`), e.g. `https://mp.example/midpoint`. A trailing `/ws/rest` is accepted. |
 | `--user USER` | REST user (or `MIDPOINT_USER`). |
 | `--password`, `--password-env VAR`, `--password-file FILE` | Password sources; resolved in the order **`--password` → `--password-env` → `--password-file` → `MIDPOINT_PASSWORD` → interactive prompt**. Prefer anything but `--password` (it is visible in `ps`/shell history). |
-| `--oid OID` | Object to fetch/patch. Defaults to the OID in the desired object. |
+| `--oid OID` | *(diff, apply)* Object to fetch/patch. Defaults to the OID in the desired object. |
 | `--cacert FILE` | Verify the server's TLS certificate against this CA cert (PEM). |
 | `--insecure` | Trust any TLS certificate and skip hostname verification (self-signed dev servers). |
 | `--timeout SECONDS` | Per-request timeout (default 30). |
-| `--retries N` | Retry idempotent reads on `503`/connection-refused/timeout, `N` times with backoff (writes are never auto-retried). |
+| `--retries N` | Retry idempotent reads on `502`/`503`/`504`/connection-refused/timeout, `N` times with backoff (writes are never auto-retried). |
 
 ### Schema (extension items)
 
@@ -253,8 +260,8 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 
 | flag | meaning |
 |---|---|
-| `--format xml\|json\|summary` | `xml` (default) / `json`: the `ObjectModificationType`. `summary`: a human-readable changed-path list. |
-| `-o, --output FILE` | Write the delta to `FILE` instead of stdout. |
+| `--format xml\|json\|summary` | *(diff, apply)* `xml` (default) / `json`: the `ObjectModificationType`. `summary`: a human-readable changed-path list. |
+| `-o, --output FILE` | *(diff, apply)* Write the delta to `FILE` instead of stdout. |
 | `-q, --quiet` | Suppress advisory notes/status; keep the delta payload, errors, and exit code. |
 | `-v, --debug` | Log a full DEBUG trace on stderr — the tool's own decisions (mode, connection, every REST call, per-object outcome) plus framework logs, each line timestamped. |
 | `--trace` | Everything `--debug` logs, plus full REST request/response bodies and HTTP error bodies. Implies `--debug`; may include sensitive values. |
