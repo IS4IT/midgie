@@ -119,9 +119,21 @@ final class RemovalDetector {
                 .createModifyDelta(oid, deltas, (Class<? extends Objectable>) objectClass);
     }
 
+    /** An object that left the tree entirely: reported, never taken apart value by value. */
+    static final class Orphan {
+        final String objectLabel;
+        final String sourceFile;
+
+        Orphan(String objectLabel, String sourceFile) {
+            this.objectLabel = objectLabel;
+            this.sourceFile = sourceFile;
+        }
+    }
+
     private final PrismContext prismContext;
     private final GitRevision git;
     private final String lastRevision;
+    private final List<Orphan> orphaned = new ArrayList<>();
 
     RemovalDetector(PrismContext prismContext, GitRevision git, String lastRevision) {
         this.prismContext = prismContext;
@@ -148,7 +160,7 @@ final class RemovalDetector {
             if (lastApplied == null) {
                 continue; // new file since the last deploy
             }
-            collect(removals, lastApplied, unit.object(), unit.identityLabel(), relative, stillDeclared);
+            collect(removals, lastApplied, unit.object(), identityKeyOf(unit.object()), relative, stillDeclared);
         }
 
         for (String deleted : deletedFragments(units)) {
@@ -156,16 +168,31 @@ final class RemovalDetector {
             if (lastApplied == null) {
                 continue;
             }
-            // The whole fragment is gone: everything it declared is a removal, so diff it against nothing.
+            String label = identityKeyOf(lastApplied);
+            if (!stillDeclared.containsKey(label)) {
+                // No fragment declares this object any more. Its values are not individually "removed" — the
+                // whole object left the tree, and taking it apart value by value would strip its name and
+                // leave a mangled object behind. Deleting objects is deliberately out of scope, so say so and
+                // leave it alone.
+                orphaned.add(new Orphan(label, deleted));
+                continue;
+            }
+            // A sibling still declares the object, so this fragment's own contribution is a real removal.
             PrismObject<? extends Objectable> empty = emptyLike(lastApplied);
             if (empty == null) {
                 continue;
             }
-            collect(removals, lastApplied, empty, labelOf(lastApplied), deleted, stillDeclared);
+            collect(removals, lastApplied, empty, label, deleted, stillDeclared);
         }
 
-        LOG.debug("detected {} removal(s) against revision {}", removals.size(), lastRevision);
+        LOG.debug("detected {} removal(s) and {} orphaned object(s) against revision {}",
+                removals.size(), orphaned.size(), lastRevision);
         return removals;
+    }
+
+    /** Objects whose every fragment left the tree; reported so the operator can retire them deliberately. */
+    List<Orphan> orphaned() {
+        return orphaned;
     }
 
     /**
@@ -209,7 +236,7 @@ final class RemovalDetector {
     private Map<String, Set<String>> declarationsByObject(List<Fragment> units) {
         Map<String, Set<String>> declared = new LinkedHashMap<>();
         for (Fragment unit : units) {
-            Set<String> target = declared.computeIfAbsent(unit.identityLabel(), key -> new LinkedHashSet<>());
+            Set<String> target = declared.computeIfAbsent(identityKeyOf(unit.object()), key -> new LinkedHashSet<>());
             PrismObject<? extends Objectable> empty = emptyLike(unit.object());
             if (empty == null) {
                 continue;
@@ -279,11 +306,20 @@ final class RemovalDetector {
         }
     }
 
-    private static String labelOf(PrismObject<? extends Objectable> object) {
-        String name = (object.getName() != null) ? object.getName().getOrig() : null;
+    /**
+     * The key both sides of the survivor subtraction must agree on: the OID when there is one, else
+     * {@code Type/Name}. It has to be derived the same way for a fragment in the tree and for one recovered
+     * from git, or an OID-less object's surviving declarations would never match what a deleted fragment
+     * declared and every one of its values would be reported.
+     */
+    private static String identityKeyOf(PrismObject<? extends Objectable> object) {
+        if (object.getOid() != null && !object.getOid().isBlank()) {
+            return object.getOid();
+        }
+        String name = (object.getName() != null) ? object.getName().getOrig() : "?";
         String type = (object.getCompileTimeClass() != null)
                 ? object.getCompileTimeClass().getSimpleName() : "?";
-        return (object.getOid() != null) ? object.getOid() : type + "/" + (name != null ? name : "?");
+        return type + "/" + name;
     }
 
     private static String declaration(String path, String value) {

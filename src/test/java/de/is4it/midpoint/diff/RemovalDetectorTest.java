@@ -97,6 +97,35 @@ class RemovalDetectorTest {
                 "and so is the subtype: " + removals);
     }
 
+    @Test
+    void anObjectWhoseLastFragmentIsDeletedIsReportedWholeNotTakenApart(@TempDir Path dir) throws Exception {
+        // The dangerous case: with no surviving fragment, diffing last-applied against an empty object makes
+        // *every* item a "removal" — including <name>. Pruning that would strip the object's name (or have
+        // midPoint reject the whole PATCH). Deleting objects is out of scope, so it must be reported whole.
+        Path only = dir.resolve("role.xml");
+        Path other = dir.resolve("other.xml");
+        Files.writeString(only, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
+        Files.writeString(other, "<role xmlns=\"" + NS + "\" oid=\"55555555-0000-0000-0000-00000000cccc\">\n"
+                + "  <name>Other</name>\n</role>", StandardCharsets.UTF_8);
+        String first = commit(dir);
+        if (first == null) {
+            return;
+        }
+        Files.delete(only);
+        run(dir, "git", "add", "-A");
+        run(dir, "git", "commit", "-qm", "delete the only fragment");
+
+        RemovalDetector detector = new RemovalDetector(prismContext, GitRevision.of(dir.toFile()), first);
+        List<RemovalDetector.Removal> removals = detector.detect(
+                List.of(Fragment.of(prismContext.parseObject(other.toFile()), other.toFile())));
+
+        assertTrue(removals.isEmpty(), "an orphaned object must not be taken apart value by value: " + removals);
+        assertFalse(removals.stream().anyMatch(r -> r.path.contains("name")),
+                "and its name must never be offered for deletion");
+        assertEquals(1, detector.orphaned().size(), "it is reported as orphaned instead");
+        assertTrue(detector.orphaned().get(0).sourceFile.contains("role.xml"));
+    }
+
     // --- helpers ---
 
     /** Run detection for the files currently present, comparing against {@code revision}. */

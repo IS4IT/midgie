@@ -22,10 +22,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Element;
 
+import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
 import com.evolveum.midpoint.schema.constants.ObjectTypes;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
@@ -142,6 +144,8 @@ public class DeployCommand implements Callable<Integer> {
     // Resolved once per run.
     private StrategyOptions.Resolved globalStrategy;
     private Policy policy;
+    /** Set when the operator declined a prompt: nothing was written, so nothing may be recorded. */
+    private boolean declined;
 
     @Override
     public Integer call() {
@@ -252,8 +256,8 @@ public class DeployCommand implements Callable<Integer> {
             Tracking tracking = resolveTracking(prismContext, client);
             List<RemovalDetector.Removal> removals = findRemovals(prismContext, tracking, units);
             reportRemovals(removals, tracking);
-            if (prune && !removals.isEmpty() && !tracking.canDetect()) {
-                note("warning: --prune has nothing to work from; removals cannot be detected.");
+            if (prune && !tracking.canDetect()) {
+                note("warning: --prune has nothing to compare against, so nothing will be removed.");
             }
 
             Integer exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
@@ -267,15 +271,13 @@ public class DeployCommand implements Callable<Integer> {
                     // so without this a --prune run could delete with no confirmation at all.
                     Integer stop = confirmPrune(removals.size());
                     if (stop != null) {
-                        return stop;
-                    }
-                    int failed = applyPrune(prismContext, client, removals);
-                    if (failed > 0) {
+                        exit = stop;   // fall through: the apply already succeeded and must still be recorded
+                    } else if (applyPrune(prismContext, client, removals) > 0) {
                         exit = EXIT_ERROR;
                     }
                 }
             }
-            if (exit == 0 && planDir == null && !dryRun) {
+            if (exit == 0 && planDir == null && !dryRun && !declined) {
                 recordRevision(prismContext, client, tracking);
             }
             return exit;
@@ -322,7 +324,7 @@ public class DeployCommand implements Callable<Integer> {
         File tree = (paths != null && !paths.isEmpty()) ? paths.get(0) : null;
         DeploymentIdentity identity = DeploymentIdentity.of(tree, app);
         if (!identity.isAvailable()) {
-            LOG.debug("delete detection off: {}", identity.unavailableReason());
+            note("note: removals cannot be detected — " + identity.unavailableReason() + ".");
             return new Tracking(identity, null, null, null);
         }
 
@@ -362,8 +364,16 @@ public class DeployCommand implements Callable<Integer> {
         if (!tracking.canDetect()) {
             return List.of();
         }
-        return new RemovalDetector(prismContext, tracking.identity.git(),
-                baseRevision(tracking.lastRevision)).detect(units);
+        RemovalDetector detector = new RemovalDetector(prismContext, tracking.identity.git(),
+                baseRevision(tracking.lastRevision));
+        List<RemovalDetector.Removal> removals = detector.detect(units);
+        for (RemovalDetector.Orphan orphan : detector.orphaned()) {
+            // The whole object left the tree. midgie does not delete objects, and taking one apart value by
+            // value would strip its name, so say it plainly and leave the decision to the operator.
+            note("note: " + orphan.objectLabel + " is no longer declared by the tree (" + orphan.sourceFile
+                    + " was removed); its object is left untouched — delete it yourself if that is intended.");
+        }
+        return removals;
     }
 
     /** List what is no longer declared, saying plainly whether it will be removed or only reported. */
@@ -411,8 +421,12 @@ public class DeployCommand implements Callable<Integer> {
                     failed++;
                     continue;
                 }
+                List<RemovalDetector.Removal> stillOurs = stillLive(prismContext, client, restType, oid, group);
+                if (stillOurs.isEmpty()) {
+                    continue;
+                }
                 ObjectDelta<? extends Objectable> delta =
-                        RemovalDetector.pruneDelta(prismContext, oid, group);
+                        RemovalDetector.pruneDelta(prismContext, oid, stillOurs);
                 if (delta == null || delta.isEmpty()) {
                     continue;
                 }
@@ -426,6 +440,36 @@ public class DeployCommand implements Callable<Integer> {
             }
         }
         return failed;
+    }
+
+    /**
+     * Narrow a prune group to the values the live object still actually holds, comparing by real value.
+     *
+     * <p>This is the ownership guard, and it is what stops a prune from undoing the apply that just ran. A
+     * value the tree *changed* rather than dropped also shows up as "no longer declared" (the old content is
+     * gone from the file), and the recovered value still carries its container id — deleting that by id would
+     * remove the entry the apply had just rewritten. Anything the server no longer holds in that form is
+     * therefore skipped: someone else already removed it, or it was replaced rather than removed.
+     */
+    private List<RemovalDetector.Removal> stillLive(PrismContext prismContext, MidpointRestClient client,
+            String restType, String oid, List<RemovalDetector.Removal> group) throws Exception {
+        PrismObject<? extends Objectable> live =
+                prismContext.parseObject(client.getObject(restType, oid));
+        List<RemovalDetector.Removal> stillOurs = new ArrayList<>();
+        for (RemovalDetector.Removal removal : group) {
+            Item<?, ?> item = live.findItem(removal.itemPath.removeIds());
+            boolean present = item != null && item.getValues().stream()
+                    .anyMatch(value -> EquivalenceStrategy.REAL_VALUE.equals(value, removal.prismValue));
+            if (present) {
+                stillOurs.add(removal);
+            } else {
+                LOG.debug("not pruning {} at {}: the live object no longer holds that value",
+                        removal.value, removal.path);
+                note("note: leaving " + removal.path + " alone — the server no longer holds the value that "
+                        + "was removed from " + removal.sourceFile + " (already changed or removed).");
+            }
+        }
+        return stillOurs;
     }
 
     /** The OID to prune: the fragment's own, else a single match by type+name when --match-by-name is set. */
@@ -846,7 +890,7 @@ public class DeployCommand implements Callable<Integer> {
                 return null;
             case ABORTED:
                 System.err.println("midgie: aborted — nothing was removed.");
-                return 0;
+                return 0;   // the apply itself succeeded, so its revision is still recorded below
             case NON_INTERACTIVE:
             default:
                 System.err.println("midgie: refusing to remove values without confirmation in a "
@@ -865,6 +909,7 @@ public class DeployCommand implements Callable<Integer> {
             case PROCEED:
                 return null;
             case ABORTED:
+                declined = true;
                 System.err.println("midgie: aborted — nothing was applied.");
                 return 0;
             case NON_INTERACTIVE:

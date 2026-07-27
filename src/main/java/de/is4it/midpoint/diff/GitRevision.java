@@ -11,6 +11,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
@@ -37,6 +40,13 @@ final class GitRevision {
 
     /** How long any single git invocation may take before it is abandoned. */
     private static final int TIMEOUT_SECONDS = 15;
+
+    /** Daemon threads that drain a subprocess's pipes, so a chatty git can never deadlock the caller. */
+    private static final ExecutorService DRAIN = Executors.newCachedThreadPool(runnable -> {
+        Thread thread = new Thread(runnable, "midgie-git-drain");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private final File tree;
 
@@ -66,9 +76,13 @@ final class GitRevision {
         return run("rev-parse", "HEAD");
     }
 
-    /** True when the working tree has uncommitted changes (so HEAD does not describe what is deployed). */
+    /**
+     * True when <em>this tree</em> has uncommitted changes, so HEAD does not describe what is deployed. The
+     * pathspec matters in a monorepo: an unrelated edit elsewhere in the repository says nothing about the
+     * configuration being deployed, and warning about it on every run only teaches people to ignore warnings.
+     */
     boolean isDirty() {
-        String status = run("status", "--porcelain");
+        String status = run("status", "--porcelain", "--", ".");
         return status != null && !status.isBlank();
     }
 
@@ -174,34 +188,45 @@ final class GitRevision {
         List<String> command = new ArrayList<>();
         command.add("git");
         command.addAll(Arrays.asList(args));
-        Process process = null;
+        Process started = null;
         try {
-            process = new ProcessBuilder(command)
+            final Process process = new ProcessBuilder(command)
                     .directory(tree)
                     .redirectErrorStream(false)
                     .start();
+            started = process;
             process.getOutputStream().close();
-            String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            process.getErrorStream().readAllBytes(); // drain, so the process can never block on a full pipe
+            // Drain both pipes on separate threads. Reading stdout inline would block before waitFor ever
+            // ran — making the timeout unreachable — and would deadlock whenever git filled the stderr pipe
+            // (rename or filter warnings) while waiting for us to read it.
+            Future<String> stdout = DRAIN.submit(() ->
+                    new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+            Future<String> stderr = DRAIN.submit(() ->
+                    new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8));
             if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
+                stdout.cancel(true);
+                stderr.cancel(true);
                 LOG.debug("git {} timed out after {}s", String.join(" ", args), TIMEOUT_SECONDS);
                 return null;
             }
+            String out = stdout.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            stderr.cancel(true);
             if (process.exitValue() != 0) {
                 LOG.debug("git {} exited {}", String.join(" ", args), process.exitValue());
                 return null;
             }
             return out.strip();
-        } catch (IOException e) {
+        } catch (IOException | java.util.concurrent.ExecutionException
+                | java.util.concurrent.TimeoutException e) {
             LOG.debug("git {} could not run ({})", String.join(" ", args), e.getMessage());
             return null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return null;
         } finally {
-            if (process != null && process.isAlive()) {
-                process.destroyForcibly();
+            if (started != null && started.isAlive()) {
+                started.destroyForcibly();
             }
         }
     }
