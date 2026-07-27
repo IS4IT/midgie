@@ -132,6 +132,22 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   survives. Caveats: an in-place edit of a managed value reads as "old value kept + new value added" (keep
   that path on *replace* if you want a true in-place update); a single-valued item, or any item that diffs
   to a whole-value replace, cannot merge and is left as replace (noted on stderr).
+
+  > **Why `replace` + `real-value` stay the defaults** (considered and rejected: defaulting to `merge`, with
+  > `natural-keys` where the schema declares one, to reduce the risk of accidental deletion). `merge` can
+  > express neither an edit nor a removal: a content change reads as "old gone, new added" and merge drops
+  > the deletion, so values accumulate (`[alpha]` + desired `[beta]` → `[alpha, beta]`); and dropping an
+  > entry from the desired file produces an *empty* delta, so `diff` reports "No differences" and exits `0`
+  > while the live object still holds it — which silently defeats drift detection and the CI exit-code
+  > contract, the very thing that would tell you there is cruft to clean up. `natural-keys` is not a default
+  > either: it is prism-`@Experimental`, and the many types that declare a natural key real config never
+  > fills in (`assignment`/`inducement`/`authorization` declare `identifier`) make prism pair unrelated
+  > values, which the accrued-value guard then correctly refuses — an ordinary assignment change would fail
+  > out of the box. A *schema-dependent* equivalence default is not expressible anyway: equivalence is a
+  > single input to prism's whole-object diff (`reconcile` → `live.diff(desired, strategy)`), unlike
+  > `multivalue`, which midgie varies per path by post-processing the delta. The risk that motivated the
+  > question — a partially declared multi-valued container deleting what it does not list — is instead
+  > handled by the input warnings (see "Safety guards"), which name the container, the counts, and the fix.
 - `--equivalence real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal`
   (default **real-value**), loosest to strictest — the value-equivalence test that decides what counts as
   drift and how entries are matched:

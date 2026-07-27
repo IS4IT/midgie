@@ -124,6 +124,15 @@ detected per delta and **refused by default** (use `--allow-inplace-merge` to pr
 a clean union). An edit inside a value that desired *declares* — matched by container id, or by the schema's
 natural key — is a managed update and is not refused (see below).
 
+#### Choosing a strategy
+
+The defaults (`replace` + `real-value`) make a run **converge** and keep **drift visible**, which is why they are the defaults. `merge` buys safety from accidental deletion, but it gives up both, so turn it on deliberately and per path rather than globally:
+
+- **It cannot express an edit.** A content change reads as *old value gone, new value added*, and merge drops the deletion — so it keeps both. With live `subtype=[alpha]` and desired `[beta]` you get `[alpha, beta]`, not `[beta]`.
+- **It cannot express a removal, and hides that fact.** Dropping an entry from your file no longer removes it from the server, and because the delta comes out empty `diff` reports `No differences.` and exits `0`. Drift detection and the CI exit-code gate stop seeing anything the file does not declare — leftover state is never reported, so "clean it up later" quietly becomes "never find out".
+
+Rule of thumb: keep a path on **replace** when your file is authoritative for that list, and use **merge** where your file is a *fragment* contributing entries to a list that others (or the server) also fill — which is exactly the nested-container case below. `natural-keys` is likewise opt-in: it is prism-`@Experimental`, and many types declare a natural key that real config never fills in (an `assignment` rarely carries an `<identifier>`), so as a blanket setting it makes prism pair unrelated values.
+
 #### Syncing an item nested inside a multi-valued container
 
 To manage **one entry** deep inside multi-valued containers — say a single GUI panel at
