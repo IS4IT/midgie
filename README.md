@@ -48,7 +48,7 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 
 ## Commands
 
-`midgie` has three subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them. All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
+`midgie` has four subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`init`** is a one-off that enables removal detection for a server (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
 
 > Each object is compared with **itself**, not another object: its *desired* state (how you want it) against its *current* state (how it is now), and the delta transforms current → desired. If both sides carry an OID and the OIDs differ, the run is refused.
 
@@ -87,6 +87,29 @@ bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator
 bin/midgie deploy config/ --url … --create-if-absent --plan out/   # write the changes to out/ for review
 bin/midgie deploy --apply-plan out/ --url … --yes                  # replay a reviewed plan
 ```
+
+#### Detecting what you removed (opt-in)
+
+Dropping a value from a file is invisible to an ordinary diff: `desired` simply stops mentioning it, and under `multivalue=merge` the delta comes out empty, so `diff` reports `No differences.` while the value lives on. midgie closes that with a **three-way** comparison — desired, live, and *last-applied* — exactly as `kubectl apply` does. A value present in last-applied but absent now is one you removed on purpose; a value the server holds that midgie never applied is accrued state and is left alone.
+
+Last-applied comes from **version control**: `git show <lastRev>:<file>` is the fragment as it was when midgie last deployed it, so the only thing that must be stored is the revision. Enable it once per server:
+
+```bash
+bin/midgie init --url https://mp.example/midpoint --user administrator config/
+```
+
+That creates a `midgie-state` lookup table which records, per tree, the revision last applied. `deploy` never creates it — until you run `init`, deploy behaves exactly as before and simply notes that detection is off. Afterwards each deploy records what it applied and reports what has since disappeared:
+
+```
+midgie: 1 value(s) deployed at 2d58fd57e470… are no longer declared by the tree (not removed — reported only):
+midgie:   33333333-…-aaaa  subtype = beta (was in roles/manager.xml)
+```
+
+It **reports only — nothing is deleted**, and exit codes are unchanged. Deleting a *fragment* is handled the same way and needs no special case: you get exactly the values that file contributed, the object itself is never a deletion candidate, and anything a sibling fragment still declares is left out.
+
+A tree is identified by its repository's **root commit** plus its path inside the repo (e.g. `df7f507/config`). The root commit is part of the history, so every clone agrees on it no matter which remotes it has — which matters when the same repo is pushed to both a customer's git and your own. Detection is skipped, with a note, when the tree is not in a git repository or the clone is **shallow** (a `--depth 1` checkout cannot recover previous content; fetch full history, e.g. `fetch-depth: 0`). `--app NAME` pins the identity for setups where that derivation does not fit.
+
+The state object describes and protects itself: it is `indestructible` (midPoint refuses to delete it — clear the flag first if you really mean to), carries a `description`/`documentation` explaining it to an admin who has never heard of midgie, and is marked `subtype=midgie`. To switch tracking off without deleting anything, set its `lifecycleState` to `archived`. Losing it is harmless — detection simply stops until `init` recreates it; midgie never deletes anything as a result.
 
 The order is two-tier: extension **schemas** first (raw `.xsd` inputs and exported `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered so extension attributes resolve), then **objects** (sorted by their reference OIDs). Objects are identified by OID, or by type+name when they carry no OID, so several files may declare *fragments* of one object — each applied individually. A genuine contradiction between fragments (a different type under one OID, or a single-valued item set to two values) is an error; same-object non-overlapping fragments are fine.
 

@@ -20,7 +20,7 @@ import picocli.CommandLine.Command;
         mixinStandardHelpOptions = true,
         versionProvider = VersionProvider.class,
         description = "Schema-aware diff of midPoint objects into an itemDelta (ObjectModificationType).",
-        subcommands = { DiffCommand.class, ApplyCommand.class, DeployCommand.class }
+        subcommands = { DiffCommand.class, ApplyCommand.class, DeployCommand.class, InitCommand.class }
 )
 public class Main implements Runnable {
 

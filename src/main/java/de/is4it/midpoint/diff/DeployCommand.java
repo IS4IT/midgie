@@ -115,6 +115,11 @@ public class DeployCommand implements Callable<Integer> {
                     + "most-specific selector wins.")
     File policyFile;
 
+    @Option(names = "--app", paramLabel = "NAME",
+            description = "Track this tree under NAME instead of the identity derived from its git repository "
+                    + "(root commit + path). Only needed for setups where that derivation does not fit.")
+    String app;
+
     @Option(names = {"--quiet", "-q"},
             description = "Suppress the plan/status output and notes; keep errors, failures, and the exit code.")
     boolean quiet;
@@ -237,13 +242,130 @@ public class DeployCommand implements Callable<Integer> {
             Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, matchByName);
             List<Fragment> units = flatten(schemaOrder, objectOrder);
             LOG.debug("{} apply unit(s); mode={}", units.size(), planDir != null ? "plan" : "apply");
-            return (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
+
+            Tracking tracking = resolveTracking(prismContext, client);
+            reportRemovals(prismContext, tracking, units);
+
+            Integer exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
+            if (exit == 0 && planDir == null && !dryRun) {
+                recordRevision(prismContext, client, tracking);
+            }
+            return exit;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midgie: " + message);
             LOG.debug("deploy failed", e);
             return EXIT_ERROR;
         }
+    }
+
+    // --- delete detection (three-way merge against what was deployed last time) ---
+
+    /** What this run knows about tracking: the tree's identity, the state object, and the last revision. */
+    private static final class Tracking {
+        final DeploymentIdentity identity;
+        final PrismObject<? extends Objectable> table;
+        final String lastRevision;
+        final String currentRevision;
+
+        Tracking(DeploymentIdentity identity, PrismObject<? extends Objectable> table,
+                String lastRevision, String currentRevision) {
+            this.identity = identity;
+            this.table = table;
+            this.lastRevision = lastRevision;
+            this.currentRevision = currentRevision;
+        }
+
+        boolean canRecord() {
+            return table != null && identity != null && identity.isAvailable() && currentRevision != null;
+        }
+
+        boolean canDetect() {
+            return canRecord() && lastRevision != null;
+        }
+    }
+
+    /**
+     * Work out whether this run can track removals, explaining once when it cannot. midgie never creates the
+     * state object here — {@code midgie init} is the deliberate opt-in — so an untracked server just keeps
+     * behaving exactly as before.
+     */
+    private Tracking resolveTracking(PrismContext prismContext, MidpointRestClient client) {
+        File tree = (paths != null && !paths.isEmpty()) ? paths.get(0) : null;
+        DeploymentIdentity identity = DeploymentIdentity.of(tree, app);
+        if (!identity.isAvailable()) {
+            LOG.debug("delete detection off: {}", identity.unavailableReason());
+            return new Tracking(identity, null, null, null);
+        }
+
+        PrismObject<? extends Objectable> table;
+        try {
+            table = SyncState.find(prismContext, client);
+        } catch (Exception e) {
+            LOG.debug("could not read {}", SyncState.TABLE_NAME, e);
+            return new Tracking(identity, null, null, null);
+        }
+        if (table == null) {
+            note("note: no " + SyncState.TABLE_NAME + " on the server, so removals cannot be detected — "
+                    + "run 'midgie init --url …' to enable it.");
+            return new Tracking(identity, null, null, null);
+        }
+        if (!SyncState.isEnabled(table)) {
+            note("note: " + SyncState.TABLE_NAME + " is '" + SyncState.lifecycleOf(table)
+                    + "', so removal tracking is switched off.");
+            return new Tracking(identity, null, null, null);
+        }
+
+        GitRevision git = identity.git();
+        String current = git.head();
+        if (current != null && git.isDirty()) {
+            current = current + "-dirty";
+            note("note: the tree has uncommitted changes; recording revision " + current
+                    + ", which does not describe exactly what was deployed.");
+        }
+        String last = SyncState.revisionOf(table, identity.key());
+        LOG.debug("tracking {}: last={}, current={}", identity.key(), last, current);
+        return new Tracking(identity, table, last, current);
+    }
+
+    /** Report values deployed at the recorded revision that the tree no longer declares. Never deletes. */
+    private void reportRemovals(PrismContext prismContext, Tracking tracking, List<Fragment> units) {
+        if (!tracking.canDetect()) {
+            return;
+        }
+        List<RemovalDetector.Removal> removals =
+                new RemovalDetector(prismContext, tracking.identity.git(), baseRevision(tracking.lastRevision))
+                        .detect(units);
+        if (removals.isEmpty()) {
+            return;
+        }
+        note(removals.size() + " value(s) deployed at " + tracking.lastRevision
+                + " are no longer declared by the tree (not removed — reported only):");
+        for (RemovalDetector.Removal removal : removals) {
+            note("  " + removal.objectLabel + "  " + removal);
+        }
+    }
+
+    /** Record the revision just deployed, so the next run can tell what has been removed since. */
+    private void recordRevision(PrismContext prismContext, MidpointRestClient client, Tracking tracking) {
+        if (!tracking.canRecord()) {
+            return;
+        }
+        try {
+            SyncState.record(prismContext, client, tracking.table, tracking.identity.key(),
+                    tracking.currentRevision, tracking.identity.label());
+            status("Recorded revision " + tracking.currentRevision + " for " + tracking.identity.key() + ".");
+        } catch (Exception e) {
+            // Bookkeeping must never fail a deploy that already succeeded.
+            note("warning: could not record the deployed revision: " + safe(e.getMessage()));
+            LOG.debug("recording the revision failed", e);
+        }
+    }
+
+    /** A dirty marker is not a git revision; compare against the commit it was based on. */
+    private static String baseRevision(String revision) {
+        return revision.endsWith("-dirty") ? revision.substring(0, revision.length() - "-dirty".length())
+                : revision;
     }
 
     private StrategyOptions.Resolved strategyFor(Fragment unit) {

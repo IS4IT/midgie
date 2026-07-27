@@ -7,6 +7,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Delete detection — `deploy` can now see values you removed.** Dropping a value from a desired file is invisible to a two-way diff: nothing mentions it any more, so under `multivalue=merge` the delta is empty and the value lives on while `diff` reports "No differences". midgie now compares desired against **last-applied** as well (a three-way merge, as `kubectl apply` does) — a value applied at the recorded revision and no longer declared is reported, while a value the server holds that midgie never applied is left alone as accrued state. **Reports only; nothing is deleted and exit codes are unchanged.** Deleting a whole fragment needs no special case: you get exactly the values that file contributed, the object is never a deletion candidate, and values a sibling fragment still declares are subtracted.
+- **`midgie init`** — the one-off, explicit opt-in that enables the above by creating a `midgie-state` lookup table on the server. `deploy` never creates it: until `init` is run it behaves exactly as before and just notes that detection is off. The object describes and protects itself for an administrator who has never heard of midgie — `indestructible` (midPoint refuses the delete), a `description` and `documentation` explaining what it is and that losing it is harmless, and `subtype=midgie`. Setting its `lifecycleState` to `archived` switches tracking off without deleting anything.
+- Last-applied comes from version control (`git show <lastRev>:<file>`), so the only stored state is one revision per tree. A tree is identified by its repository's **root commit** plus its path within the repo, which every clone agrees on regardless of its remotes — the case a remote URL cannot handle when the same repository is pushed to both a customer's git and your own. Detection is skipped, with a note, outside a git repository or in a **shallow** clone; `--app NAME` pins the identity where that derivation does not fit.
+
 ## [0.3.1] - 2026-07-27
 
 ### Added

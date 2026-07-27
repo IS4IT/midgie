@@ -70,6 +70,22 @@ the midPoint source tree.
   rotation; a real password change goes through its own API, not a blind PATCH of stale ciphertext.
   (Detection is by schema type or a protected real value; a protected value nested inside a larger
   added/deleted container is not walked — rare, and noted in the code.)
+- *Delete detection (three-way merge)* — a two-way diff cannot express a removal: a value dropped from a
+  desired file simply stops being mentioned, so under `merge` the delta is empty and the value survives while
+  `diff` reports no differences. `deploy` therefore also compares desired against **last-applied**, which for
+  a version-controlled tree is `git show <lastRev>:<file>` — so the only persisted state is one revision per
+  tree, the analogue of ArgoCD's `status.sync.revision`. The removal set is the *delete side* of an ordinary
+  `DiffEngine` run with last-applied in the live slot, so no new diff logic exists. It works per **fragment
+  file**, which is what makes it correct for objects assembled from several files: a deleted fragment yields
+  exactly the values it contributed (the object is never a deletion candidate — `SystemConfiguration` is
+  `indestructible` anyway), minus anything a surviving sibling still declares. **Reporting only**; `--prune`
+  would be a later, opt-in step. State lives in a `midgie-state` `LookupTableType` created solely by
+  `midgie init` — never implicitly, so midgie leaves no unexplained object behind — and that object carries
+  `indestructible`, a `description`/`documentation` aimed at an admin who has never heard of the tool,
+  `subtype=midgie`, and a `lifecycleState` an admin can set to `archived` to switch tracking off. Identity is
+  the repository's root commit plus the tree's path within it: content-addressed, so every clone agrees
+  regardless of its remotes (`--app` overrides; shallow clones are refused, since their apparent root is only
+  the grafted boundary). `GitRevision`, `DeploymentIdentity`, `SyncState`, `RemovalDetector`, `InitCommand`.
 - *Blast-radius reporting and input checks* — a partial fragment can silently destroy live state, so the
   danger is reported before any write (advisory, never blocking; `--quiet` silences it). Every summary line
   carries the number of values it removes, and a removing delta prints a prominent `WARNING: this change

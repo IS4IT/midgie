@@ -8,6 +8,7 @@ package de.is4it.midpoint.diff;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -144,7 +145,21 @@ public final class MidpointRestClient {
 
     /** {@code GET {type}/{oid}} → the object XML. Throws {@link RestException} (404-aware) on failure. */
     public String getObject(String restType, String oid) throws IOException {
-        HttpRequest request = baseRequest(objectUri(restType, oid))
+        return getObject(restType, oid, new String[0]);
+    }
+
+    /**
+     * {@code GET {type}/{oid}} with {@code ?include=…} for items midPoint leaves out by default. Some items
+     * come back as {@code incomplete="true"} unless explicitly requested — a {@code LookupTableType}'s
+     * {@code row} is the case midgie needs, since its state rows would otherwise read as an empty container.
+     */
+    public String getObject(String restType, String oid, String... include) throws IOException {
+        StringBuilder uri = new StringBuilder(objectUri(restType, oid).toString());
+        for (int i = 0; i < include.length; i++) {
+            uri.append(i == 0 ? '?' : '&').append("include=")
+                    .append(URLEncoder.encode(include[i], StandardCharsets.UTF_8));
+        }
+        HttpRequest request = baseRequest(URI.create(uri.toString()))
                 .header("Accept", "application/xml")
                 .GET()
                 .build();
