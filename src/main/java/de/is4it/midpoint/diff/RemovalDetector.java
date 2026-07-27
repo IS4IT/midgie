@@ -149,7 +149,7 @@ final class RemovalDetector {
      */
     List<Removal> detect(List<Fragment> units) {
         List<Removal> removals = new ArrayList<>();
-        Map<String, Set<String>> stillDeclared = declarationsByObject(units);
+        Map<String, Map<String, List<PrismValue>>> stillDeclared = declarationsByObject(units);
 
         for (Fragment unit : units) {
             String relative = git.repoRelative(unit.sourceFile());
@@ -201,7 +201,7 @@ final class RemovalDetector {
      */
     private void collect(List<Removal> removals, PrismObject<? extends Objectable> lastApplied,
             PrismObject<? extends Objectable> desired, String objectLabel, String sourceFile,
-            Map<String, Set<String>> stillDeclared) {
+            Map<String, Map<String, List<PrismValue>>> stillDeclared) {
         DiffEngine.DiffResult result;
         try {
             // last-applied in the live slot: the delete side is "was deployed, no longer declared".
@@ -211,7 +211,7 @@ final class RemovalDetector {
             LOG.debug("could not compare {} against revision {}", sourceFile, lastRevision, e);
             return;
         }
-        Set<String> survivors = stillDeclared.getOrDefault(objectLabel, Set.of());
+        Map<String, List<PrismValue>> survivors = stillDeclared.getOrDefault(objectLabel, Map.of());
         Class<?> objectClass = lastApplied.getCompileTimeClass();
         String oid = lastApplied.getOid();
         String objectName = (lastApplied.getName() != null) ? lastApplied.getName().getOrig() : null;
@@ -222,7 +222,7 @@ final class RemovalDetector {
             String path = mod.getPath().toString();
             for (PrismValue value : mod.getValuesToDelete()) {
                 String rendered = render(value);
-                if (survivors.contains(declaration(path, rendered))) {
+                if (stillDeclares(survivors, mod.getPath(), value)) {
                     LOG.debug("{} at {} still declared by another fragment; not a removal", rendered, path);
                     continue;
                 }
@@ -233,10 +233,11 @@ final class RemovalDetector {
     }
 
     /** Everything the current tree declares, per object, so a sibling fragment's values are not reported. */
-    private Map<String, Set<String>> declarationsByObject(List<Fragment> units) {
-        Map<String, Set<String>> declared = new LinkedHashMap<>();
+    private Map<String, Map<String, List<PrismValue>>> declarationsByObject(List<Fragment> units) {
+        Map<String, Map<String, List<PrismValue>>> declared = new LinkedHashMap<>();
         for (Fragment unit : units) {
-            Set<String> target = declared.computeIfAbsent(identityKeyOf(unit.object()), key -> new LinkedHashSet<>());
+            Map<String, List<PrismValue>> target =
+                    declared.computeIfAbsent(identityKeyOf(unit.object()), key -> new LinkedHashMap<>());
             PrismObject<? extends Objectable> empty = emptyLike(unit.object());
             if (empty == null) {
                 continue;
@@ -248,8 +249,9 @@ final class RemovalDetector {
                         EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.FULL,
                         DiffEngine.MultiValueStrategy.replaceAll());
                 for (ItemDelta<?, ?> mod : all.delta().getModifications()) {
-                    addValues(target, mod.getPath().toString(), mod.getValuesToAdd());
-                    addValues(target, mod.getPath().toString(), mod.getValuesToReplace());
+                    String path = mod.getPath().removeIds().toString();
+                    addValues(target, path, mod.getValuesToAdd());
+                    addValues(target, path, mod.getValuesToReplace());
                 }
             } catch (Exception e) {
                 LOG.debug("could not enumerate declarations of {}", unit.sourceFile(), e);
@@ -258,13 +260,32 @@ final class RemovalDetector {
         return declared;
     }
 
-    private static void addValues(Set<String> target, String path, java.util.Collection<? extends PrismValue> values) {
+    private static void addValues(Map<String, List<PrismValue>> target, String path,
+            java.util.Collection<? extends PrismValue> values) {
         if (values == null) {
             return;
         }
-        for (PrismValue value : values) {
-            target.add(declaration(path, render(value)));
+        target.computeIfAbsent(path, key -> new ArrayList<>()).addAll(values);
+    }
+
+    /**
+     * Whether a surviving fragment still declares this value. Compared with {@code REAL_VALUE} — the same
+     * test the diff itself uses — rather than by rendered text: a truncated or id-bearing string matches
+     * values that differ past the cut and misses ones that only differ in bookkeeping, and getting this wrong
+     * either hides a real removal or, under --prune, deletes something a sibling still declares.
+     */
+    private static boolean stillDeclares(Map<String, List<PrismValue>> survivors, ItemPath path,
+            PrismValue value) {
+        List<PrismValue> declared = survivors.get(path.removeIds().toString());
+        if (declared == null) {
+            return false;
         }
+        for (PrismValue candidate : declared) {
+            if (EquivalenceStrategy.REAL_VALUE.equals(candidate, value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Repository-relative fragment paths deleted since the recorded revision. */
@@ -320,10 +341,6 @@ final class RemovalDetector {
         String type = (object.getCompileTimeClass() != null)
                 ? object.getCompileTimeClass().getSimpleName() : "?";
         return type + "/" + name;
-    }
-
-    private static String declaration(String path, String value) {
-        return path + "=" + value;
     }
 
     private static String render(PrismValue value) {

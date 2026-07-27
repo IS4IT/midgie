@@ -16,6 +16,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
 
 /**
@@ -33,6 +36,8 @@ import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
  * lives here, never embedded in the objects.
  */
 final class Policy {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Policy.class);
 
     private static final Set<String> KNOWN_KNOBS =
             Set.of("scope", "multivalue", "equivalence", "allow-inplace-merge");
@@ -73,7 +78,9 @@ final class Policy {
             rules.add(parseLine(line, lineNumber, order++));
         }
         if (rules.isEmpty()) {
-            throw new IOException("policy file " + file + " has no rules.");
+            // A comment-only file is legitimate: 'init --write-policy' writes exactly that for a tree with
+            // nothing to tune, and rejecting it would break the very command line init tells you to run.
+            LOG.debug("policy file {} has no rules; every object keeps the CLI strategy", file);
         }
         return new Policy(rules);
     }

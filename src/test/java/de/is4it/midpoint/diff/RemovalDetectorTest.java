@@ -126,6 +126,30 @@ class RemovalDetectorTest {
         assertTrue(detector.orphaned().get(0).sourceFile.contains("role.xml"));
     }
 
+    @Test
+    void aLongValueIsComparedByContentNotByATruncatedString(@TempDir Path dir) throws Exception {
+        // The survivor subtraction must compare real values, not rendered text. Two descriptions that agree
+        // for the first 120 characters and differ after would collapse to the same rendered key, hiding a
+        // genuine removal — and under --prune, leaving it on the server for ever.
+        String shared = "x".repeat(130);
+        Path kept = dir.resolve("role.xml");
+        Path extra = dir.resolve("role-extra.xml");
+        Files.writeString(kept, role("<description>" + shared + "A</description>"), StandardCharsets.UTF_8);
+        Files.writeString(extra, role("<subtype>" + shared + "B</subtype>"), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        if (first == null) {
+            return;
+        }
+        Files.delete(extra);
+        run(dir, "git", "add", "-A");
+        run(dir, "git", "commit", "-qm", "drop the extra fragment");
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, kept);
+
+        assertEquals(1, removals.size(), "the long subtype is genuinely removed: " + removals);
+        assertTrue(removals.get(0).path.contains("subtype"), removals.get(0).toString());
+    }
+
     // --- helpers ---
 
     /** Run detection for the files currently present, comparing against {@code revision}. */

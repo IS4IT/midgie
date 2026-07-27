@@ -107,6 +107,16 @@ class PolicyTest {
     }
 
     @Test
+    void aCommentOnlyPolicyLoadsAsANoOp(@TempDir Path dir) throws Exception {
+        // 'init --write-policy' writes exactly this for a tree with nothing to tune, and then tells the user
+        // to pass it to deploy — so rejecting it would break the command line midgie itself suggested.
+        Policy policy = load(dir, "# nothing to tune here", "");
+
+        StrategyOptions.Resolved resolved = policy.resolveFor("RoleType", "Manager", OID, baseline());
+        assertEquals(DiffEngine.Scope.PRESENT, resolved.scope, "the CLI baseline is kept untouched");
+    }
+
+    @Test
     void objectOnlyKnobOnAnItemSelectorIsRejected(@TempDir Path dir) {
         IOException ex = assertThrows(IOException.class, () -> load(dir, "**/assignment scope=full"));
         assertTrue(ex.getMessage().contains("object-only knob"), ex.getMessage());

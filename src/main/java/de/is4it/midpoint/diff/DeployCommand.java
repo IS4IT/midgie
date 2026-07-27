@@ -322,6 +322,13 @@ public class DeployCommand implements Callable<Integer> {
      */
     private Tracking resolveTracking(PrismContext prismContext, MidpointRestClient client) {
         File tree = (paths != null && !paths.isEmpty()) ? paths.get(0) : null;
+        if (paths != null && paths.size() > 1) {
+            // Identity, the revision and the "deleted since" query are all rooted at one tree. Deploying
+            // several at once would record the first one's revision as if it covered them all, quietly
+            // hiding removals in the rest — so say so rather than half-tracking.
+            note("note: tracking follows " + tree + " only; removals in the other path(s) are not detected. "
+                    + "Deploy each tree separately, or pass --app to track them as one.");
+        }
         DeploymentIdentity identity = DeploymentIdentity.of(tree, app);
         if (!identity.isAvailable()) {
             note("note: removals cannot be detected — " + identity.unavailableReason() + ".");

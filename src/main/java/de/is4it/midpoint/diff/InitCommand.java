@@ -20,6 +20,8 @@ import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
 
+import org.w3c.dom.Element;
+
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Option;
@@ -160,14 +162,28 @@ public class InitCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
 
+        // Same two-step as deploy: discover and register the tree's own extension schemas *before* parsing,
+        // or every object using a tree-local extension attribute fails to parse and silently vanishes from
+        // the suggestions — exactly the objects most likely to need a rule.
         Discovery.ScanResult scan = Discovery.scan(prismContext, List.of(path));
+        Map<String, Element> schemaMap = new LinkedHashMap<>();
+        for (SchemaFile schema : scan.schemas()) {
+            schemaMap.put(schema.description(), schema.schemaElement());
+        }
+        schemaMap.putAll(schemaOptions.collectSchemas(prismContext, null));
+        SchemaSupport.register(prismContext, schemaMap);
+
         Map<String, Map<String, String>> keyedByObject = new LinkedHashMap<>();
+        int skipped = 0;
         for (File file : scan.objectFiles()) {
             PrismObject<? extends Objectable> object;
             try {
                 object = prismContext.parseObject(file);
             } catch (Exception e) {
+                System.err.println("midgie: warning: could not read " + file
+                        + " while seeding the policy (" + e.getMessage() + "); it has no suggestions.");
                 LOG.debug("skipping {} while seeding the policy", file, e);
+                skipped++;
                 continue;
             }
             if (object.getCompileTimeClass() == null) {
@@ -184,26 +200,36 @@ public class InitCommand implements Callable<Integer> {
 
         StringBuilder out = new StringBuilder();
         out.append("# midgie policy, seeded by 'midgie init --write-policy' from ").append(path).append("\n#\n")
-                .append("# Every object below declares a multi-valued container that the midPoint schema gives a\n")
-                .append("# natural key, so its entries can be matched individually. With natural-keys + merge,\n")
-                .append("# midgie updates just the entries your files list and leaves the others alone; under the\n")
-                .append("# default (replace) it would delete every entry you did not list.\n")
-                .append("#\n# These are suggestions — review them, and delete any line whose object your files are\n")
-                .append("# meant to be authoritative for.\n");
+                .append("# Each container listed below is multi-valued, has a natural key in the midPoint schema,\n")
+                .append("# and your files fill that key in — so midgie can match its entries individually.\n")
+                .append("# 'multivalue=merge' on such a path updates just the entries your files list and leaves\n")
+                .append("# the rest alone; under the default (replace) every entry you did not list is deleted.\n")
+                .append("#\n")
+                .append("# The merge rules are deliberately scoped to those paths rather than to the whole object.\n")
+                .append("# 'equivalence' cannot be: prism takes one equivalence for the whole object diff, so the\n")
+                .append("# natural-keys line below applies to every container of that object — including ones whose\n")
+                .append("# key nothing fills in (an assignment usually has no <identifier>). Keeping merge narrow is\n")
+                .append("# what stops that from mattering, since the accrued-value guard only applies where merge is.\n")
+                .append("#\n# These are suggestions — review them, and delete any rule whose container your files\n")
+                .append("# are meant to be authoritative for.\n");
         if (keyedByObject.isEmpty()) {
             out.append("\n# Nothing in this tree addresses a keyed multi-valued container, so no rules are needed.\n");
         }
         for (Map.Entry<String, Map<String, String>> entry : keyedByObject.entrySet()) {
-            out.append('\n');
+            out.append('\n').append(entry.getKey()).append("  equivalence=natural-keys\n");
             for (Map.Entry<String, String> keyed : entry.getValue().entrySet()) {
-                out.append("#   ").append(keyed.getKey()).append("  (key: ").append(keyed.getValue()).append(")\n");
+                out.append("#   key: ").append(keyed.getValue()).append('\n')
+                        .append(entry.getKey()).append('/').append(keyed.getKey())
+                        .append("  multivalue=merge\n");
             }
-            out.append(entry.getKey()).append("  equivalence=natural-keys multivalue=merge\n");
         }
         Files.writeString(writePolicy.toPath(), out.toString(), StandardCharsets.UTF_8);
 
-        status("Wrote " + writePolicy + " with " + keyedByObject.size()
-                + " suggested rule(s) — review it, then pass it as 'deploy --policy " + writePolicy + "'.");
+        status("Wrote " + writePolicy + " with suggestions for " + keyedByObject.size() + " object(s)"
+                + (skipped > 0 ? " (" + skipped + " file(s) could not be read)" : "")
+                + (keyedByObject.isEmpty()
+                        ? " — nothing in this tree needs tuning, so it is a comment-only file."
+                        : " — review it, then pass it as 'deploy --policy " + writePolicy + "'."));
         return 0;
     }
 

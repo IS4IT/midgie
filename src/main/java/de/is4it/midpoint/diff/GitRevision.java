@@ -11,6 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -50,8 +52,23 @@ final class GitRevision {
 
     private final File tree;
 
+    // Immutable for the life of this object, and asked for once per fragment otherwise: repoRelative() alone
+    // would fork `rev-parse --show-toplevel` for every file in the tree. Cached, since a deploy is expected
+    // to cost nothing when nothing changed.
+    private final Map<String, String> cache = new ConcurrentHashMap<>();
+    private static final String ABSENT = "\u0000absent";
+
     private GitRevision(File tree) {
         this.tree = tree;
+    }
+
+    /** Run {@code args} at most once per {@link GitRevision}, remembering even a null result. */
+    private String cached(String key, String... args) {
+        String value = cache.computeIfAbsent(key, ignored -> {
+            String result = run(args);
+            return (result != null) ? result : ABSENT;
+        });
+        return ABSENT.equals(value) ? null : value;
     }
 
     static GitRevision of(File tree) {
@@ -60,7 +77,7 @@ final class GitRevision {
 
     /** True when {@code tree} is inside a git working tree and git is usable. */
     boolean isRepository() {
-        return "true".equals(run("rev-parse", "--is-inside-work-tree"));
+        return "true".equals(cached("inside-work-tree", "rev-parse", "--is-inside-work-tree"));
     }
 
     /**
@@ -68,7 +85,7 @@ final class GitRevision {
      * apparent root commit is only the grafted boundary.
      */
     boolean isShallow() {
-        return "true".equals(run("rev-parse", "--is-shallow-repository"));
+        return "true".equals(cached("shallow", "rev-parse", "--is-shallow-repository"));
     }
 
     /** The commit currently checked out, or {@code null}. */
@@ -92,7 +109,7 @@ final class GitRevision {
      * first is taken, so the result stays deterministic.
      */
     String rootCommit() {
-        String out = run("rev-list", "--max-parents=0", "HEAD");
+        String out = cached("roots", "rev-list", "--max-parents=0", "HEAD");
         if (out == null || out.isBlank()) {
             return null;
         }
@@ -110,13 +127,13 @@ final class GitRevision {
 
     /** The tree's path relative to the repository root ({@code "midgie/"}), or {@code ""} at the root. */
     String prefix() {
-        String prefix = run("rev-parse", "--show-prefix");
+        String prefix = cached("prefix", "rev-parse", "--show-prefix");
         return (prefix != null) ? prefix : "";
     }
 
     /** A human hint for the state row's label — the repository directory name plus the tree prefix. */
     String label() {
-        String top = run("rev-parse", "--show-toplevel");
+        String top = cached("toplevel", "rev-parse", "--show-toplevel");
         String repo = (top != null && !top.isBlank()) ? new File(top).getName() : "?";
         String prefix = prefix();
         return prefix.isBlank() ? repo : repo + "/" + trimTrailingSlash(prefix);
@@ -159,7 +176,7 @@ final class GitRevision {
      * exactly that) a plain absolute path would never match the root and every file would look external.
      */
     String repoRelative(File file) {
-        String top = run("rev-parse", "--show-toplevel");
+        String top = cached("toplevel", "rev-parse", "--show-toplevel");
         if (top == null || top.isBlank()) {
             return null;
         }
