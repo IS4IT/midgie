@@ -7,6 +7,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-27
+
 ### Added
 
 - **Destructive changes announce themselves.** A delta that removes values now says so: each summary line carries the count it removes (`delete … (removes 2 values)`), and `diff`/`apply`/`deploy` print a prominent `WARNING: this change REMOVES n values from the live object` listing the paths. Advisory only — midgie reports the blast radius, it does not block; use `--dry-run` to inspect first. Suppressed by `--quiet`.
@@ -96,7 +98,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/IS4IT/midgie/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/IS4IT/midgie/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/IS4IT/midgie/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/IS4IT/midgie/compare/v0.2.0...v0.2.1
