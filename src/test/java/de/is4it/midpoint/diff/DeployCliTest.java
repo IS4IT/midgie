@@ -202,6 +202,14 @@ class DeployCliTest {
     }
 
     @Test
+    void pruneWithoutUrlIsAnError() {
+        // --prune deletes, so it must never be reachable in the offline plan-printing mode.
+        Result r = run("deploy", TREE, "--prune");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--url"), r.err);
+    }
+
+    @Test
     void policyWithoutHostIsAnError() {
         Result r = run("deploy", TREE, "--policy", "some.policy");
         assertEquals(2, r.exit);

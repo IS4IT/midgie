@@ -81,6 +81,14 @@ the midPoint source tree.
   `indestructible` anyway), minus anything a surviving sibling still declares. **Reporting only**; `--prune`
   would be a later, opt-in step. State lives in a `midgie-state` `LookupTableType` created solely by
   `midgie init` — never implicitly, so midgie leaves no unexplained object behind — and that object carries
+  `--prune` then applies the detected removals: opt-in, `--dry-run`-able, gated by its own confirmation
+  (the apply pass returns without prompting when it has nothing to do, so a prune-only run would otherwise
+  delete unconfirmed), and run *after* the tree is applied. Its delta is assembled only from values that were
+  in last-applied (`RemovalDetector.pruneDelta`), which is what makes it structurally unable to reach accrued
+  or foreign state. `init --write-policy` seeds a starter policy from the tree, suggesting
+  natural-keys+merge only for containers that are keyed **and carry the key** — `NaturalKeys` holds that
+  judgement, shared with the input warnings, because a declared-but-unused key (`assignment`'s `identifier`)
+  makes prism pair unrelated values. The state object carries
   `indestructible`, a `description`/`documentation` aimed at an admin who has never heard of the tool,
   `subtype=midgie`, and a `lifecycleState` an admin can set to `archived` to switch tracking off. Identity is
   the repository's root commit plus the tree's path within it: content-addressed, so every clone agrees

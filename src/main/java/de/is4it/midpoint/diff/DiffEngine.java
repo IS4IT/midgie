@@ -368,20 +368,7 @@ public final class DiffEngine {
 
     /** Whether {@code value} actually carries the natural key's constituent item(s) — a discriminating key. */
     private static boolean carriesKey(NaturalKeyDefinition naturalKey, PrismContainerValue<?> value) {
-        try {
-            Collection<Item<?, ?>> constituents = naturalKey.getConstituents(value);
-            if (constituents == null || constituents.isEmpty()) {
-                return false;
-            }
-            for (Item<?, ?> constituent : constituents) {
-                if (constituent == null || !constituent.hasAnyValue()) {
-                    return false;
-                }
-            }
-            return true;
-        } catch (RuntimeException e) {
-            return false;
-        }
+        return NaturalKeys.carries(naturalKey, value);
     }
 
     /** The container value carrying {@code valueId} at {@code containerPath} under {@code parent}, or null. */
@@ -557,29 +544,12 @@ public final class DiffEngine {
 
     /** The local names of the container's natural-key constituents, for the warning message. */
     private static String keyNames(PrismContainer<?> container) {
-        ItemDefinition<?> definition = container.getDefinition();
-        List<QName> constituents = (definition != null) ? definition.getNaturalKeyConstituents() : null;
-        if (constituents == null || constituents.isEmpty()) {
-            return "natural key";
-        }
-        List<String> names = new ArrayList<>();
-        for (QName name : constituents) {
-            names.add(name.getLocalPart());
-        }
-        return String.join(" + ", names);
+        return NaturalKeys.names(container);
     }
 
     /** The container's schema-declared natural key ({@code a:naturalKey}), or null when it has none. */
     private static NaturalKeyDefinition naturalKeyOf(PrismContainer<?> container) {
-        ItemDefinition<?> definition = container.getDefinition();
-        if (definition == null) {
-            return null;
-        }
-        try {
-            return definition.getNaturalKeyInstance();
-        } catch (RuntimeException e) {
-            return null; // a definition that does not support natural keys
-        }
+        return NaturalKeys.of(container);
     }
 
     /**

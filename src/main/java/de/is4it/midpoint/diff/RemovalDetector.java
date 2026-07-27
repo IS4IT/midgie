@@ -18,9 +18,13 @@ import org.slf4j.LoggerFactory;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.prism.ItemDefinition;
 import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
+import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
+import com.evolveum.midpoint.prism.path.ItemPath;
+import com.evolveum.midpoint.util.exception.SchemaException;
 
 /**
  * Finds values midgie deployed previously that the desired tree no longer declares — the third leg of a
@@ -45,24 +49,74 @@ final class RemovalDetector {
 
     private static final Logger LOG = LoggerFactory.getLogger(RemovalDetector.class);
 
-    /** One value that was deployed before and is no longer declared. */
+    /**
+     * One value that was deployed before and is no longer declared. Carries enough to both report it and —
+     * for {@code --prune} — build the delete itself: the owning object's type and identity, the item's
+     * definition and path, and the value.
+     */
     static final class Removal {
         final String objectLabel;   // which object it belongs to
         final String path;          // item path of the value
         final String value;         // rendered value, for the report
         final String sourceFile;    // the fragment that used to declare it
 
-        Removal(String objectLabel, String path, String value, String sourceFile) {
+        final Class<?> objectClass; // owning object's compile-time class
+        final String oid;           // its OID, when the fragment carried one
+        final String objectName;    // its name, for resolving an OID-less object
+        final ItemDefinition<?> definition; // definition of the item the value belongs to
+        final ItemPath itemPath;    // the same path, unrendered
+        final PrismValue prismValue; // the value itself, for the delete
+
+        Removal(String objectLabel, String path, String value, String sourceFile, Class<?> objectClass,
+                String oid, String objectName, ItemDefinition<?> definition, ItemPath itemPath,
+                PrismValue prismValue) {
             this.objectLabel = objectLabel;
             this.path = path;
             this.value = value;
             this.sourceFile = sourceFile;
+            this.objectClass = objectClass;
+            this.oid = oid;
+            this.objectName = objectName;
+            this.definition = definition;
+            this.itemPath = itemPath;
+            this.prismValue = prismValue;
+        }
+
+        /** Whether this removal can be turned into a delta (it needs the item's definition). */
+        boolean isPrunable() {
+            return definition != null && objectClass != null;
         }
 
         @Override
         public String toString() {
             return path + (value != null && !value.isBlank() ? " = " + value : "") + " (was in " + sourceFile + ")";
         }
+    }
+
+    /**
+     * Build the {@code ObjectDelta} that deletes {@code removals} from one object. Only ever contains delete
+     * operations for values that were in last-applied, which is what makes pruning structurally unable to
+     * touch accrued or foreign state.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"}) // the delta's item types are matched by construction
+    static ObjectDelta<? extends Objectable> pruneDelta(PrismContext prismContext, String oid,
+            List<Removal> removals) throws SchemaException {
+        List<ItemDelta> deltas = new ArrayList<>();
+        Class<?> objectClass = null;
+        for (Removal removal : removals) {
+            if (!removal.isPrunable()) {
+                continue;
+            }
+            objectClass = removal.objectClass;
+            ItemDelta delta = removal.definition.createEmptyDelta(removal.itemPath);
+            delta.addValueToDelete(removal.prismValue.clone());
+            deltas.add(delta);
+        }
+        if (deltas.isEmpty() || objectClass == null) {
+            return null;
+        }
+        return prismContext.deltaFactory().object()
+                .createModifyDelta(oid, deltas, (Class<? extends Objectable>) objectClass);
     }
 
     private final PrismContext prismContext;
@@ -131,6 +185,9 @@ final class RemovalDetector {
             return;
         }
         Set<String> survivors = stillDeclared.getOrDefault(objectLabel, Set.of());
+        Class<?> objectClass = lastApplied.getCompileTimeClass();
+        String oid = lastApplied.getOid();
+        String objectName = (lastApplied.getName() != null) ? lastApplied.getName().getOrig() : null;
         for (ItemDelta<?, ?> mod : result.delta().getModifications()) {
             if (mod.getValuesToDelete() == null) {
                 continue;
@@ -142,7 +199,8 @@ final class RemovalDetector {
                     LOG.debug("{} at {} still declared by another fragment; not a removal", rendered, path);
                     continue;
                 }
-                removals.add(new Removal(objectLabel, path, rendered, sourceFile));
+                removals.add(new Removal(objectLabel, path, rendered, sourceFile, objectClass, oid,
+                        objectName, mod.getDefinition(), mod.getPath(), value));
             }
         }
     }

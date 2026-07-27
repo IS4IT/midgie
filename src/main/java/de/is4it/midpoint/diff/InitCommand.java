@@ -6,6 +6,11 @@
 package de.is4it.midpoint.diff;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 
 import org.slf4j.Logger;
@@ -54,6 +59,11 @@ public class InitCommand implements Callable<Integer> {
 
     @Mixin
     SchemaOptions schemaOptions;
+
+    @Option(names = "--write-policy", paramLabel = "FILE",
+            description = "Also write a starter --policy file for PATH, listing the objects whose multi-valued "
+                    + "containers have a schema natural key. Refuses to overwrite an existing file.")
+    File writePolicy;
 
     @Option(names = {"--quiet", "-q"},
             description = "Suppress status output; keep errors and the exit code.")
@@ -105,6 +115,9 @@ public class InitCommand implements Callable<Integer> {
             }
 
             reportIdentity();
+            if (writePolicy != null) {
+                return seedPolicy(prismContext);
+            }
             return 0;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
@@ -129,6 +142,69 @@ public class InitCommand implements Callable<Integer> {
         } else {
             status("Tree " + path + " cannot be tracked: " + identity.unavailableReason());
         }
+    }
+
+    /**
+     * Write a starter policy file for the tree: one line per object whose fragments declare a multi-valued
+     * container that the schema gives a natural key, since those are exactly the places where
+     * {@code natural-keys} + {@code merge} lets individual entries be managed instead of the whole list being
+     * replaced. Comments name the containers that prompted each line, so the file explains itself.
+     */
+    private Integer seedPolicy(PrismContext prismContext) throws Exception {
+        if (path == null) {
+            System.err.println("midgie: --write-policy needs a PATH to scan.");
+            return EXIT_ERROR;
+        }
+        if (writePolicy.exists()) {
+            System.err.println("midgie: " + writePolicy + " already exists; refusing to overwrite it.");
+            return EXIT_ERROR;
+        }
+
+        Discovery.ScanResult scan = Discovery.scan(prismContext, List.of(path));
+        Map<String, Map<String, String>> keyedByObject = new LinkedHashMap<>();
+        for (File file : scan.objectFiles()) {
+            PrismObject<? extends Objectable> object;
+            try {
+                object = prismContext.parseObject(file);
+            } catch (Exception e) {
+                LOG.debug("skipping {} while seeding the policy", file, e);
+                continue;
+            }
+            if (object.getCompileTimeClass() == null) {
+                continue;
+            }
+            Map<String, String> keyed = NaturalKeys.keyedContainers(object);
+            if (keyed.isEmpty()) {
+                continue;
+            }
+            String selector = object.getCompileTimeClass().getSimpleName() + "/"
+                    + (object.getName() != null ? object.getName().getOrig() : "?");
+            keyedByObject.computeIfAbsent(selector, key -> new LinkedHashMap<>()).putAll(keyed);
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("# midgie policy, seeded by 'midgie init --write-policy' from ").append(path).append("\n#\n")
+                .append("# Every object below declares a multi-valued container that the midPoint schema gives a\n")
+                .append("# natural key, so its entries can be matched individually. With natural-keys + merge,\n")
+                .append("# midgie updates just the entries your files list and leaves the others alone; under the\n")
+                .append("# default (replace) it would delete every entry you did not list.\n")
+                .append("#\n# These are suggestions — review them, and delete any line whose object your files are\n")
+                .append("# meant to be authoritative for.\n");
+        if (keyedByObject.isEmpty()) {
+            out.append("\n# Nothing in this tree addresses a keyed multi-valued container, so no rules are needed.\n");
+        }
+        for (Map.Entry<String, Map<String, String>> entry : keyedByObject.entrySet()) {
+            out.append('\n');
+            for (Map.Entry<String, String> keyed : entry.getValue().entrySet()) {
+                out.append("#   ").append(keyed.getKey()).append("  (key: ").append(keyed.getValue()).append(")\n");
+            }
+            out.append(entry.getKey()).append("  equivalence=natural-keys multivalue=merge\n");
+        }
+        Files.writeString(writePolicy.toPath(), out.toString(), StandardCharsets.UTF_8);
+
+        status("Wrote " + writePolicy + " with " + keyedByObject.size()
+                + " suggested rule(s) — review it, then pass it as 'deploy --policy " + writePolicy + "'.");
+        return 0;
     }
 
     private void status(String message) {

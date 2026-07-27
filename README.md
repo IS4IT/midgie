@@ -105,9 +105,26 @@ midgie: 1 value(s) deployed at 2d58fd57e470… are no longer declared by the tre
 midgie:   33333333-…-aaaa  subtype = beta (was in roles/manager.xml)
 ```
 
-It **reports only — nothing is deleted**, and exit codes are unchanged. Deleting a *fragment* is handled the same way and needs no special case: you get exactly the values that file contributed, the object itself is never a deletion candidate, and anything a sibling fragment still declares is left out.
+By default it **reports only**. Add **`--prune`** to actually remove them:
+
+```bash
+bin/midgie deploy config/ --url … --prune --dry-run   # preview: exits 1 if anything would go
+bin/midgie deploy config/ --url … --prune --yes       # remove them
+```
+
+Pruning is confirmation-gated in its own right (a non-interactive run without `--yes` refuses, even when the apply pass had nothing to do), runs *after* the tree is applied so the desired state lands first, and is structurally safe: the delta is built solely from values that were in last-applied, so it cannot reach accrued or foreign state however wrong the rest of the tree is.
+
+Deleting a *fragment* is handled the same way and needs no special case: you get exactly the values that file contributed, the object itself is never a deletion candidate, and anything a sibling fragment still declares is left out.
 
 A tree is identified by its repository's **root commit** plus its path inside the repo (e.g. `df7f507/config`). The root commit is part of the history, so every clone agrees on it no matter which remotes it has — which matters when the same repo is pushed to both a customer's git and your own. Detection is skipped, with a note, when the tree is not in a git repository or the clone is **shallow** (a `--depth 1` checkout cannot recover previous content; fetch full history, e.g. `fetch-depth: 0`). `--app NAME` pins the identity for setups where that derivation does not fit.
+
+`init` can also seed a starter policy for the tree:
+
+```bash
+bin/midgie init config/ --url … --write-policy midgie.policy
+```
+
+It walks the tree and suggests `equivalence=natural-keys multivalue=merge` for each object that declares a multi-valued container the schema gives a natural key **and whose values actually carry it** — commenting which containers prompted each line. That last condition matters: `assignment` and `inducement` declare an `identifier` that real config usually omits, and suggesting key matching there would be actively wrong (prism pairs unrelated values and the accrued-value guard refuses the result). The file is a starting point to review, not a finished policy, and an existing file is never overwritten.
 
 The state object describes and protects itself: it is `indestructible` (midPoint refuses to delete it — clear the flag first if you really mean to), carries a `description`/`documentation` explaining it to an admin who has never heard of midgie, and is marked `subtype=midgie`. To switch tracking off without deleting anything, set its `lifecycleState` to `archived`. Losing it is harmless — detection simply stops until `init` recreates it; midgie never deletes anything as a result.
 

@@ -26,6 +26,7 @@ import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.schema.constants.ObjectTypes;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
 import picocli.CommandLine.Command;
@@ -115,6 +116,11 @@ public class DeployCommand implements Callable<Integer> {
                     + "most-specific selector wins.")
     File policyFile;
 
+    @Option(names = "--prune",
+            description = "Delete the values this tree deployed previously and no longer declares (needs "
+                    + "'midgie init'). Only ever removes values it applied itself, never accrued state.")
+    boolean prune;
+
     @Option(names = "--app", paramLabel = "NAME",
             description = "Track this tree under NAME instead of the identity derived from its git repository "
                     + "(root commit + path). Only needed for setups where that derivation does not fit.")
@@ -157,9 +163,9 @@ public class DeployCommand implements Callable<Integer> {
                 + "applyPlan={}, policy={}", live, dryRun, createIfAbsent, matchByName, retry,
                 planDir, applyPlanDir, policyFile);
         boolean writeFlags = dryRun || assumeYes || confirmEachApply || createIfAbsent || matchByName
-                || retry || planDir != null || applyPlanDir != null || policyFile != null;
+                || retry || prune || planDir != null || applyPlanDir != null || policyFile != null;
         if (!live && writeFlags) {
-            System.err.println("midgie: --dry-run/--yes/--create-if-absent/--match-by-name/--retry/"
+            System.err.println("midgie: --dry-run/--yes/--create-if-absent/--match-by-name/--retry/--prune/"
                     + "--plan/--apply-plan/--policy need --url; without it, deploy only prints the plan.");
             return EXIT_ERROR;
         }
@@ -244,9 +250,31 @@ public class DeployCommand implements Callable<Integer> {
             LOG.debug("{} apply unit(s); mode={}", units.size(), planDir != null ? "plan" : "apply");
 
             Tracking tracking = resolveTracking(prismContext, client);
-            reportRemovals(prismContext, tracking, units);
+            List<RemovalDetector.Removal> removals = findRemovals(prismContext, tracking, units);
+            reportRemovals(removals, tracking);
+            if (prune && !removals.isEmpty() && !tracking.canDetect()) {
+                note("warning: --prune has nothing to work from; removals cannot be detected.");
+            }
 
             Integer exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
+
+            // Prune after the tree is applied, so the desired state lands first and only leftovers go.
+            if (prune && !removals.isEmpty() && planDir == null) {
+                if (dryRun) {
+                    exit = (exit == 0) ? 1 : exit; // would change something
+                } else if (exit == 0) {
+                    // Gate separately: when the apply pass had nothing to do it returns without prompting,
+                    // so without this a --prune run could delete with no confirmation at all.
+                    Integer stop = confirmPrune(removals.size());
+                    if (stop != null) {
+                        return stop;
+                    }
+                    int failed = applyPrune(prismContext, client, removals);
+                    if (failed > 0) {
+                        exit = EXIT_ERROR;
+                    }
+                }
+            }
             if (exit == 0 && planDir == null && !dryRun) {
                 recordRevision(prismContext, client, tracking);
             }
@@ -328,22 +356,90 @@ public class DeployCommand implements Callable<Integer> {
         return new Tracking(identity, table, last, current);
     }
 
-    /** Report values deployed at the recorded revision that the tree no longer declares. Never deletes. */
-    private void reportRemovals(PrismContext prismContext, Tracking tracking, List<Fragment> units) {
+    /** Values deployed at the recorded revision that the tree no longer declares, or an empty list. */
+    private List<RemovalDetector.Removal> findRemovals(PrismContext prismContext, Tracking tracking,
+            List<Fragment> units) {
         if (!tracking.canDetect()) {
-            return;
+            return List.of();
         }
-        List<RemovalDetector.Removal> removals =
-                new RemovalDetector(prismContext, tracking.identity.git(), baseRevision(tracking.lastRevision))
-                        .detect(units);
+        return new RemovalDetector(prismContext, tracking.identity.git(),
+                baseRevision(tracking.lastRevision)).detect(units);
+    }
+
+    /** List what is no longer declared, saying plainly whether it will be removed or only reported. */
+    private void reportRemovals(List<RemovalDetector.Removal> removals, Tracking tracking) {
         if (removals.isEmpty()) {
             return;
         }
         note(removals.size() + " value(s) deployed at " + tracking.lastRevision
-                + " are no longer declared by the tree (not removed — reported only):");
+                + " are no longer declared by the tree"
+                + (prune ? (dryRun ? " (--prune: would be removed)" : " (--prune: removing)")
+                         : " (reported only — pass --prune to remove them)") + ":");
         for (RemovalDetector.Removal removal : removals) {
             note("  " + removal.objectLabel + "  " + removal);
         }
+    }
+
+    /**
+     * Delete the detected removals. Each object gets one PATCH built solely from values that were in
+     * last-applied, so pruning cannot reach accrued or foreign state however wrong the rest of the tree is.
+     * An object that cannot be addressed (no OID, and no match by name) is reported and skipped.
+     *
+     * @return the number of objects that failed to prune
+     */
+    private int applyPrune(PrismContext prismContext, MidpointRestClient client,
+            List<RemovalDetector.Removal> removals) {
+        Map<String, List<RemovalDetector.Removal>> byObject = new LinkedHashMap<>();
+        for (RemovalDetector.Removal removal : removals) {
+            if (removal.isPrunable()) {
+                byObject.computeIfAbsent(removal.objectLabel, key -> new ArrayList<>()).add(removal);
+            } else {
+                note("warning: cannot remove " + removal + " — no item definition for it.");
+            }
+        }
+
+        int failed = 0;
+        for (Map.Entry<String, List<RemovalDetector.Removal>> entry : byObject.entrySet()) {
+            List<RemovalDetector.Removal> group = entry.getValue();
+            RemovalDetector.Removal first = group.get(0);
+            try {
+                String restType = ObjectTypes.getRestTypeFromClass(first.objectClass);
+                String oid = resolvePruneTarget(prismContext, client, first, restType);
+                if (oid == null) {
+                    note("warning: cannot address " + entry.getKey() + " to remove "
+                            + group.size() + " value(s); skipped.");
+                    failed++;
+                    continue;
+                }
+                ObjectDelta<? extends Objectable> delta =
+                        RemovalDetector.pruneDelta(prismContext, oid, group);
+                if (delta == null || delta.isEmpty()) {
+                    continue;
+                }
+                client.patchObject(restType, oid, DeltaOutput.toModificationXml(prismContext, delta));
+                status("  pruned       " + entry.getKey() + "  " + group.size() + " value(s)");
+            } catch (Exception e) {
+                note("warning: could not remove " + group.size() + " value(s) from " + entry.getKey()
+                        + ": " + safe(e.getMessage()));
+                LOG.debug("prune failed for {}", entry.getKey(), e);
+                failed++;
+            }
+        }
+        return failed;
+    }
+
+    /** The OID to prune: the fragment's own, else a single match by type+name when --match-by-name is set. */
+    private String resolvePruneTarget(PrismContext prismContext, MidpointRestClient client,
+            RemovalDetector.Removal removal, String restType) throws Exception {
+        if (removal.oid != null && !removal.oid.isBlank()) {
+            return removal.oid;
+        }
+        if (!matchByName || removal.objectName == null) {
+            return null;
+        }
+        List<PrismObject<? extends Objectable>> matches = LiveLookup.byName(
+                prismContext, client, removal.objectClass, restType, removal.objectName);
+        return (matches.size() == 1) ? matches.get(0).getOid() : null;
     }
 
     /** Record the revision just deployed, so the next run can tell what has been removed since. */
@@ -729,6 +825,34 @@ public class DeployCommand implements Callable<Integer> {
         String answer = console.readLine("%s? [y/N] ", prompt);
         String normalized = (answer == null) ? "" : answer.trim().toLowerCase();
         return normalized.equals("y") || normalized.equals("yes");
+    }
+
+    /**
+     * Confirm before deleting previously-deployed values. Its own gate rather than the apply prompt, because
+     * a prune can be the only thing a run does. Returns {@code null} to proceed, or the exit code to return.
+     */
+    private Integer confirmPrune(int valueCount) {
+        if (assumeYes) {
+            return null;
+        }
+        Console console = System.console();
+        boolean interactive = console != null;
+        String answer = interactive
+                ? console.readLine("Remove %d previously deployed value(s) from %s? [y/N] ",
+                        valueCount, connectionOptions.url())
+                : null;
+        switch (ApplyCommand.decideConfirmation(false, interactive, answer)) {
+            case PROCEED:
+                return null;
+            case ABORTED:
+                System.err.println("midgie: aborted — nothing was removed.");
+                return 0;
+            case NON_INTERACTIVE:
+            default:
+                System.err.println("midgie: refusing to remove values without confirmation in a "
+                        + "non-interactive session; re-run with --yes (or --dry-run to preview).");
+                return EXIT_ERROR;
+        }
     }
 
     private Integer confirmOnce(int changeCount) {
