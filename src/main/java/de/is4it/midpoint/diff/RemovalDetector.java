@@ -424,12 +424,40 @@ final class RemovalDetector {
         return type + "/" + name;
     }
 
+    /**
+     * A one-line preview of the value, for the report and for the destructive prompt that follows it.
+     *
+     * <p>A container has no useful {@code getRealValue()}, and prism's debug {@code toString} cut at 120
+     * characters gave the operator something like
+     * {@code assignment = PCV(null):[PrismReferenceImpl({http://…}targetRef):[PRV(oid=22222222-2…} —
+     * truncated mid-token, with the identifying part off the end. Its own items are named instead.
+     */
     private static String render(PrismValue value) {
-        Object real = value.getRealValue();
-        if (real == null) {
-            return "";
+        if (value instanceof PrismContainerValue<?> container) {
+            List<String> parts = new ArrayList<>();
+            for (Item<?, ?> item : container.getItems()) {
+                Object real = item.getRealValue();
+                if (real != null) {
+                    parts.add(item.getElementName().getLocalPart() + "=" + abbreviate(String.valueOf(real)));
+                }
+                if (parts.size() == 4) {
+                    parts.add("…");
+                    break;
+                }
+            }
+            String id = (container.getId() != null) ? "[" + container.getId() + "] " : "";
+            return id + "{" + String.join(", ", parts) + "}";
         }
-        String text = String.valueOf(real);
-        return (text.length() > 120) ? text.substring(0, 120) + "…" : text;
+        Object real = value.getRealValue();
+        return (real == null) ? "" : abbreviate(String.valueOf(real));
+    }
+
+    /** Shorten a rendered value without cutting mid-token where a word boundary is close by. */
+    private static String abbreviate(String text) {
+        if (text.length() <= 120) {
+            return text;
+        }
+        int space = text.lastIndexOf(' ', 120);
+        return text.substring(0, space > 80 ? space : 120) + "…";
     }
 }

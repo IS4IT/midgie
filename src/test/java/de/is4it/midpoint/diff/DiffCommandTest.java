@@ -344,7 +344,11 @@ class DiffCommandTest {
         DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
                 DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
 
-        assertTrue(result.inputWarnings().stream().anyMatch(w -> w.contains("declares 1 of 2 live value(s)")
+        // Both numbers count live values: one of the two is matched, so one is deleted. Reporting the
+        // desired count against the live total could print sums that do not add up and read as if less were
+        // at risk than really is.
+        assertTrue(result.inputWarnings().stream().anyMatch(w -> w.contains("matches 1 of 2 live value(s)")
+                        && w.contains("so the other 1 will be DELETED")
                         && w.contains("multivalue=merge")),
                 "expected a partial-container warning naming the fix: " + result.inputWarnings());
         assertTrue(result.removedValueCount() > 0, "the removal must be counted");

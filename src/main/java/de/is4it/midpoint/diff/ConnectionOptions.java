@@ -133,6 +133,7 @@ public final class ConnectionOptions {
         if (password == null) {
             return null; // resolvePassword() already explained why
         }
+        warnIfCleartextOverTheNetwork();
         LOG.debug("live mode: url={}, user={}, insecure={}, cacert={}, timeout={}s, retries={}",
                 url(), user, insecure, caCert, timeoutSeconds, retries);
         MidpointRestClient.Config config = new MidpointRestClient.Config()
@@ -141,6 +142,25 @@ public final class ConnectionOptions {
                 .requestTimeout(java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds)))
                 .maxRetries(retries);
         return new MidpointRestClient(url(), user, password, config);
+    }
+
+    /**
+     * Say so when Basic credentials are about to travel unencrypted to another host. The rig and every
+     * example in the docs use {@code http://…:12080/midpoint}, so copying that shape at a customer is an
+     * easy way to put the midPoint administrator password on the wire in the clear.
+     */
+    private void warnIfCleartextOverTheNetwork() {
+        URI url = url();
+        if (url == null || !"http".equalsIgnoreCase(url.getScheme())) {
+            return;
+        }
+        String host = url.getHost();
+        boolean loopback = host == null || "localhost".equals(host) || host.startsWith("127.")
+                || "::1".equals(host) || "[::1]".equals(host);
+        if (!loopback) {
+            System.err.println("midgie: warning: " + url.getScheme() + ":// to " + host
+                    + " sends the password unencrypted; use https for anything but a local rig.");
+        }
     }
 
     /** Resolve the password from the most-explicit source available, or {@code null} (with an error). */

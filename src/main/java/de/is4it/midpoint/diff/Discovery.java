@@ -12,7 +12,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -123,7 +125,15 @@ final class Discovery {
     }
 
     /** Walk the given paths, gathering {@code .xml}/{@code .xsd} regular files in a stable order. */
+    /**
+     * Every considered file under {@code paths}, deduplicated.
+     *
+     * <p>Overlapping arguments are an easy mistake in a pipeline ({@code deploy config config/roles}), and
+     * without deduplication each shared file became two apply units: it was reconciled and PATCHed twice,
+     * and the cross-fragment clobber check warned that a file contradicts itself.
+     */
     private static List<File> collectFiles(List<File> paths, List<String> warnings) throws IOException {
+        Map<String, File> byCanonicalPath = new LinkedHashMap<>();
         List<File> files = new ArrayList<>();
         for (File path : paths) {
             if (!path.exists()) {
@@ -132,16 +142,25 @@ final class Discovery {
             if (path.isDirectory()) {
                 try (Stream<Path> walk = Files.walk(path.toPath())) {
                     walk.filter(Files::isRegularFile).map(Path::toFile).filter(Discovery::isConsidered)
-                            .forEach(files::add);
+                            .forEach(file -> byCanonicalPath.putIfAbsent(canonical(file), file));
                 }
             } else if (isConsidered(path)) {
-                files.add(path);
+                byCanonicalPath.putIfAbsent(canonical(path), path);
             } else {
                 warnings.add("skipped " + path + " — not a .xml or .xsd file");
             }
         }
+        files.addAll(byCanonicalPath.values());
         files.sort(Comparator.comparing(File::getPath));
         return files;
+    }
+
+    private static String canonical(File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (IOException e) {
+            return file.getAbsolutePath();
+        }
     }
 
     private static boolean isConsidered(File file) {

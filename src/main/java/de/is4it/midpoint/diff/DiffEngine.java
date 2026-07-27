@@ -507,7 +507,12 @@ public final class DiffEngine {
             }
         }
         if (unmatched > 0) {
-            warnings.add("'" + path + "': desired declares " + desiredContainer.getValues().size() + " of "
+            // Both numbers count live values. Reporting the *desired* count against the live total mixed two
+            // denominators and could read as arithmetically impossible ("declares 1 of 2 ... the other 2 will
+            // be DELETED"), which understates what is about to go: an operator reasonably concludes one entry
+            // is being kept.
+            int matched = liveContainer.getValues().size() - unmatched;
+            warnings.add("'" + path + "': desired matches " + matched + " of "
                     + liveContainer.getValues().size() + " live value(s), and this path is on "
                     + "multivalue=replace, so the other " + unmatched + " will be DELETED. Set '" + path
                     + " multivalue=merge' (with equivalence=natural-keys) to update just the entries you list.");

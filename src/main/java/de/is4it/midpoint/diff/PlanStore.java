@@ -125,7 +125,11 @@ final class PlanStore {
         String fileName = String.format("%0" + Math.max(3, width) + "d-%s-%s.%s.xml", sequence, restType, token,
                 kind == Kind.CREATE ? "create" : "patch");
         Files.createDirectories(dir.toPath());
-        Files.writeString(new File(dir, fileName).toPath(), body + System.lineSeparator(), StandardCharsets.UTF_8);
+        // A create entry is the whole desired object, so it can carry a clearValue password; the process
+        // umask would leave the plan readable to every local user of a shared host or CI runner.
+        java.nio.file.Path target = new File(dir, fileName).toPath();
+        Io.restrictToOwner(target);
+        Files.writeString(target, body + System.lineSeparator(), StandardCharsets.UTF_8);
         LOG.debug("plan file written: {}", fileName);
     }
 

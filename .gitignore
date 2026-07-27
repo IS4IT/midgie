@@ -18,3 +18,7 @@ dependency-reduced-pom.xml
 # OS / misc
 .DS_Store
 *.log
+
+# Local Claude Code settings: these accumulate machine-specific allow-rules, which have included
+# host/credential arguments.
+.claude/settings.local.json

@@ -144,7 +144,7 @@ public class ApplyCommand implements Callable<Integer> {
         }
     }
 
-    /** Object is absent (GET 404): create it from the desired object, if allowed and confirmed. */
+    /** Object is absent (the search found nothing): create it from the desired object, if allowed. */
     private Integer applyCreate(PrismContext prismContext, MidpointRestClient client, LiveTarget target,
             PrismObject<? extends Objectable> desired) throws Exception {
         String address = (target.oid != null) ? target.restType + "/" + target.oid
@@ -156,6 +156,9 @@ public class ApplyCommand implements Callable<Integer> {
         note("midgie: " + address + " does not exist; will create it from " + desiredFile.getName() + ".");
         if (dryRun) {
             note("midgie: dry run — would create " + address + " (not created).");
+            // -o gets the body that would be POSTed. Writing nothing left the previous run's delta in the
+            // file, which a consumer would read as this run's answer.
+            Io.writePayload(output, createBody(prismContext, desired));
             return 1; // would change
         }
         Integer stop = confirmOrExit("Create " + address + "?");
@@ -163,7 +166,11 @@ public class ApplyCommand implements Callable<Integer> {
             return stop;
         }
         String createdOid = client.createObject(target.restType, createBody(prismContext, desired));
-        status("Created " + target.restType + "/" + (createdOid != null ? createdOid : target.oid) + ".");
+        String oid = (createdOid != null) ? createdOid : target.oid;
+        status(oid != null
+                ? "Created " + target.restType + "/" + oid + "."
+                : "Created " + target.restType + " '" + LiveLookup.nameOf(desired)
+                        + "' (the server did not report its OID).");
         return 0;
     }
 
@@ -202,7 +209,16 @@ public class ApplyCommand implements Callable<Integer> {
         }
 
         if (!result.hasDrift()) {
-            status("No changes: " + target.restType + "/" + target.oid + " already matches desired.");
+            String message = "No changes: " + target.restType + "/" + target.oid + " already matches desired.";
+            if (dryRun) {
+                // In dry-run stdout is the payload stream, so the prose goes to stderr and the (empty) delta
+                // is still written: 'apply --dry-run -o delta.xml' used to leave the previous run's delta in
+                // place, and a consumer parsing stdout got a sentence instead of an ObjectModificationType.
+                Io.writePayload(output, DeltaOutput.render(prismContext, result.delta(), format));
+                note("midgie: " + message);
+            } else {
+                status(message);
+            }
             return 0;
         }
 

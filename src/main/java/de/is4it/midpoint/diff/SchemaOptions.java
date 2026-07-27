@@ -87,11 +87,20 @@ public final class SchemaOptions {
             throws SchemaException {
         Map<String, Element> schemas = new LinkedHashMap<>();
         if (schemaDir != null) {
+            if (!schemaDir.isDirectory()) {
+                throw new SchemaException("--schema-dir is not a directory: " + schemaDir);
+            }
             addFromDirectory(prismContext, schemaDir, schemas);
         }
         if (schemaFiles != null) {
             for (File file : schemaFiles) {
-                addFile(prismContext, "--schema " + file.getName(), file, schemas);
+                if (!file.isFile()) {
+                    // A file named explicitly on the command line is not optional. Warning and carrying on
+                    // meant a typo'd path produced a delta computed without that extension schema, with the
+                    // affected items diffed as raw and nothing but a warning to say so.
+                    throw new SchemaException("--schema file does not exist or is not readable: " + file);
+                }
+                addFile(prismContext, "--schema " + file.getPath(), file, schemas);
             }
         }
         if (liveClient != null && !noLiveSchema) {

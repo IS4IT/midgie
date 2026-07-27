@@ -156,6 +156,9 @@ public class DeployCommand implements Callable<Integer> {
     /** Set when last-applied cannot be recovered at all, so no comparison this run means anything. */
     private boolean detectionBroken;
 
+    /** Plan entries the operator declined under --confirm-each-apply; they are neither applied nor failed. */
+    private int declinedEntries;
+
     /** Which logical object each fragment belongs to, so per-object policy applies to every fragment of it. */
     private final Map<Fragment, DeployObject> groupOf = new java.util.IdentityHashMap<>();
 
@@ -193,6 +196,38 @@ public class DeployCommand implements Callable<Integer> {
         }
         if (applyPlanDir == null && (paths == null || paths.isEmpty())) {
             System.err.println("midgie: provide at least one PATH, or --apply-plan <dir>.");
+            return EXIT_ERROR;
+        }
+        // --apply-plan replays a plan verbatim and returns before any of these is read. Accepting them
+        // silently meant 'deploy tree --apply-plan plan/ --prune' reported success having never looked for
+        // a removal, let alone made one.
+        if (applyPlanDir != null) {
+            List<String> ignored = new ArrayList<>();
+            if (prune) {
+                ignored.add("--prune");
+            }
+            if (policyFile != null) {
+                ignored.add("--policy");
+            }
+            if (createIfAbsent) {
+                ignored.add("--create-if-absent");
+            }
+            if (matchByName) {
+                ignored.add("--match-by-name");
+            }
+            if (paths != null && !paths.isEmpty()) {
+                ignored.add("PATH");
+            }
+            if (!ignored.isEmpty()) {
+                System.err.println("midgie: --apply-plan replays a plan as written; "
+                        + String.join(", ", ignored) + " would have no effect. Re-run --plan to change what "
+                        + "is applied.");
+                return EXIT_ERROR;
+            }
+        }
+        if (planDir != null && (dryRun || retry)) {
+            System.err.println("midgie: --plan writes the plan files it computes; "
+                    + "--dry-run and --retry do not apply to it.");
             return EXIT_ERROR;
         }
 
@@ -450,11 +485,21 @@ public class DeployCommand implements Callable<Integer> {
         }
         note(removals.size() + " value(s) deployed at " + tracking.lastRevision
                 + " are no longer declared by the tree"
-                + (prune ? (dryRun ? " (--prune: would be removed)" : " (--prune: removing)")
-                         : " (reported only — pass --prune to remove them)") + ":");
+                + removalDisposition() + ":");
         for (RemovalDetector.Removal removal : removals) {
             note("  " + removal.objectLabel + "  " + removal);
         }
+    }
+
+    /** How this run will treat the removals it just listed — never claiming a deletion that cannot happen. */
+    private String removalDisposition() {
+        if (!prune) {
+            return " (reported only — pass --prune to remove them)";
+        }
+        if (planDir != null) {
+            return " (reported only — --prune does not apply in plan mode)";
+        }
+        return dryRun ? " (--prune: would be removed)" : " (--prune: removing)";
     }
 
     /**
@@ -701,11 +746,18 @@ public class DeployCommand implements Callable<Integer> {
             }
         }
         Tally applied = pass(reconciler, units, false, confirmEachApply);
-        emitSummary(applied, false);
         List<Fragment> failed = applied.failedUnits;
         if (retry && !failed.isEmpty()) {
+            // Summarise after the retry rounds, not before: a run whose retries fixed everything used to end
+            // on a line saying units had failed while exiting 0.
+            emitSummary(applied, false);
             failed = retryUntilStable(failed,
                     remaining -> pass(reconciler, remaining, false, confirmEachApply).failedUnits);
+            status(failed.isEmpty()
+                    ? "Done after retry: all units applied."
+                    : "Done after retry: " + failed.size() + " unit(s) still failing.");
+        } else {
+            emitSummary(applied, false);
         }
         return failed.isEmpty() ? 0 : EXIT_ERROR;
     }
@@ -919,7 +971,8 @@ public class DeployCommand implements Callable<Integer> {
         if (retry && !failed.isEmpty()) {
             failed = retryUntilStable(failed, remaining -> applyEntries(client, remaining, confirmEachApply));
         }
-        status("Done: " + (entries.size() - failed.size()) + " applied, " + failed.size() + " failed.");
+        status("Done: " + (entries.size() - failed.size() - declinedEntries) + " applied, "
+                + declinedEntries + " declined, " + failed.size() + " failed.");
         return failed.isEmpty() ? 0 : EXIT_ERROR;
     }
 
@@ -929,6 +982,10 @@ public class DeployCommand implements Callable<Integer> {
         for (PlanStore.Entry entry : entries) {
             try {
                 if (perUnitPrompt && !promptEntry(entry)) {
+                    // Counted, not forgotten: the summary derives "applied" from the entry count, so an
+                    // unrecorded decline was reported as a write that never happened.
+                    declinedEntries++;
+                    markNotFullyApplied("one or more plan entries were declined");
                     reportEntry(entry, "skipped", "declined", false);
                     continue;
                 }

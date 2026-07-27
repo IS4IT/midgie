@@ -219,7 +219,7 @@ silence them.
 - **A value missing its natural key.** `'…/panel' value #1 does not carry its natural key (identifier), so
   it cannot be matched to a live value` — it would be applied as a whole-value change instead of updating
   the matching entry.
-- **A partially declared container.** `'…/panel': desired declares 1 of 4 live value(s), and this path is on
+- **A partially declared container.** `'…/panel': desired matches 1 of 4 live value(s), and this path is on
   multivalue=replace, so the other 3 will be DELETED. Set '…/panel multivalue=merge' (with
   equivalence=natural-keys) to update just the entries you list.`
 

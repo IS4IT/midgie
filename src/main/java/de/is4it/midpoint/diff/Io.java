@@ -40,12 +40,34 @@ final class Io {
         return prismContext.parseObject(file);
     }
 
-    /** Write {@code content} to {@code output} (trailing newline), or to stdout when {@code output} is null. */
+    /**
+     * Write {@code content} to {@code output} (trailing newline), or to stdout when {@code output} is null.
+     *
+     * <p>Created owner-readable where the filesystem supports it: a delta, and especially a create body, is
+     * the desired object verbatim and may carry a {@code clearValue} password, so the default umask would
+     * leave it readable to every local user of a shared build host.
+     */
     static void writePayload(File output, String content) throws IOException {
         if (output == null) {
             System.out.println(content);
-        } else {
-            Files.writeString(output.toPath(), content + System.lineSeparator(), StandardCharsets.UTF_8);
+            return;
         }
+        try {
+            restrictToOwner(output.toPath());
+            Files.writeString(output.toPath(), content + System.lineSeparator(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            // NoSuchFileException's message is the bare path, so without this the operator sees only
+            // "midgie: /tmp/nope/out.xml" and nothing about what went wrong.
+            throw new IOException("cannot write " + output + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** Create {@code path} (if absent) with owner-only permissions; a no-op on a non-POSIX filesystem. */
+    static void restrictToOwner(java.nio.file.Path path) throws IOException {
+        if (Files.exists(path) || !path.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            return;
+        }
+        Files.createFile(path, java.nio.file.attribute.PosixFilePermissions
+                .asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")));
     }
 }

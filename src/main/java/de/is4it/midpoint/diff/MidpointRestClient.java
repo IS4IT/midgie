@@ -293,6 +293,13 @@ public final class MidpointRestClient {
                             + " (is the server up and the URL correct? " + e.getMessage() + ")", e);
                 }
                 throw new IOException(what + " — timed out talking to " + restBase + " (" + e.getMessage() + ")", e);
+            } catch (javax.net.ssl.SSLException e) {
+                // The commonest TLS misconfiguration is a private CA with no --cacert. The raw JDK message
+                // ("PKIX path building failed ...") names neither the server nor the flags that fix it.
+                LOG.debug("{}  TLS error: {}", what, e.toString());
+                throw new IOException(what + " — TLS handshake with " + restBase + " failed ("
+                        + e.getMessage() + "). Pass --cacert <FILE> for a private CA, or --insecure for a "
+                        + "self-signed development server.", e);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException(what + " was interrupted", e);
@@ -307,7 +314,7 @@ public final class MidpointRestClient {
 
     /** Sleep for {@code retryBaseDelay * 2^attempt}, capped, before the next attempt. */
     private void backoff(int attempt) throws IOException {
-        long millis = Math.min(retryBaseDelay.toMillis() * (1L << attempt), RETRY_MAX_DELAY.toMillis());
+        long millis = Math.min(retryBaseDelay.toMillis() * (1L << Math.min(attempt, 20)), RETRY_MAX_DELAY.toMillis());
         try {
             Thread.sleep(millis);
         } catch (InterruptedException e) {

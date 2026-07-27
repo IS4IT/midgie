@@ -81,8 +81,16 @@ final class VersionSupport {
         String compile = compileTimeVersion();
         String live = liveVersion(prismContext, client);
         LOG.debug("version check: bundled schema {} vs live server {}", compile, live);
-        if (compile == null || live == null) {
-            return; // can't tell — stay quiet
+        if (compile == null) {
+            return; // no build-info on the classpath: nothing to compare against
+        }
+        if (live == null) {
+            // Best-effort, but not mute. A least-privilege deploy account has no read on NodeType and gets
+            // 403 here, so the guard against parsing a different major line with the bundled schema — the
+            // hazard CLAUDE.md calls out — silently never ran.
+            System.err.println("midgie: note: could not read the server version (GET /nodes); "
+                    + "the schema-version check did not run.");
+            return;
         }
         if (!sameMajorLine(compile, live)) {
             System.err.println("midgie: warning: server midPoint version " + live

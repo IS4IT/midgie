@@ -110,6 +110,12 @@ public class DiffCommand implements Callable<Integer> {
                 System.err.println("midgie: provide either a CURRENT file or --url, not both.");
                 return EXIT_ERROR;
             }
+            if (Io.isStdin(desiredFile) && Io.isStdin(currentFile)) {
+                // stdin can only be drained once: the second parse got an empty string and failed with
+                // prism's "Index 0 out of bounds for length 0", which names neither stdin nor the mistake.
+                System.err.println("midgie: only one input can be read from stdin.");
+                return EXIT_ERROR;
+            }
             live = false;
         } else if (connectionOptions.isLive()) {
             live = true;
