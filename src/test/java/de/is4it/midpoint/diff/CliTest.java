@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -79,6 +80,39 @@ class CliTest {
         Result r = run("apply", A, "--url", DEAD_HOST, "--user", "u");
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("--password"), r.err);
+    }
+
+    @Test
+    void aHardErrorExitsTwoNotOne() {
+        // 1 means "differences found" in this tool's contract, so picocli's default of 1 for an execution
+        // exception reported phantom drift to a CI gate for a typo'd flag — with a Java stack trace attached.
+        Result r = run("diff", A, "--url", DEAD_HOST, "--user", "u", "--password", "p",
+                "--cacert", "/no/such/ca.pem");
+
+        assertEquals(2, r.exit, "a setup failure is an error, not drift: " + r.err);
+        assertFalse(r.err.contains("\tat "), "and no stack trace is dumped at the operator: " + r.err);
+    }
+
+    @Test
+    void noSubcommandIsAUsageErrorOnStderr() {
+        // Help on stdout with exit 0 means 'midgie $ARGS > delta.xml' with an empty $ARGS writes the help
+        // text into the payload file and calls it a success.
+        Result r = run();
+
+        assertEquals(2, r.exit, r.err);
+        assertTrue(r.err.contains("Usage:"), "usage belongs on stderr: " + r.err);
+        assertTrue(r.out.isBlank(), "and must not pollute the payload stream: " + r.out);
+    }
+
+    @Test
+    void aMistypedPasswordFlagDoesNotEchoTheSecret() {
+        // picocli's default parameter-exception handler echoes unmatched tokens verbatim, so a single typo
+        // published the password into whatever log the run went to.
+        Result r = run("diff", A, B, "--pasword", "hunter2");
+
+        assertEquals(2, r.exit);
+        assertFalse(r.err.contains("hunter2"), "the value must not be echoed: " + r.err);
+        assertTrue(r.err.contains("--pasword"), "but the offending option is still named: " + r.err);
     }
 
     // --- happy paths ---
@@ -162,7 +196,7 @@ class CliTest {
         try {
             System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
             System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
-            int exit = new CommandLine(new Main()).execute(args);
+            int exit = Main.commandLine().execute(args);
             return new Result(exit, out.toString(StandardCharsets.UTF_8), err.toString(StandardCharsets.UTF_8));
         } finally {
             System.setOut(originalOut);

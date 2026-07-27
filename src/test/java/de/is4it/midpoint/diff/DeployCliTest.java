@@ -288,7 +288,7 @@ class DeployCliTest {
         try {
             System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
             System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
-            int exit = new CommandLine(new Main()).execute(args);
+            int exit = Main.commandLine().execute(args);
             return new Result(exit, out.toString(StandardCharsets.UTF_8), err.toString(StandardCharsets.UTF_8));
         } finally {
             System.setOut(originalOut);

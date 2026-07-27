@@ -156,6 +156,9 @@ public class DeployCommand implements Callable<Integer> {
     /** Set when last-applied cannot be recovered at all, so no comparison this run means anything. */
     private boolean detectionBroken;
 
+    /** Which logical object each fragment belongs to, so per-object policy applies to every fragment of it. */
+    private final Map<Fragment, DeployObject> groupOf = new java.util.IdentityHashMap<>();
+
     private void markNotFullyApplied(String reason) {
         if (notFullyApplied == null) {
             notFullyApplied = reason;
@@ -566,9 +569,22 @@ public class DeployCommand implements Callable<Integer> {
                 : revision;
     }
 
+    /**
+     * The strategy for one fragment, resolved against the identity of the <em>object</em> it belongs to.
+     *
+     * <p>Fragments are reconciled one file at a time, but a policy selector names an object. A fragment that
+     * carries only an OID — "add these items to object X" — has no name to match {@code Type/Name} against,
+     * so resolving per fragment silently gave it the CLI baseline while its named sibling got the policy:
+     * one half of an object merging its assignments and the other half replacing them.
+     */
     private StrategyOptions.Resolved strategyFor(Fragment unit) {
-        return (policy != null) ? policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy)
-                : globalStrategy;
+        if (policy == null) {
+            return globalStrategy;
+        }
+        DeployObject group = groupOf.get(unit);
+        return (group != null)
+                ? policy.resolveFor(group.typeName(), group.name(), group.oid(), globalStrategy)
+                : policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy);
     }
 
     /** Parse the candidate object files (schema is now registered); skip anything that isn't an object. */
@@ -620,14 +636,17 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     /** The ordered apply units: schema apply-units (SchemaType objects) first, then object fragments. */
-    private static List<Fragment> flatten(TopoSort.Result<SchemaFile> schemaOrder,
+    private List<Fragment> flatten(TopoSort.Result<SchemaFile> schemaOrder,
             TopoSort.Result<DeployObject> objectOrder) {
         List<Fragment> units = new ArrayList<>();
         for (SchemaFile schema : schemaOrder.ordered()) {
             units.add(schema.fragment());
         }
         for (DeployObject object : objectOrder.ordered()) {
-            units.addAll(object.fragments());
+            for (Fragment fragment : object.fragments()) {
+                groupOf.put(fragment, object);
+                units.add(fragment);
+            }
         }
         return units;
     }
@@ -681,9 +700,12 @@ public class DeployCommand implements Callable<Integer> {
             try {
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
 
-                // In a preview, a later fragment of an object an earlier fragment would create reads as a patch.
+                // In a preview, a later fragment of an object an earlier fragment would create reads as a
+                // patch. Keyed on the unit's identity, not on outcome.oid: an object being created OID-less
+                // has no OID yet, so every such object would otherwise share the one null key and the
+                // second unrelated create would be mislabelled "after create".
                 boolean afterCreate = preview && outcome.action == Reconciler.Action.CREATE
-                        && outcome.oid != null && wouldCreate.put(outcome.oid, true) != null;
+                        && wouldCreate.put(unit.identityLabel(), true) != null;
                 Reconciler.Action action = afterCreate ? Reconciler.Action.PATCH : outcome.action;
 
                 if (!preview && perUnitPrompt

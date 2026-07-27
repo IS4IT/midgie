@@ -10,10 +10,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
+import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 import com.evolveum.midpoint.prism.path.ItemPath;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,6 +31,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PolicyTest {
 
     private static final String OID = "00000000-0000-0000-0000-000000000001";
+
+    /**
+     * {@code ItemPath.fromString} resolves the process-wide {@code PrismContext.get()} singleton, which only
+     * exists as a side effect of building a context. Without this the class passes solely because some
+     * earlier test class happened to run first: {@code mvn test -Dtest=PolicyTest} on its own fails with an
+     * NPE, and surefire's default filesystem run order is not stable across machines.
+     */
+    @BeforeAll
+    static void bootstrapPrism() throws Exception {
+        new MidPointPrismContextFactory().createInitializedPrismContext();
+    }
 
     private static StrategyOptions.Resolved baseline() {
         return new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT, EquivalenceStrategy.REAL_VALUE,

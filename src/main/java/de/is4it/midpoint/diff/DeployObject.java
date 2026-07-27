@@ -54,9 +54,22 @@ final class DeployObject {
 
     /** Group fragments by identity into logical objects, running the per-group consistency check. */
     static List<DeployObject> group(List<Fragment> fragments, List<String> warnings) throws SchemaException {
+        // One object is routinely described by a fragment carrying its OID and another carrying only its
+        // name. Keying purely on "OID else type/name" files those under different keys, making them two
+        // objects: the contradiction check and the clobber warning never run between them, nothing that
+        // references the object orders itself before the OID-less half, and at apply time that half is
+        // skipped as "no oid". So resolve type/name to a known OID first.
+        Map<String, String> oidByTypeAndName = new LinkedHashMap<>();
+        for (Fragment fragment : fragments) {
+            if (isSet(fragment.oid()) && isSet(fragment.name())) {
+                oidByTypeAndName.putIfAbsent(fragment.typeName() + "/" + fragment.name(), fragment.oid());
+            }
+        }
         Map<String, List<Fragment>> byIdentity = new LinkedHashMap<>();
         for (Fragment fragment : fragments) {
-            byIdentity.computeIfAbsent(fragment.identityKey(), key -> new ArrayList<>()).add(fragment);
+            String key = fragment.identityKey();
+            byIdentity.computeIfAbsent(oidByTypeAndName.getOrDefault(key, key), ignored -> new ArrayList<>())
+                    .add(fragment);
         }
         List<DeployObject> objects = new ArrayList<>();
         for (Map.Entry<String, List<Fragment>> entry : byIdentity.entrySet()) {
@@ -68,6 +81,14 @@ final class DeployObject {
     private static DeployObject build(String key, List<Fragment> group, List<String> warnings) throws SchemaException {
         group.sort(Comparator.comparing(fragment -> fragment.sourceFile().getPath()));
         Fragment first = group.get(0);
+
+        // The group's identity is whatever any of its fragments knows, not whatever the first file happens
+        // to carry: the alphabetically first fragment may be the one that omits the OID or the name.
+        String groupOid = firstSet(group, Fragment::oid);
+        String groupName = firstSet(group, Fragment::name);
+        for (Fragment fragment : group) {
+            fragment.adoptOid(groupOid);
+        }
 
         for (Fragment fragment : group) {
             if (fragment.compileTimeClass() != first.compileTimeClass()) {
@@ -115,11 +136,26 @@ final class DeployObject {
 
             outbound.addAll(ReferenceCollector.outboundOids(fragment.object()));
         }
-        if (first.oid() != null) {
-            outbound.remove(first.oid());
+        if (groupOid != null) {
+            outbound.remove(groupOid);
         }
-        return new DeployObject(key, group, first.typeName(), first.name(), first.oid(),
+        return new DeployObject(key, group, first.typeName(), groupName, groupOid,
                 first.identityLabel(), outbound);
+    }
+
+    private static boolean isSet(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private static String firstSet(List<Fragment> group,
+            java.util.function.Function<Fragment, String> reader) {
+        for (Fragment fragment : group) {
+            String value = reader.apply(fragment);
+            if (isSet(value)) {
+                return value;
+            }
+        }
+        return null;
     }
 
     /**

@@ -86,11 +86,15 @@ final class Reconciler {
         PrismObject<? extends Objectable> current;
         if (oid != null && !oid.isBlank()) {
             current = LiveLookup.byOid(prismContext, client, clazz, restType, oid);
-        } else if (matchByName) {
+        } else if (matchByName || createIfAbsent) {
+            // --create-if-absent searches too, not just --match-by-name. "Create objects that do not exist
+            // yet" has to ask whether they exist: planning a CREATE for an OID-less object without ever
+            // looking made every re-run POST it again, and midPoint rejects the duplicate name with 409 —
+            // so a pipeline succeeded once and failed on the second run.
             List<PrismObject<? extends Objectable>> matches =
                     LiveLookup.byName(prismContext, client, clazz, restType, LiveLookup.nameOf(desired));
             if (matches.size() > 1) {
-                return fail(restType, null, "--match-by-name found " + matches.size() + " objects named '"
+                return fail(restType, null, "found " + matches.size() + " objects named '"
                         + LiveLookup.nameOf(desired) + "'; refusing an ambiguous match");
             }
             current = matches.isEmpty() ? null : matches.get(0);
@@ -155,6 +159,12 @@ final class Reconciler {
         }
         if (oid != null && !oid.isBlank()) {
             return fail(restType, oid, "does not exist (pass --create-if-absent to create it)");
+        }
+        if (matchByName) {
+            // The search already ran and found nothing, so telling them to pass --match-by-name — which they
+            // did — reads as if the flag were being ignored.
+            return skip(restType, null, "no object named '" + LiveLookup.nameOf(desired)
+                    + "' on the server; pass --create-if-absent to create it");
         }
         return skip(restType, null, "no oid; pass --create-if-absent to create, or --match-by-name to match by name");
     }

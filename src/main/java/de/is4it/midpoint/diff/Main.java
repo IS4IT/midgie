@@ -5,6 +5,9 @@
  */
 package de.is4it.midpoint.diff;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 
@@ -22,16 +25,70 @@ import picocli.CommandLine.Command;
         description = "Schema-aware diff of midPoint objects into an itemDelta (ObjectModificationType).",
         subcommands = { DiffCommand.class, ApplyCommand.class, DeployCommand.class, InitCommand.class }
 )
-public class Main implements Runnable {
+public class Main implements java.util.concurrent.Callable<Integer> {
 
-    /** No subcommand given — print usage. */
+    private static final Logger LOG = LoggerFactory.getLogger(Main.class);
+
+    private static final int EXIT_ERROR = 2;
+
+    /**
+     * No subcommand given. Usage goes to stderr and the exit code is an error: printing help on stdout and
+     * exiting 0 means {@code midgie $ARGS > delta.xml} with an empty {@code $ARGS} writes the help text into
+     * the payload file and calls it success.
+     */
     @Override
-    public void run() {
-        new CommandLine(this).usage(System.out);
+    public Integer call() {
+        new CommandLine(this).usage(System.err);
+        return CommandLine.ExitCode.USAGE;
+    }
+
+    /**
+     * The configured command line. One factory so the tests drive exactly what {@code main} does — a harness
+     * that built its own {@code CommandLine} would not see the handlers below, and so could not catch a
+     * regression in either of them.
+     */
+    static CommandLine commandLine() {
+        CommandLine commandLine = new CommandLine(new Main());
+        // picocli's default for an execution exception is 1, which this tool's contract defines as
+        // "differences found". A typo'd --cacert or a malformed MIDPOINT_URL would then report drift to a CI
+        // gate — and dump a Java stack trace at the operator. Every failure is a 2.
+        commandLine.setExecutionExceptionHandler((exception, parsed, parseResult) -> {
+            String message = (exception.getMessage() != null) ? exception.getMessage() : exception.toString();
+            System.err.println("midgie: " + message);
+            LOG.debug("command failed", exception);
+            return EXIT_ERROR;
+        });
+        // The default parameter-exception handler echoes every unmatched token, so one typo publishes a
+        // secret: 'midgie diff a.xml b.xml --pasword hunter2' printed the password into the log.
+        commandLine.setParameterExceptionHandler((exception, args) -> {
+            System.err.println("midgie: " + safeMessage(exception));
+            exception.getCommandLine().usage(System.err);
+            return CommandLine.ExitCode.USAGE;
+        });
+        return commandLine;
+    }
+
+    /**
+     * An unmatched-argument message with the <em>values</em> withheld.
+     *
+     * <p>Redacting by option name cannot work here: the token that leaks the secret is the value after an
+     * option the parser did not recognise, and it did not recognise it precisely because it was mistyped —
+     * {@code --pasword} does not contain "pass". So the shape decides instead. Anything that looks like an
+     * option is named, so the operator can see what they got wrong; anything else is withheld.
+     */
+    private static String safeMessage(CommandLine.ParameterException exception) {
+        if (exception instanceof CommandLine.UnmatchedArgumentException unmatched) {
+            StringBuilder tokens = new StringBuilder();
+            for (String token : unmatched.getUnmatched()) {
+                tokens.append(tokens.length() == 0 ? "" : ", ")
+                        .append(token.startsWith("-") ? token : "***");
+            }
+            return "unknown argument(s): " + tokens + " (values withheld)";
+        }
+        return (exception.getMessage() != null) ? exception.getMessage() : "invalid arguments";
     }
 
     public static void main(String[] args) {
-        int exitCode = new CommandLine(new Main()).execute(args);
-        System.exit(exitCode);
+        System.exit(commandLine().execute(args));
     }
 }
