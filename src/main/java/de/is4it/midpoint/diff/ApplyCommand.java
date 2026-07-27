@@ -234,8 +234,13 @@ public class ApplyCommand implements Callable<Integer> {
     /** Serialize the desired object for a create POST, stripping operational/metadata items midPoint owns. */
     static String createBody(PrismContext prismContext, PrismObject<? extends Objectable> desired)
             throws SchemaException {
-        desired.getValue().removeOperationalItems();
-        return XmlPretty.tidyRoot(prismContext.xmlSerializer().serialize(desired));
+        // On a copy: this is called from Reconciler.planCreate, which runs in the read-only preview pass
+        // that deploy does before the real one. Stripping the caller's own object there changed what a
+        // later fragment of the same object diffed to, so the emitted PATCH depended on whether --yes had
+        // skipped the preview.
+        PrismObject<? extends Objectable> body = desired.clone();
+        body.getValue().removeOperationalItems();
+        return XmlPretty.tidyRoot(prismContext.xmlSerializer().serialize(body));
     }
 
     /** Prompt/decide whether to write. Returns {@code null} to proceed, or the exit code to return. */

@@ -298,4 +298,34 @@ class DeployCliTest {
 
     private record Result(int exit, String out, String err) {
     }
+
+    @Test
+    void anUnreadableObjectFileFailsTheRunInsteadOfBeingSkipped(@TempDir Path dir) throws Exception {
+        // The file says it is a midPoint object and cannot be parsed. Dropping it with an advisory meant
+        // deploy exited 0 with that object never deployed — and --quiet hid the advisory too, so a pipeline
+        // went green on an incomplete tree.
+        Files.writeString(dir.resolve("broken.xml"),
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\">\n"
+                        + "  <name>Broken</name>\n  <noSuchItem>x</noSuchItem>\n</role>",
+                StandardCharsets.UTF_8);
+
+        Result quiet = run("deploy", dir.toString(), "--quiet");
+
+        assertEquals(2, quiet.exit, "an unreadable object is an error: " + quiet.err);
+        assertTrue(quiet.err.contains("broken.xml"), "and --quiet must not hide it: " + quiet.err);
+    }
+
+    @Test
+    void unrelatedXmlInTheTreeIsStillOnlyAnAdvisory(@TempDir Path dir) throws Exception {
+        // Discovery treats any well-formed non-schema XML as a candidate, so a tree may legitimately hold
+        // files that were never meant to be objects.
+        Files.writeString(dir.resolve("notes.xml"), "<notes><item>hello</item></notes>", StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("role.xml"),
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\">\n"
+                        + "  <name>Fine</name>\n</role>", StandardCharsets.UTF_8);
+
+        Result r = run("deploy", dir.toString());
+        assertEquals(0, r.exit, r.out + "\n" + r.err);
+        assertTrue(r.err.contains("notes.xml"), "the unrelated file is still mentioned: " + r.err);
+    }
 }

@@ -235,7 +235,17 @@ public class DeployCommand implements Callable<Integer> {
             SchemaSupport.register(prismContext, schemaMap);
 
             List<String> warnings = new ArrayList<>(scan.warnings());
-            List<DeployObject> objects = DeployObject.group(parseObjects(prismContext, scan, warnings), warnings);
+            List<String> unreadable = new ArrayList<>();
+            List<DeployObject> objects =
+                    DeployObject.group(parseObjects(prismContext, scan, warnings, unreadable), warnings);
+            if (!unreadable.isEmpty()) {
+                // These files say they are midPoint objects and cannot be read. Carrying on would deploy the
+                // rest of the tree and exit 0, so a pipeline goes green with an object missing.
+                for (String failure : unreadable) {
+                    warn(failure);
+                }
+                return EXIT_ERROR;
+            }
 
             List<SchemaFile> deployableSchemas = scan.schemas().stream()
                     .filter(SchemaFile::deployable).collect(Collectors.toList());
@@ -587,16 +597,28 @@ public class DeployCommand implements Callable<Integer> {
                 : policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy);
     }
 
-    /** Parse the candidate object files (schema is now registered); skip anything that isn't an object. */
+    /**
+     * Parse the candidate object files (schema is now registered); skip anything that isn't an object.
+     *
+     * <p>Discovery treats any well-formed XML that is not a schema as a candidate, so a tree may hold files
+     * that were never meant to be objects — those are skipped with an advisory. A file whose root element is
+     * in the common-3 namespace is a different matter: it says plainly that it is a midPoint object, and if
+     * it cannot be parsed the tree cannot be deployed as written. Those go to {@code unreadable}, which the
+     * caller turns into an error, rather than into an advisory that {@code --quiet} would swallow.
+     */
     private static List<Fragment> parseObjects(PrismContext prismContext, Discovery.ScanResult scan,
-            List<String> warnings) {
+            List<String> warnings, List<String> unreadable) {
         List<Fragment> fragments = new ArrayList<>();
         for (File file : scan.objectFiles()) {
             PrismObject<? extends Objectable> object;
             try {
                 object = prismContext.parseObject(file);
             } catch (Exception e) {
-                warnings.add("skipped " + file + " — could not parse (" + e.getMessage() + ")");
+                if (Discovery.declaresMidpointObject(file)) {
+                    unreadable.add("could not parse " + file + " (" + safe(e.getMessage()) + ")");
+                } else {
+                    warnings.add("skipped " + file + " — could not parse (" + safe(e.getMessage()) + ")");
+                }
                 continue;
             }
             if (object.getCompileTimeClass() == null) {

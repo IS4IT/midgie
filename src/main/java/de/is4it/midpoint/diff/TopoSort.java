@@ -5,9 +5,11 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -83,9 +85,22 @@ final class TopoSort {
         while (ordered.size() < nodeSet.size()) {
             T next = ready.poll();
             if (next == null) {
-                // A cycle: no node is free. Force the remaining node with the fewest unmet prerequisites.
-                next = nodeSet.stream()
-                        .filter(n -> !emitted.contains(n))
+                // A cycle: no node is free. Force one — but only a node that is actually *on* a cycle.
+                // Every remaining node has in-degree >= 1 at this point, so a plain dependent of a cycle
+                // member ties with the members themselves and could be picked: it would then be applied
+                // before the object it references, and the "broke the cycle at ..." warning would name an
+                // object that is in no cycle at all. Degrading the order inside a cycle is unavoidable;
+                // letting that leak to acyclic nodes is not.
+                Set<T> remaining = new LinkedHashSet<>(nodeSet);
+                remaining.removeAll(emitted);
+                Set<T> onCycle = new LinkedHashSet<>();
+                for (T candidate : remaining) {
+                    if (reachesItself(candidate, successors, remaining)) {
+                        onCycle.add(candidate);
+                    }
+                }
+                Set<T> candidates = onCycle.isEmpty() ? remaining : onCycle;
+                next = candidates.stream()
                         .min(Comparator.<T>comparingInt(inDegree::get).thenComparing(readyOrder))
                         .orElseThrow();
                 brokenAt.add(next);
@@ -104,5 +119,22 @@ final class TopoSort {
             }
         }
         return new Result<>(ordered, brokenAt);
+    }
+
+    /** Whether {@code start} is reachable from itself through {@code scope} — i.e. it lies on a cycle. */
+    private static <T> boolean reachesItself(T start, Map<T, List<T>> successors, Set<T> scope) {
+        Set<T> seen = new LinkedHashSet<>();
+        Deque<T> queue = new ArrayDeque<>(successors.getOrDefault(start, List.of()));
+        while (!queue.isEmpty()) {
+            T node = queue.poll();
+            if (!scope.contains(node) || !seen.add(node)) {
+                continue;
+            }
+            if (node.equals(start)) {
+                return true;
+            }
+            queue.addAll(successors.getOrDefault(node, List.of()));
+        }
+        return false;
     }
 }

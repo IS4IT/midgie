@@ -55,4 +55,24 @@ class TopoSortTest {
         assertTrue(result.ordered().containsAll(List.of("a", "b")));
         assertFalse(result.brokenAt().isEmpty(), "the cycle must be reported");
     }
+
+    @Test
+    void breakingACycleDoesNotDisturbNodesOutsideIt() {
+        // Once no node is ready every remaining node has in-degree >= 1, so a plain dependent of a cycle
+        // member tied with the members themselves and could be forced first — applied before the object it
+        // references, with a "broke the cycle" warning naming a node that is in no cycle.
+        Map<String, List<String>> prerequisites = Map.of(
+                "Mid1", List.of("Mid2"),
+                "Mid2", List.of("Mid1"),
+                "Aaa", List.of("Mid1"));
+
+        TopoSort.Result<String> result = TopoSort.sort(List.of("Aaa", "Mid1", "Mid2"),
+                node -> prerequisites.getOrDefault(node, List.of()), Comparator.naturalOrder());
+
+        assertTrue(result.ordered().indexOf("Mid1") < result.ordered().indexOf("Aaa"),
+                "Aaa depends on Mid1 and is on no cycle, so it must not be forced first: " + result.ordered());
+        assertFalse(result.brokenAt().contains("Aaa"),
+                "and must not be reported as the place a cycle was broken: " + result.brokenAt());
+        assertFalse(result.brokenAt().isEmpty(), "the real cycle is still reported");
+    }
 }

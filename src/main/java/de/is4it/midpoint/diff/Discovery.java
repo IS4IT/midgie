@@ -76,6 +76,20 @@ final class Discovery {
         return new ScanResult(schemas, objectFiles, warnings);
     }
 
+    /**
+     * Whether {@code file}'s root element is in midPoint's common-3 namespace — i.e. whether the file claims
+     * to be a midPoint object rather than some other XML that happens to live in the tree. Used to tell an
+     * object that cannot be parsed (an error) from an unrelated file (an advisory).
+     */
+    static boolean declaresMidpointObject(File file) {
+        try {
+            return COMMON_3_NAMESPACE.equals(DOMUtil.parseFile(file).getDocumentElement().getNamespaceURI());
+        } catch (Exception e) {
+            LOG.debug("could not re-read the root element of {}", file, e);
+            return false;
+        }
+    }
+
     private static void classify(PrismContext prismContext, File file, List<SchemaFile> schemas,
             List<File> objectFiles, List<String> warnings) {
         Element root;

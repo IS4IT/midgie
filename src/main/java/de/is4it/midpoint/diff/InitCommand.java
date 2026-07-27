@@ -91,6 +91,18 @@ public class InitCommand implements Callable<Integer> {
             System.err.println("midgie: init needs a running server — pass --url (or set MIDPOINT_URL).");
             return EXIT_ERROR;
         }
+        // Before touching the server: a mistyped --write-policy used to exit 2 having already created the
+        // state object, so the operator saw an error for a command that had in fact changed the server.
+        if (writePolicy != null) {
+            if (path == null) {
+                System.err.println("midgie: --write-policy needs a PATH to scan for keyed containers.");
+                return EXIT_ERROR;
+            }
+            if (writePolicy.exists()) {
+                System.err.println("midgie: " + writePolicy + " already exists; refusing to overwrite it.");
+                return EXIT_ERROR;
+            }
+        }
         MidpointRestClient client = connectionOptions.newClient();
         if (client == null) {
             return EXIT_ERROR;
@@ -118,7 +130,7 @@ public class InitCommand implements Callable<Integer> {
 
             reportIdentity();
             if (writePolicy != null) {
-                return seedPolicy(prismContext);
+                return seedPolicy(prismContext, client);
             }
             return 0;
         } catch (Exception e) {
@@ -152,25 +164,21 @@ public class InitCommand implements Callable<Integer> {
      * {@code natural-keys} + {@code merge} lets individual entries be managed instead of the whole list being
      * replaced. Comments name the containers that prompted each line, so the file explains itself.
      */
-    private Integer seedPolicy(PrismContext prismContext) throws Exception {
-        if (path == null) {
-            System.err.println("midgie: --write-policy needs a PATH to scan.");
-            return EXIT_ERROR;
-        }
-        if (writePolicy.exists()) {
-            System.err.println("midgie: " + writePolicy + " already exists; refusing to overwrite it.");
-            return EXIT_ERROR;
-        }
-
+    private Integer seedPolicy(PrismContext prismContext, MidpointRestClient client) throws Exception {
         // Same two-step as deploy: discover and register the tree's own extension schemas *before* parsing,
         // or every object using a tree-local extension attribute fails to parse and silently vanishes from
         // the suggestions — exactly the objects most likely to need a rule.
+        //
+        // The live client goes in too. registerDynamicSchemaExtensions *replaces* the dynamic set, so this
+        // second registration discards whatever buildContext(client) read from the server: leaving it out
+        // meant that as soon as the tree held any schema file, objects using a server-registered extension
+        // stopped parsing and lost their suggestions.
         Discovery.ScanResult scan = Discovery.scan(prismContext, List.of(path));
         Map<String, Element> schemaMap = new LinkedHashMap<>();
         for (SchemaFile schema : scan.schemas()) {
             schemaMap.put(schema.description(), schema.schemaElement());
         }
-        schemaMap.putAll(schemaOptions.collectSchemas(prismContext, null));
+        schemaMap.putAll(schemaOptions.collectSchemas(prismContext, client));
         SchemaSupport.register(prismContext, schemaMap);
 
         Map<String, Map<String, String>> keyedByObject = new LinkedHashMap<>();
