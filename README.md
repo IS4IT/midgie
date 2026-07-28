@@ -90,7 +90,7 @@ bin/midgie deploy --apply-plan out/ --url … --yes                  # replay a 
 
 #### Detecting what you removed (opt-in)
 
-Dropping a value from a file is invisible to an ordinary diff: `desired` simply stops mentioning it, and under `multivalue=merge` the delta comes out empty, so `diff` reports `No differences.` while the value lives on. midgie closes that with a **three-way** comparison — desired, live, and *last-applied* — exactly as `kubectl apply` does. A value present in last-applied but absent now is one you removed on purpose; a value the server holds that midgie never applied is accrued state and is left alone.
+Dropping a value from a file is invisible to an ordinary diff: `desired` simply stops mentioning it, and under `multivalue=merge` the delta comes out empty, so `diff` reports `No differences.` while the value lives on. midgie closes that with a **three-way** comparison — desired, live, and *last-applied* — the merge `kubectl apply` performs, but with last-applied tracked as ArgoCD does: one synced git revision per deployment, rather than a copy of every object stored on the object itself. A value present in last-applied but absent now is one you removed on purpose; a value the server holds that midgie never applied is accrued state and is left alone.
 
 Last-applied comes from **version control**: `git show <lastRev>:<file>` is the fragment as it was when midgie last deployed it, so the only thing that must be stored is the revision. Enable it once per server:
 

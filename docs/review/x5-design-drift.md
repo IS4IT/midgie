@@ -1,0 +1,59 @@
+# x5 — design drift (docs ↔ code)
+
+Pass scope: CLAUDE.md, DESIGN.md, README.md, CHANGELOG.md, TODO.md read in full and checked against `src/main/java/de/is4it/midpoint/diff/**`, `pom.xml`, `bin/midgie`. Only contradictions of a documented claim are listed; no style findings.
+
+Counts: 0 blocker · 4 major · 16 minor.
+
+## Major
+
+major | DESIGN.md:82 | The delete-detection bullet states "**Reporting only**; `--prune` would be a later, opt-in step", but `--prune` is a shipped flag (`DeployCommand.java:121`) that builds and PATCHes real delete deltas (`DeployCommand.java:275`, `RemovalDetector.pruneDelta`) — and README.md:108 and CHANGELOG.md:14 both document it as existing. | The doc is wrong: `--prune` shipped, so DESIGN's "would be a later step" is stale text that survived the feature landing.
+
+major | DESIGN.md:83 | The same bullet contains a spliced sentence that no longer parses: line 83 ends "…and that object carries" and line 84 begins "`--prune` then applies the detected removals: opt-in, `--dry-run`-able, …" — the stranded clause's real continuation ("The state object carries `indestructible`, a `description`/`documentation` …") reappears at DESIGN.md:91. | The doc is wrong: two edits were merged without re-reading; the bullet needs splitting into "state object" and "`--prune`" sentences.
+
+major | MidpointRestClient.java:241 | `boolean retryable = "GET".equals(request.method())`, so the `POST {type}/search` that is now the *only* way `diff --url`/`apply`/`deploy` read an object (`LiveLookup.java:104-116`, CHANGELOG.md:72) is never retried — contradicting README.md:242 ("Retry idempotent reads") and DESIGN.md:133 ("retries idempotent reads … rides out a server that is still starting"). With `--quiet --no-live-schema` nothing else contacts the server first, so `--retries` is a no-op for the entire live path. | The code is wrong: the search is an idempotent read and is the read the flag exists for. Note TODO.md:20 already says "GET-only", so the three documents disagree with each other as well.
+
+major | DeploymentIdentity.java:58-61 | `--app` returns before the `isRepository()` / `isShallow()` guards, so in a shallow clone (or outside a repo) tracking reports itself as available, silently detects zero removals (`git show <rev>:<path>` fails → `RemovalDetector.parseAt` returns null → "new file since the last deploy") and still records a new revision — contradicting README.md:119 ("Detection is skipped, with a note, when the tree is not in a git repository or the clone is **shallow**") and DESIGN.md:95 ("shallow clones are refused"). | The code is wrong: the class's own javadoc (`DeploymentIdentity.java:23-26`) and the comment at line 59 say history is required even with `--app`, so the guards must run before the override, or at least emit the documented note.
+
+## Minor
+
+minor | DESIGN.md:249 | "How a promotion pipeline consumes it" says of `deploy` "increment 1, the read-only discovery + schema-aware dependency sort, is built", while DESIGN.md:276 says "**Status: built.**" for increments 1-3 and TODO.md:46 marks section H done. | The doc is wrong: line 249 was not updated when increments 2 and 3 landed.
+
+minor | DESIGN.md:32 | The engine snippet's comment claims "The (File) constructor overload registers extra/extension XSDs from a directory (`--schema-dir`)", but `SchemaOptions.java:74` uses the no-arg `MidPointPrismContextFactory().createInitializedPrismContext()` and registers every extension through `registerDynamicSchemaExtensions` (`SchemaSupport.java:82`) — which is what DESIGN.md:207 itself describes. | The doc is wrong: the `(File)` overload is a real prism API but is not how midgie loads `--schema-dir`; DESIGN contradicts itself twelve sections apart.
+
+minor | DESIGN.md:125 | "on a GET-404 with `--create-if-absent`, `POST /ws/rest/{type}`" — existence is resolved by `POST {type}/search` and an empty result, never a 404 (`LiveLookup.java:104-109`, `Reconciler.java:88`), which CHANGELOG.md:72 records as a deliberate 0.2.0 change. | The doc is wrong: it predates the search-based lookup. (`ApplyCommand.java:147`'s "Object is absent (GET 404)" comment is stale for the same reason.)
+
+minor | DESIGN.md:117 | "Commands / modes (layered)" lists only `diff`, `diff --url` and `apply`; `init` is a first-class subcommand (`Main.java:23`, `InitCommand.java`) that appears in DESIGN only buried inside a Safety-guards bullet, and `deploy` only in its own later section. | The doc is wrong: the section that purports to enumerate the modes is missing half of them.
+
+minor | README.md:172 | "Choosing a strategy" states that under `merge` "leftover state is never reported, so 'clean it up later' quietly becomes 'never find out'", which contradicts README.md:93-108 in the same file — `deploy` + `init` now do a three-way comparison and report exactly those values (`RemovalDetector.detect`, `DeployCommand.reportRemovals:387`). DESIGN.md:166 carries the same stale sentence. | The doc is wrong: the passage predates delete detection and now argues against a gap the tool closed.
+
+minor | README.md:242 | `--retries N` is documented as retrying on "`503`/connection-refused/timeout"; `MidpointRestClient.isTransient:297` retries 502, 503 **and** 504 (DESIGN.md:133 has it right). | The doc is wrong (README and the flag's own help text at `ConnectionOptions.java:72`); the code's 502/504 handling is deliberate and documented in its javadoc.
+
+minor | README.md:104 | The sample delete-detection output reads "… are no longer declared by the tree (not removed — reported only):"; the code emits "… (reported only — pass --prune to remove them):" (`DeployCommand.java:393`). | The doc is wrong: a copy-paste of the pre-`--prune` message.
+
+minor | README.md:55 | "In live mode all three address the object by OID (its `oid`, or `--oid`)" — `deploy` never reads `connectionOptions.oid`; the flag is inherited from the `ConnectionOptions` mixin (`DeployCommand.java:82`) and silently ignored, so `deploy … --oid X` does nothing. | Either side works, but the code should change: a write-affecting flag that is accepted and ignored is worse than one that is rejected. Failing that, README.md:238 must scope `--oid` to `diff`/`apply`.
+
+minor | README.md:256 | The "Output, logging & writes" table lists `--format` and `-o, --output` with no command scope, while every following row is explicitly scoped (`*(apply, deploy)*` etc.); both options exist only on `diff` and `apply` (`DiffCommand.java:67,71`, `ApplyCommand.java:97,101`) and are absent from `deploy` and `init`. | The doc is wrong: add the `*(diff, apply)*` scope marker, consistent with the rest of the table.
+
+minor | README.md:184 | The "Syncing an item nested inside a multi-valued container" recipe sets object-wide `multivalue=merge` (`SystemConfigurationType/SystemConfiguration  equivalence=natural-keys multivalue=merge`), contradicting README.md:169 ("turn it on deliberately and per path rather than globally") and the header `init --write-policy` actually generates (`InitCommand.java:208-212`: "The merge rules are deliberately scoped to those paths rather than to the whole object"). | The doc is wrong: the recipe should use an item-depth selector for `multivalue`, matching what the tool's own seeded policy does.
+
+minor | README.md:127 | `init --write-policy` is described as suggesting "`equivalence=natural-keys multivalue=merge` for each object"; `InitCommand.java:219-224` writes one object-level line (`<Type>/<Name>  equivalence=natural-keys`) plus a separate per-container line (`<Type>/<Name>/<container>  multivalue=merge`) for each keyed container. | The doc is wrong: it describes a single combined line that the tool does not write.
+
+minor | README.md:141 | The exit-code table covers `diff`, `apply`, `apply --dry-run`, `deploy --dry-run`/`--plan` and `deploy`, but not `init`, whose contract is `0` created/already present / `2` error (`InitCommand.java:41,123,128`); plain offline `deploy` (`0`/`2`, `DeployCommand.java:249`) is also only in prose at README.md:133. | The doc is wrong: a table introduced as "the contract" should cover all four subcommands.
+
+minor | TODO.md:3 | The preamble still scopes the tool as "offline `diff`, `diff --url`, `apply` with create/patch/idempotency, and two-layer extension schema", and no section covers the delete-detection / `midgie init` / `--prune` work that is built and shipped (CHANGELOG.md:12-16, `InitCommand`, `SyncState`, `RemovalDetector`, `GitRevision`, `DeploymentIdentity`). | The doc is wrong: a whole delivered feature area is missing, so TODO no longer reflects what is done.
+
+minor | CHANGELOG.md:12 | The Unreleased delete-detection entry asserts "**Reports only; nothing is deleted and exit codes are unchanged.**", yet the same section adds `--prune`, which deletes (`DeployCommand.java:275`) and turns a `--dry-run` `0` into `1` (`DeployCommand.java:268`). | The doc is wrong: the bolded absolute reads as feature-wide; it needs qualifying as "without `--prune`".
+
+minor | CLAUDE.md:12 | The Status paragraph describes only `DiffEngine`, `diff` and `apply`; `deploy` and `init` (`Main.java:23`) are shipped subcommands it never mentions, and CLAUDE.md:7 still frames the tool as "computes the minimal `itemDelta` between two midPoint objects" while README.md:51 documents four subcommands including a folder-tree reconciler. | The doc is wrong: the guidance file understates the tool's surface for anyone starting from it.
+
+minor | pom.xml:15 | `<version>0.1.0-SNAPSHOT</version>` while CHANGELOG.md:18 records 0.3.1 as released, so `--version` — which README.md:306 says "prints the tool version" and TODO.md:37 marks done as "no more hardcoded `0.1.0`" — reports `midgie 0.1.0-SNAPSHOT` from any local or CI build. | The pom should change: the release workflow's `versions:set` only fixes tagged builds, so every non-tag build misreports the version that TODO claims is now dynamic.
+
+minor | DESIGN.md:54 | The `EquivalenceStrategy.REAL_VALUE` table row says the id-considering variants "are still selectable via `--equivalence` for exploration, with a warning", but `StrategyOptions.parseEquivalence:146` warns only for `natural-keys`; `consider-different-ids` is silent. | The doc is wrong: only the experimental natural-keys preset warns, which DESIGN.md:181 itself states correctly.
+
+## Checked and clean
+
+- CLAUDE.md invariants hold: `DiffEngine` has no REST/HTTP import (all HTTP is in `MidpointRestClient`); no code reads custom in-XML annotations (strategy comes from flags/`--policy` only); `<midpoint.version>` 4.10.3 is guarded by the antrun `check-midpoint-version-sync` execution (`pom.xml:131-154`) and by `VersionSupport.warnIfMismatch`; EUPL-1.2 headers, `LICENSE` and `REUSE.toml` are present and consistent.
+- Every flag in README's four tables exists with the documented default (`--scope present`, `--multivalue replace`, `--equivalence real-value`, `--timeout 30`, `--format xml`); no undocumented flag was found beyond the `--oid`-on-`deploy` case above.
+- The documented exit codes match the code for `diff` (0/1/2), `apply` (0/2, dry-run 0/1/2), `deploy` (offline 0/2, apply 0/2, dry-run and `--plan` 0/1/2), including the exit-2 accrued-in-place refusal.
+- README's "Guard rails" messages match `DiffEngine.checkKeyedContainer` and `DeltaOutput.removalWarning` verbatim, and are advisory-only as documented; the key-matched merge recipe is warning-free because `checkKeyedContainer` returns early under `isMerge`.
+- Every class named in DESIGN/TODO/CHANGELOG exists (`Discovery`, `SchemaFile`, `Fragment`, `DeployObject`, `ReferenceCollector`, `TopoSort`, `Reconciler`, `PlanStore`, `Policy`, `GlobPath`, `LiveLookup`, `NaturalKeys`, `GitRevision`, `DeploymentIdentity`, `SyncState`, `RemovalDetector`, `InitCommand`), as does every test named in DESIGN's verification list.
