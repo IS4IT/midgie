@@ -48,7 +48,7 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 
 ### Container image
 
-Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
+Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). git can clone over HTTPS and SSH (`curl`, `openssh-client`, `less`), so the tree can be fetched in the container itself rather than by an init container. It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
 
 ```bash
 docker run --rm -v "$PWD:/work" is4it/midgie:0.4.1 diff a.xml b.xml
@@ -66,6 +66,8 @@ docker run -d --name midgie --entrypoint sleep is4it/midgie:0.4.1 infinity   # t
 ```
 
 `docker run <image> bash` does *not* give a shell — it runs `midgie bash`, which is rejected as an unknown subcommand. Use `--entrypoint bash`.
+
+Cloning over SSH needs a key ssh will accept: mount it with `defaultMode: 0400` (ssh refuses a group- or world-readable key) and make sure the pod's UID can read it — `fsGroup: 0` matches the image's group — or point `GIT_SSH_COMMAND` at a copy whose permissions you fix first. An unknown host key fails the clone by default, so either mount a `known_hosts` or add `-o StrictHostKeyChecking=accept-new` via `GIT_SSH_COMMAND`.
 
 Two things about the git side. **Clone with full history**: midgie refuses a shallow clone for tracking, so the usual `--depth 1` / `git-sync` default silently disables removal detection. And the image sets `safe.directory=*` system-wide, because a tree cloned by an init container is owned by a different UID than the one midgie runs as, and git's ownership refusal surfaces only as "the tree is not in a git repository" — tracking then goes unavailable without anything failing. If you would rather keep git's check, drop that line from `docker/midgie/Dockerfile` and run both containers as the same UID.
 
