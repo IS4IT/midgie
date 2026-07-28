@@ -116,6 +116,11 @@ public class DiffCommand implements Callable<Integer> {
                 System.err.println("midgie: only one input can be read from stdin.");
                 return EXIT_ERROR;
             }
+            if (strategy.smartRefs == StrategyOptions.SmartRefs.VERIFY) {
+                System.err.println("midgie: --smart-refs verify needs a running server to run the filter "
+                        + "against; use 'accept' or 'resolve' for an offline diff.");
+                return EXIT_ERROR;
+            }
             live = false;
         } else if (connectionOptions.isLive()) {
             live = true;
@@ -146,7 +151,8 @@ public class DiffCommand implements Callable<Integer> {
                     : Io.parseObject(prismContext, currentFile);
 
             DiffEngine.DiffResult result = new DiffEngine(prismContext)
-                    .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
+                    .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
+                            SmartReferences.checkFor(strategy, prismContext, client));
 
             // Refuse (by default) to emit a merge delta that would overwrite an accrued value in place.
             if (!result.accruedInPlaceEditPaths().isEmpty() && !strategy.allowInplaceMerge) {
@@ -159,6 +165,10 @@ public class DiffCommand implements Callable<Integer> {
                 for (String path : result.mergeFallbackPaths()) {
                     System.err.println("midgie: note: '" + path + "' diffs to a whole-value replace; "
                             + "merge does not apply there, so it was left as replace.");
+                }
+                for (String path : result.smartReferencePaths()) {
+                    System.err.println("midgie: note: '" + path + "' is a smart reference; the OID midPoint "
+                            + "resolved its filter to is left in place.");
                 }
                 for (String path : result.protectedSkippedPaths()) {
                     System.err.println("midgie: note: skipped protected value at '" + path

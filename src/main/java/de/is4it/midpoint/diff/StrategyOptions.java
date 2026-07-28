@@ -42,6 +42,14 @@ public final class StrategyOptions {
             description = "Value-equivalence strategy, loosest to strictest. See parseEquivalence() for what each considers.")
     String equivalence;
 
+    @Option(names = "--smart-refs", paramLabel = "accept|verify|resolve", defaultValue = "accept",
+            description = "How a reference the desired file writes as a search filter is judged against the "
+                    + "OID midPoint resolved it to at import. accept: take the live OID as that resolution "
+                    + "(comparing filters when the server kept one). verify: confirm it by running the "
+                    + "filter against the server. resolve: always send the file's form and let midPoint "
+                    + "re-resolve it.")
+    String smartRefs;
+
     @Option(names = "--allow-inplace-merge",
             description = "Proceed even when a merge would edit an accrued (live-only) value in place instead "
                     + "of preserving it (can happen under --equivalence natural-keys). Off by default: the "
@@ -49,18 +57,39 @@ public final class StrategyOptions {
     boolean allowInplaceMerge;
 
     /** Parsed, validated strategy set consumed by {@link DiffEngine}. */
+    /** How a filter-written reference is judged against the OID midPoint resolved it to. */
+    public enum SmartRefs { ACCEPT, VERIFY, RESOLVE }
+
     public static final class Resolved {
         final DiffEngine.Scope scope;
         final ParameterizedEquivalenceStrategy equivalence;
         final DiffEngine.MultiValueStrategy multiValue;
         final boolean allowInplaceMerge;
+        final SmartRefs smartRefs;
 
         Resolved(DiffEngine.Scope scope, ParameterizedEquivalenceStrategy equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge) {
+            this(scope, equivalence, multiValue, allowInplaceMerge, SmartRefs.ACCEPT);
+        }
+
+        Resolved(DiffEngine.Scope scope, ParameterizedEquivalenceStrategy equivalence,
+                DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge, SmartRefs smartRefs) {
             this.scope = scope;
             this.equivalence = equivalence;
             this.multiValue = multiValue;
             this.allowInplaceMerge = allowInplaceMerge;
+            this.smartRefs = smartRefs;
+        }
+
+        /**
+         * The offline half of the judgement. {@code verify} needs a server, so the live layer replaces this
+         * with a searching check; here it behaves as {@code accept}, which is the correct fallback for a
+         * mode that cannot run offline anyway.
+         */
+        DiffEngine.SmartReferenceCheck smartReferenceCheck() {
+            return (smartRefs == SmartRefs.RESOLVE)
+                    ? DiffEngine.SmartReferenceCheck.NEVER
+                    : DiffEngine.SmartReferenceCheck.ACCEPT;
         }
     }
 
@@ -82,7 +111,12 @@ public final class StrategyOptions {
         // strategy only harms accrued state when the diff actually pairs a live-only value and edits it in
         // place. DiffEngine now detects that precisely per delta (DiffResult.accruedInPlaceEditPaths); the
         // command layer refuses those unless --allow-inplace-merge is set.
-        return new Resolved(scopeValue, strategy, multiValue, allowInplaceMerge);
+        SmartRefs smartRefsValue = smartRefsByName(smartRefs);
+        if (smartRefsValue == null) {
+            System.err.println("midgie: --smart-refs must be 'accept', 'verify' or 'resolve', got: " + smartRefs);
+            return null;
+        }
+        return new Resolved(scopeValue, strategy, multiValue, allowInplaceMerge, smartRefsValue);
     }
 
     private DiffEngine.Scope parseScope() {
@@ -91,6 +125,23 @@ public final class StrategyOptions {
             System.err.println("midgie: --scope must be 'present' or 'full', got: " + scope);
         }
         return value;
+    }
+
+    /** Map an {@code accept|verify|resolve} name, or {@code null} if unrecognised. Shared with {@link Policy}. */
+    static SmartRefs smartRefsByName(String value) {
+        if (value == null || value.isBlank()) {
+            return SmartRefs.ACCEPT; // unset means the declared default, not a bad value
+        }
+        switch (value.toLowerCase()) {
+            case "accept":
+                return SmartRefs.ACCEPT;
+            case "verify":
+                return SmartRefs.VERIFY;
+            case "resolve":
+                return SmartRefs.RESOLVE;
+            default:
+                return null;
+        }
     }
 
     /** Map a {@code present|full} name to a scope, or {@code null} if unrecognised. Shared with {@link Policy}. */

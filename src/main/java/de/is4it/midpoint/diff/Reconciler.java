@@ -73,6 +73,10 @@ final class Reconciler {
         this.matchByName = matchByName;
     }
 
+    private DiffEngine.SmartReferenceCheck smartReferenceCheck(StrategyOptions.Resolved strategy) {
+        return SmartReferences.checkFor(strategy, prismContext, client);
+    }
+
     /** Decide what to do with {@code desired}: resolve its current state from the server, then decide. */
     Outcome plan(PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy)
             throws SchemaException, IOException {
@@ -127,7 +131,8 @@ final class Reconciler {
     private Outcome planPatch(String restType, String targetOid, PrismObject<? extends Objectable> desired,
             PrismObject<? extends Objectable> current, StrategyOptions.Resolved strategy) throws SchemaException {
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
-                .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
+                .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
+                        smartReferenceCheck(strategy));
         if (!result.accruedInPlaceEditPaths().isEmpty() && !strategy.allowInplaceMerge) {
             return fail(restType, targetOid, "merge would overwrite accrued value(s) in place at "
                     + String.join(", ", result.accruedInPlaceEditPaths())
@@ -142,6 +147,10 @@ final class Reconciler {
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
         String summary = DeltaOutput.toSummary(result.delta()).replace("\n", "; ");
         List<String> warnings = new ArrayList<>(result.inputWarnings());
+        for (String path : result.smartReferencePaths()) {
+            warnings.add("'" + path + "' is a smart reference; the OID midPoint resolved its filter to is "
+                    + "left in place");
+        }
         if (result.removalWarning() != null) {
             warnings.add(result.removalWarning().replace("\n", "; "));
         }
@@ -177,7 +186,8 @@ final class Reconciler {
                 String created = client.createObject(outcome.restType, outcome.createBody);
                 return (created != null) ? created : outcome.oid;
             case PATCH:
-                client.patchObject(outcome.restType, outcome.oid, outcome.modificationXml);
+                client.patchObject(outcome.restType, outcome.oid, outcome.modificationXml,
+                        DeltaOutput.carriesSmartReference(outcome.delta));
                 return outcome.oid;
             default:
                 return outcome.oid;

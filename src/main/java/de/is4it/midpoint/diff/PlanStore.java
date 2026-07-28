@@ -154,6 +154,49 @@ final class PlanStore {
         return entries;
     }
 
+    /**
+     * Whether a stored patch body sets a reference by search filter, so the replay needs
+     * {@code ?options=reevaluateSearchFilters}.
+     *
+     * <p>Read from the DOM rather than through prism: {@code --apply-plan} replays a reviewed body verbatim
+     * and deliberately never pays the prism bootstrap. It still does not guess from the element name — a
+     * {@code filter} counts only when the value carrying it declares itself a reference, by
+     * {@code xsi:type="…ObjectReferenceType"} or by the {@code oid}/{@code relation} attributes only a
+     * reference has. The unrelated {@code SearchFilterType} fields in the schema (an object collection's
+     * filter, a GUI view's) sit in values that declare none of those.
+     *
+     * <p>Erring toward {@code true} is the safe direction: a missed one leaves the reference unresolved and
+     * breaks the object, while a spurious one only makes midPoint record a warning that filters already on
+     * the object were not touched.
+     */
+    static boolean setsReferenceByFilter(Entry entry) {
+        if (entry.kind != Kind.PATCH || entry.body == null) {
+            return false;
+        }
+        try {
+            org.w3c.dom.NodeList filters =
+                    com.evolveum.midpoint.util.DOMUtil.parseDocument(entry.body).getElementsByTagName("*");
+            for (int i = 0; i < filters.getLength(); i++) {
+                org.w3c.dom.Node node = filters.item(i);
+                if (!"filter".equals(node.getLocalName())
+                        || !(node.getParentNode() instanceof org.w3c.dom.Element parent)) {
+                    continue;
+                }
+                String declaredType = parent.getAttributeNS(
+                        "http://www.w3.org/2001/XMLSchema-instance", "type");
+                if (declaredType.endsWith("ObjectReferenceType")
+                        || parent.hasAttribute("oid") || parent.hasAttribute("relation")) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            // An unreadable body is about to fail the replay anyway; assume the safe direction meanwhile.
+            LOG.debug("could not inspect a plan body for reference filters", e);
+            return true;
+        }
+    }
+
     private static Entry parse(File file) throws IOException {
         String name = file.getName();
         Kind kind;

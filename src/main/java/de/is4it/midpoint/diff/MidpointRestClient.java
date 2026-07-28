@@ -242,7 +242,25 @@ public final class MidpointRestClient {
 
     /** {@code PATCH {type}/{oid}} with an {@code objectModification} body. */
     public void patchObject(String restType, String oid, String modificationXml) throws IOException {
-        HttpRequest request = baseRequest(objectUri(restType, oid))
+        patchObject(restType, oid, modificationXml, false);
+    }
+
+    /**
+     * {@code PATCH {type}/{oid}}, optionally asking midPoint to re-resolve the search filters carried by the
+     * delta ({@code ?options=reevaluateSearchFilters}).
+     *
+     * <p>Needed whenever the delta sets a reference written as a filter rather than an OID. A modify does
+     * <em>not</em> resolve such a filter on its own — that happens at import — so without the option the
+     * reference is stored unresolved and the object is left pointing at nothing. With it, midPoint resolves
+     * the filter and fails the whole modify with its own message if the filter matches no object or several.
+     */
+    public void patchObject(String restType, String oid, String modificationXml,
+            boolean reevaluateSearchFilters) throws IOException {
+        URI uri = objectUri(restType, oid);
+        if (reevaluateSearchFilters) {
+            uri = URI.create(uri + "?options=reevaluateSearchFilters");
+        }
+        HttpRequest request = baseRequest(uri)
                 .header("Content-Type", "application/xml")
                 .header("Accept", "application/xml")
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(modificationXml, StandardCharsets.UTF_8))

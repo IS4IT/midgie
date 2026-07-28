@@ -598,6 +598,133 @@ class DiffCommandTest {
                 + "</systemConfiguration>";
     }
 
+    @Test
+    void aResolvedSmartReferenceIsInSync(@TempDir Path dir) throws Exception {
+        // The reported case, fixture taken from the emitted plan file. The desired file names the connector
+        // by filter so it is portable; midPoint resolved that at import and stored the OID plus
+        // relation="org:default". Diffed literally it reads as a change, and the PATCH that follows strips
+        // the OID and breaks the resource, because a modify does not re-resolve filters.
+        File desired = write(dir, "desired.xml", resourceWithSmartRef(CSV_CONNECTOR));
+        File live = write(dir, "live.xml", resourceWithResolvedRef(CSV_CONNECTOR, CONNECTOR_OID));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.ACCEPT);
+
+        assertTrue(result.delta().isEmpty(), "nothing to reconcile: " + result.delta());
+        assertTrue(result.smartReferencePaths().stream().anyMatch(p -> p.contains("connectorRef")),
+                "and it is reported, not silently dropped: " + result.smartReferencePaths());
+    }
+
+    @Test
+    void aChangedSmartReferenceFilterIsStillAChange(@TempDir Path dir) throws Exception {
+        // Same shape, but the operator re-pointed the filter at another connector. The live object still
+        // carries the old filter, so this is decidable offline and must not be swallowed.
+        File desired = write(dir, "desired.xml", resourceWithSmartRef("com.example.OtherConnector"));
+        File live = write(dir, "live.xml", resourceWithResolvedRef(CSV_CONNECTOR, CONNECTOR_OID));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.ACCEPT);
+
+        assertFalse(result.delta().isEmpty(), "a re-pointed filter is a real change");
+        assertTrue(result.smartReferencePaths().isEmpty(), result.smartReferencePaths().toString());
+    }
+
+    @Test
+    void aStrippedFilterIsAcceptedButResolveModeStillReconciles(@TempDir Path dir) throws Exception {
+        // The docs say the filter "may not even be stored in the repository after import". Then the two
+        // objects cannot settle it, and 'accept' takes the live OID as the resolution; 'resolve' is the
+        // escape hatch that sends the desired form for midPoint to re-resolve.
+        File desired = write(dir, "desired.xml", resourceWithSmartRef(CSV_CONNECTOR));
+        File live = write(dir, "live.xml", resourceWithOidOnlyRef(CONNECTOR_OID));
+
+        assertTrue(engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll(), DiffEngine.SmartReferenceCheck.ACCEPT)
+                .delta().isEmpty(), "accept takes the live OID as the resolution");
+
+        assertFalse(engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll(), DiffEngine.SmartReferenceCheck.NEVER)
+                .delta().isEmpty(), "resolve never suppresses");
+    }
+
+    @Test
+    void anExplicitlyDifferentOidIsUntouchedBySmartReferenceHandling(@TempDir Path dir) throws Exception {
+        // desired names the connector outright. That is not a smart reference, so a differing OID is drift.
+        File desired = write(dir, "desired.xml", resource("aaaaaaaa-1111-1111-1111-111111111111"));
+        File live = write(dir, "live.xml", resource(CONNECTOR_OID));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.ACCEPT);
+
+        assertFalse(result.delta().isEmpty(), "a different OID is a real change");
+        assertTrue(result.smartReferencePaths().isEmpty(), result.smartReferencePaths().toString());
+    }
+
+    @Test
+    void aFilterThatIsNotAReferenceFilterIsNeverSuppressed(@TempDir Path dir) throws Exception {
+        // ObjectCollectionType.filter is a SearchFilterType that has nothing to do with references. It is a
+        // property value, so it cannot reach the smart-reference pass — the case a naive scan for a <filter>
+        // element would get wrong.
+        File desired = write(dir, "desired.xml", objectCollection("c:UserType"));
+        File live = write(dir, "live.xml", objectCollection("c:RoleType"));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.ACCEPT);
+
+        assertFalse(result.delta().isEmpty(), "a changed collection filter is a real change");
+        assertTrue(result.smartReferencePaths().isEmpty(),
+                "and must never be treated as a smart reference: " + result.smartReferencePaths());
+    }
+
+    private static final String CSV_CONNECTOR = "com.evolveum.polygon.connector.csv.CsvConnector";
+    private static final String CONNECTOR_OID = "0fe2d1a8-028f-4a5f-a5a2-33475e8613e6";
+
+    /** The desired form: portable, names the connector by filter, carries no OID. */
+    private static String resourceWithSmartRef(String connectorType) {
+        return resourceShell("  <connectorRef type=\"c:ConnectorType\">\n" + filterXml(connectorType)
+                + "  </connectorRef>\n");
+    }
+
+    /** The live form after import: the resolved OID and relation, filter retained. */
+    private static String resourceWithResolvedRef(String connectorType, String oid) {
+        return resourceShell("  <connectorRef oid=\"" + oid + "\" relation=\"org:default\""
+                + " type=\"c:ConnectorType\">\n" + filterXml(connectorType) + "  </connectorRef>\n");
+    }
+
+    /** The live form when midPoint dropped the filter after resolving it. */
+    private static String resourceWithOidOnlyRef(String oid) {
+        return resourceShell("  <connectorRef oid=\"" + oid + "\" relation=\"org:default\""
+                + " type=\"c:ConnectorType\"/>\n");
+    }
+
+    private static String filterXml(String connectorType) {
+        return "    <filter><q:equal><q:path>c:connectorType</q:path>\n"
+                + "      <q:value>" + connectorType + "</q:value></q:equal></filter>\n";
+    }
+
+    private static String resourceShell(String connectorRef) {
+        return "<resource xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:org=\"http://midpoint.evolveum.com/xml/ns/public/common/org-3\""
+                + " xmlns:q=\"http://prism.evolveum.com/xml/ns/public/query-3\""
+                + " oid=\"33333333-3333-3333-3333-333333333333\">\n"
+                + "  <name>Example Resource</name>\n" + connectorRef + "</resource>";
+    }
+
+    private static String objectCollection(String type) {
+        return "<objectCollection xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:q=\"http://prism.evolveum.com/xml/ns/public/query-3\""
+                + " oid=\"55555555-5555-5555-5555-555555555555\">\n"
+                + "  <name>Example Collection</name>\n"
+                + "  <type>" + type + "</type>\n"
+                + "  <filter><q:equal><q:path>c:name</q:path><q:value>x</q:value></q:equal></filter>\n"
+                + "</objectCollection>";
+    }
+
     private static String resource(String connectorOid) {
         return "<resource xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
                 + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""

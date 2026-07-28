@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,6 +44,7 @@ class MidpointRestClientTest {
     private volatile String lastAccept;
     private volatile String lastContentType;
     private volatile String lastBody;
+    private volatile String lastQuery;
 
     // stub behaviour for the retry/timeout tests
     private final AtomicInteger failuresRemaining = new AtomicInteger(0); // /users/flaky returns 503 this many times
@@ -213,6 +215,18 @@ class MidpointRestClientTest {
     }
 
     @Test
+    void aPatchSettingAReferenceByFilterAsksMidpointToResolveIt() throws Exception {
+        // A modify does not resolve a search filter on its own, so without this option midPoint stores the
+        // reference unresolved and the object is left pointing at nothing.
+        client.patchObject("users", "u1", "<objectModification/>", true);
+        assertEquals("/midpoint/ws/rest/users/u1", lastPath);
+        assertEquals("options=reevaluateSearchFilters", lastQuery);
+
+        client.patchObject("users", "u1", "<objectModification/>", false);
+        assertNull(lastQuery, "an ordinary patch keeps the plain path: " + lastQuery);
+    }
+
+    @Test
     void writesAreNotRetried() {
         failuresRemaining.set(5);
         MidpointRestClient retrying = clientWith(
@@ -249,6 +263,7 @@ class MidpointRestClientTest {
     private void handle(HttpExchange exchange) throws IOException {
         lastMethod = exchange.getRequestMethod();
         lastPath = exchange.getRequestURI().getPath();
+        lastQuery = exchange.getRequestURI().getQuery();
         lastAuth = exchange.getRequestHeaders().getFirst("Authorization");
         lastAccept = exchange.getRequestHeaders().getFirst("Accept");
         lastContentType = exchange.getRequestHeaders().getFirst("Content-Type");

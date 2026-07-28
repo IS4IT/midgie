@@ -104,6 +104,18 @@ the midPoint source tree.
   content-addressed, so every clone agrees regardless of its remotes. `--app` overrides the key, not the
   need for history; shallow clones are refused either way, since their apparent root is only the grafted
   boundary. `GitRevision`, `DeploymentIdentity`, `SyncState`, `RemovalDetector`, `InitCommand`.
+- *Smart references* — a reference may name its target by search filter instead of OID, which is how a
+  resource file stays portable across instances whose connector OIDs differ. midPoint resolves the filter
+  **at import** and stores the OID; the file still carries the filter. Diffed literally that is a change, and
+  the PATCH strips the OID — and a modify does not re-resolve the filter, so the object ends up pointing at
+  nothing (observed: a CSV resource broken exactly this way). So `DiffEngine` drops the paired
+  add-filter/delete-resolved delta when the live OID satisfies the desired filter, and any PATCH that does
+  set a reference by filter is sent with `?options=reevaluateSearchFilters` so the server rebinds it.
+  `--smart-refs accept|verify|resolve` chooses how much evidence is required; `verify` runs the filter
+  against the server, which is the only way to settle it when midPoint dropped the filter after resolving.
+  The judgement keys on the prism *value kind*, never on an element name — only a `PrismReferenceValue` has
+  a filter, so the schema's many unrelated `SearchFilterType` fields cannot be mistaken for one.
+  `SmartReferences`, `DiffEngine.SmartReferenceCheck`.
 - *Blast-radius reporting and input checks* — a partial fragment can silently destroy live state, so the
   danger is reported before any write (advisory, never blocking; `--quiet` silences it). Every summary line
   carries the number of values it removes, and a removing delta prints a prominent `WARNING: this change

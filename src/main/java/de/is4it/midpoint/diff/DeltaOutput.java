@@ -5,7 +5,11 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.util.Collection;
+import java.util.List;
+
 import com.evolveum.midpoint.prism.Objectable;
+import com.evolveum.midpoint.prism.PrismReferenceValue;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
@@ -76,6 +80,37 @@ final class DeltaOutput {
      * removed <em>container</em> value takes everything nested inside it, so this is the number that matters
      * when judging whether a change is destructive.
      */
+    /**
+     * Whether {@code delta} sets any reference by search filter rather than by OID — a <b>smart
+     * reference</b>. Such a PATCH must carry {@code ?options=reevaluateSearchFilters}, or midPoint stores
+     * the reference unresolved and the object is left pointing at nothing.
+     *
+     * <p>Keyed on the prism value kind, never on an element name: only a {@link PrismReferenceValue} has
+     * {@code getFilter()}. The schema has many unrelated {@code SearchFilterType} fields — an object
+     * collection's filter, a GUI view's, a policy constraint's — and scanning the body for {@code <filter>}
+     * would treat those as references.
+     */
+    static boolean carriesSmartReference(ObjectDelta<? extends Objectable> delta) {
+        if (delta == null) {
+            return false;
+        }
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            for (Collection<?> side : List.of(
+                    orEmpty(mod.getValuesToAdd()), orEmpty(mod.getValuesToReplace()))) {
+                for (Object value : side) {
+                    if (value instanceof PrismReferenceValue reference && reference.getFilter() != null) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static Collection<?> orEmpty(Collection<?> values) {
+        return (values != null) ? values : List.of();
+    }
+
     static int removedValueCount(ObjectDelta<? extends Objectable> delta) {
         int removed = 0;
         for (ItemDelta<?, ?> mod : delta.getModifications()) {

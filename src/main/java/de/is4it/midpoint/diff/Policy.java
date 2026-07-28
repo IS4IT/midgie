@@ -40,9 +40,9 @@ final class Policy {
     private static final Logger LOG = LoggerFactory.getLogger(Policy.class);
 
     private static final Set<String> KNOWN_KNOBS =
-            Set.of("scope", "multivalue", "equivalence", "allow-inplace-merge");
+            Set.of("scope", "multivalue", "equivalence", "allow-inplace-merge", "smart-refs");
     private static final Set<String> OBJECT_ONLY_KNOBS =
-            Set.of("scope", "equivalence", "allow-inplace-merge");
+            Set.of("scope", "equivalence", "allow-inplace-merge", "smart-refs");
 
     private static final class Rule {
         final GlobPath selector;
@@ -189,6 +189,8 @@ final class Policy {
                 return mergeByName(value) != null;
             case "allow-inplace-merge":
                 return "true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value);
+            case "smart-refs":
+                return StrategyOptions.smartRefsByName(value) != null;
             default:
                 return false;
         }
@@ -219,10 +221,12 @@ final class Policy {
         DiffEngine.Scope scope = baseline.scope;
         ParameterizedEquivalenceStrategy equivalence = baseline.equivalence;
         boolean allowInplace = baseline.allowInplaceMerge;
+        StrategyOptions.SmartRefs smartRefs = baseline.smartRefs;
         boolean globalMerge = baseline.multiValue.isGlobalMerge();
         Rule scopeRule = null;
         Rule equivalenceRule = null;
         Rule allowInplaceRule = null;
+        Rule smartRefsRule = null;
         Rule globalMergeRule = null;
 
         // Policy rules first, CLI --path rules after. MultiValueStrategy.isMerge breaks a specificity tie by
@@ -261,6 +265,11 @@ final class Policy {
                 allowInplace = Boolean.parseBoolean(rule.settings.get("allow-inplace-merge"));
                 allowInplaceRule = rule;
             }
+            if (rule.settings.containsKey("smart-refs")
+                    && (smartRefsRule == null || moreSpecific(rule, smartRefsRule))) {
+                smartRefs = StrategyOptions.smartRefsByName(rule.settings.get("smart-refs"));
+                smartRefsRule = rule;
+            }
             if (rule.settings.containsKey("multivalue")
                     && (globalMergeRule == null || moreSpecific(rule, globalMergeRule))) {
                 globalMerge = Boolean.TRUE.equals(mergeByName(rule.settings.get("multivalue")));
@@ -271,7 +280,7 @@ final class Policy {
         itemRules.addAll(baseline.multiValue.pathRules());
         DiffEngine.MultiValueStrategy multiValue =
                 DiffEngine.MultiValueStrategy.of(globalMerge, itemRules, identity);
-        return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace);
+        return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace, smartRefs);
     }
 
     /**

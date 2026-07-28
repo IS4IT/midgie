@@ -180,7 +180,8 @@ public class ApplyCommand implements Callable<Integer> {
             PrismObject<? extends Objectable> current)
             throws Exception {
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
-                .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue);
+                .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
+                        SmartReferences.checkFor(strategy, prismContext, client));
 
         // Refuse (by default) before writing anything if the merge would overwrite an accrued value in place.
         if (!result.accruedInPlaceEditPaths().isEmpty() && !strategy.allowInplaceMerge) {
@@ -191,6 +192,10 @@ public class ApplyCommand implements Callable<Integer> {
         for (String path : result.mergeFallbackPaths()) {
             note("midgie: note: '" + path + "' diffs to a whole-value replace; "
                     + "merge does not apply there, so it was left as replace.");
+        }
+        for (String path : result.smartReferencePaths()) {
+            note("midgie: note: '" + path + "' is a smart reference; the OID midPoint resolved its filter "
+                    + "to is left in place.");
         }
         for (String path : result.protectedSkippedPaths()) {
             note("midgie: note: skipped protected value at '" + path
@@ -242,7 +247,8 @@ public class ApplyCommand implements Callable<Integer> {
             return stop;
         }
 
-        client.patchObject(target.restType, target.oid, modificationXml);
+        client.patchObject(target.restType, target.oid, modificationXml,
+                DeltaOutput.carriesSmartReference(result.delta()));
         status("Applied " + changes + " change(s) to " + target.restType + "/" + target.oid + ".");
         return 0;
     }

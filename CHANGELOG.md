@@ -5,6 +5,17 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A resource whose `connectorRef` is a smart reference is no longer broken by reconciling it.** midPoint resolves a reference written as a search filter *at import* and stores the OID; the desired file still carries only the filter, so a literal diff read that as a change and emitted a PATCH that stripped the OID. A modify does not re-resolve the filter — the docs are explicit that smart references work "only during object import" — so the reference was left unresolved and the resource stopped working. midgie now treats the resolved OID as satisfying the filter and reports the object in-sync, naming the path so the decision is visible.
+- **A PATCH that does set a reference by filter carries `?options=reevaluateSearchFilters`**, so midPoint resolves it instead of storing it unresolved. This is what makes a *genuine* change — re-pointing the filter at another connector — work rather than break the object. Sent only for deltas that actually carry such a reference: for non-raw operations midPoint records a warning that filters already on the object are untouched, so it is not something to send blindly.
+
+### Added
+
+- **`--smart-refs accept|verify|resolve`** (also `smart-refs=` per object in `--policy`), for how a filter-written reference is judged against the OID midPoint resolved it to. `accept` (default) compares the filters when the server kept one and otherwise takes the live OID as the resolution; `verify` confirms it by running the filter against the server, treating a mismatch as a real change; `resolve` always sends the file's form for midPoint to re-resolve.
+
 ## [0.4.0] - 2026-07-28
 
 ### Added

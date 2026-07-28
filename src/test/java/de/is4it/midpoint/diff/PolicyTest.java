@@ -214,6 +214,17 @@ class PolicyTest {
     }
 
     @Test
+    void smartRefsResolvesPerObject(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "ResourceType/Prod smart-refs=resolve");
+
+        assertEquals(StrategyOptions.SmartRefs.RESOLVE,
+                policy.resolveFor("ResourceType", "Prod", OID, baseline()).smartRefs);
+        assertEquals(StrategyOptions.SmartRefs.ACCEPT,
+                policy.resolveFor("ResourceType", "Other", OID, baseline()).smartRefs,
+                "another object keeps the CLI baseline");
+    }
+
+    @Test
     void objectOnlyKnobOnAnItemSelectorIsRejected(@TempDir Path dir) {
         IOException ex = assertThrows(IOException.class, () -> load(dir, "**/assignment scope=full"));
         assertTrue(ex.getMessage().contains("object-only knob"), ex.getMessage());
@@ -224,5 +235,6 @@ class PolicyTest {
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager"));             // no settings
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager foo=bar"));     // unknown knob
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager scope=weird")); // bad value
+        assertThrows(IOException.class, () -> load(dir, "RoleType/Manager smart-refs=maybe"));
     }
 }

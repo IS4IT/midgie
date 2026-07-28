@@ -565,7 +565,8 @@ public class DeployCommand implements Callable<Integer> {
                 if (delta == null || delta.isEmpty()) {
                     continue;
                 }
-                client.patchObject(restType, oid, DeltaOutput.toModificationXml(prismContext, delta));
+                client.patchObject(restType, oid, DeltaOutput.toModificationXml(prismContext, delta),
+                        DeltaOutput.carriesSmartReference(delta));
                 status("  pruned       " + entry.getKey() + "  " + group.size() + " value(s)");
             } catch (Exception e) {
                 warn("could not remove " + group.size() + " value(s) from " + entry.getKey()
@@ -1012,7 +1013,10 @@ public class DeployCommand implements Callable<Integer> {
                     client.createObject(entry.restType, entry.body);
                     reportEntry(entry, "created", "", false);
                 } else {
-                    client.patchObject(entry.restType, entry.oid, entry.body);
+                    // The body is replayed byte for byte; it is only parsed to see whether it sets a
+                    // reference by filter, which decides the re-resolve option.
+                    client.patchObject(entry.restType, entry.oid, entry.body,
+                            PlanStore.setsReferenceByFilter(entry));
                     reportEntry(entry, "patched", "", false);
                 }
             } catch (Exception e) {

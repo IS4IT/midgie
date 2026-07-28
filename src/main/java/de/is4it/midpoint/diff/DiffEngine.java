@@ -8,7 +8,10 @@ package de.is4it.midpoint.diff;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Collection;
+import java.util.Set;
+import java.util.IdentityHashMap;
 import java.util.List;
 
 import javax.xml.namespace.QName;
@@ -23,6 +26,7 @@ import com.evolveum.midpoint.prism.PrismContainer;
 import com.evolveum.midpoint.prism.PrismContainerValue;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.prism.PrismReferenceValue;
 import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
@@ -31,6 +35,7 @@ import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
 import com.evolveum.midpoint.prism.key.NaturalKeyDefinition;
 import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.util.exception.SchemaException;
+import com.evolveum.prism.xml.ns._public.query_3.SearchFilterType;
 import com.evolveum.prism.xml.ns._public.types_3.ProtectedStringType;
 
 /**
@@ -68,6 +73,41 @@ public final class DiffEngine {
      */
     public enum Scope { PRESENT, FULL }
 
+    /**
+     * Decides whether a live reference is midPoint's resolution of a desired <b>smart reference</b>.
+     *
+     * <p>A smart reference names its target by search filter instead of OID, so that a file stays portable
+     * across instances where the target's OID differs — {@code connectorRef} is the everyday case. midPoint
+     * resolves the filter <em>at import</em> and stores the OID; the desired file still says "filter, no
+     * OID". Diffed literally that reads as a change, and the resulting PATCH strips the OID and breaks the
+     * object, because a modify does not re-resolve filters unless asked to.
+     *
+     * <p>Whether a given live OID really is that resolution is not always answerable offline — the server
+     * may drop the filter once it has resolved it. So the engine makes the structural judgement (this is a
+     * filter-only reference on one side and an OID on the other) and defers the rest here, which also keeps
+     * the REST-using variant out of the engine.
+     */
+    @FunctionalInterface
+    public interface SmartReferenceCheck {
+
+        boolean isResolutionOf(PrismReferenceValue live, PrismReferenceValue desired);
+
+        /**
+         * Offline judgement, the default. When the server kept the filter, compare it: an equal filter means
+         * the same smart reference and the OID is its resolution, while a different one is a real change the
+         * operator made. When the filter is gone the question cannot be settled from the two objects, and
+         * this accepts — a smart reference is used far more often to initialise a reference than to re-point
+         * one, and {@code --smart-refs verify} settles it against the server for those who need certainty.
+         */
+        SmartReferenceCheck ACCEPT = (live, desired) -> {
+            SearchFilterType liveFilter = live.getFilter();
+            return liveFilter == null || liveFilter.equals(desired.getFilter());
+        };
+
+        /** Never suppress: send the desired form and let midPoint re-resolve it ({@code --smart-refs resolve}). */
+        SmartReferenceCheck NEVER = (live, desired) -> false;
+    }
+
     private final PrismContext prismContext;
 
     public DiffEngine(PrismContext prismContext) {
@@ -81,8 +121,15 @@ public final class DiffEngine {
      */
     public DiffResult diff(File desiredFile, File liveFile, ParameterizedEquivalenceStrategy strategy,
             Scope scope, MultiValueStrategy multiValue) throws SchemaException, IOException {
+        return diff(desiredFile, liveFile, strategy, scope, multiValue, SmartReferenceCheck.NEVER);
+    }
+
+    /** As above, with the smart-reference judgement (see {@link SmartReferenceCheck}). */
+    public DiffResult diff(File desiredFile, File liveFile, ParameterizedEquivalenceStrategy strategy,
+            Scope scope, MultiValueStrategy multiValue, SmartReferenceCheck smartRefs)
+            throws SchemaException, IOException {
         return diff(prismContext.parseObject(desiredFile), prismContext.parseObject(liveFile),
-                strategy, scope, multiValue);
+                strategy, scope, multiValue, smartRefs);
     }
 
     /**
@@ -100,6 +147,18 @@ public final class DiffEngine {
     public DiffResult diff(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> live,
             ParameterizedEquivalenceStrategy strategy, Scope scope, MultiValueStrategy multiValue)
             throws SchemaException {
+        return diff(desired, live, strategy, scope, multiValue, SmartReferenceCheck.NEVER);
+    }
+
+    /**
+     * As {@link #diff(PrismObject, PrismObject, ParameterizedEquivalenceStrategy, Scope, MultiValueStrategy)},
+     * with {@code smartRefs} deciding whether a live OID counts as midPoint's resolution of a desired
+     * filter-only reference. The two file-to-file callers compare inputs the server never touched, so they
+     * use the overload above and never suppress.
+     */
+    public DiffResult diff(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> live,
+            ParameterizedEquivalenceStrategy strategy, Scope scope, MultiValueStrategy multiValue,
+            SmartReferenceCheck smartRefs) throws SchemaException {
 
         Class<?> desiredType = desired.getCompileTimeClass();
         Class<?> liveType = live.getCompileTimeClass();
@@ -126,6 +185,11 @@ public final class DiffEngine {
         // see paired/edited values instead of clean add/delete, so applyMerge has less to strip.
         ObjectDelta<? extends Objectable> delta = reconcile(live, desired, strategy);
 
+        // First, before anything else reads the delta: drop the differences that are not differences at all,
+        // only midPoint having resolved a smart reference. Ahead of applyMerge because merge would otherwise
+        // strip the delete side of a merge-designated reference path and leave nothing to pair the add with.
+        List<String> smartReferences = stripResolvedSmartReferences(delta, smartRefs);
+
         List<String> mergeFallbacks = multiValue.isMergeActive() ? applyMerge(delta, multiValue) : List.of();
 
         if (scope == Scope.PRESENT) {
@@ -151,12 +215,13 @@ public final class DiffEngine {
         List<String> inputWarnings = findInputWarnings(desired, live, multiValue);
 
         LOG.debug("diff {} (scope={}, {}) → {} modification(s), removes {} value(s); mergeFallback={}, "
-                + "protectedSkipped={}, accruedInPlace={}, inputWarnings={}",
+                + "protectedSkipped={}, accruedInPlace={}, inputWarnings={}, smartRefs={}",
                 desiredType != null ? desiredType.getSimpleName() : "?", scope,
                 multiValue.isMergeActive() ? "merge" : "replace", delta.getModifications().size(),
                 DeltaOutput.removedValueCount(delta), mergeFallbacks, protectedSkipped, accruedInPlaceEdits,
-                inputWarnings.size());
-        return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits, inputWarnings);
+                inputWarnings.size(), smartReferences);
+        return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits, inputWarnings,
+                smartReferences);
     }
 
     private static <O extends Objectable> ObjectDelta<O> reconcile(
@@ -220,6 +285,89 @@ public final class DiffEngine {
      * (e.g. a password buried in an added assignment) are not detected here; those are rare and would need
      * a deep value walk — call this out in the docs rather than pretend it is handled.
      */
+    /**
+     * Drop the deltas that only say "midPoint resolved this smart reference", and report their paths.
+     *
+     * <p>The desired file names the target by filter and carries no OID; the live object carries the OID the
+     * server resolved that filter to (and {@code relation="org:default"}). prism sees two unequal reference
+     * values, so it emits an add of the filter-only form paired with a delete of the resolved one. Sending
+     * that strips the OID, and a modify does not re-resolve filters unless explicitly asked to, so the
+     * object is left pointing at nothing.
+     *
+     * <p>Everything here keys on the prism <em>value kind</em>, never on an element name: only a
+     * {@link PrismReferenceValue} has {@code getFilter()}, so the many unrelated {@code SearchFilterType}
+     * fields in the schema — an object collection's filter, a GUI view's, a policy constraint's — are
+     * property values and cannot reach this pass.
+     */
+    private static List<String> stripResolvedSmartReferences(ObjectDelta<?> delta, SmartReferenceCheck check) {
+        List<String> paths = new ArrayList<>();
+        List<ItemDelta<?, ?>> emptied = new ArrayList<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            List<PrismReferenceValue> desiredValues = referenceValues(mod.getValuesToAdd());
+            List<PrismReferenceValue> liveValues = referenceValues(mod.getValuesToDelete());
+            if (desiredValues.isEmpty() || liveValues.isEmpty()) {
+                continue;
+            }
+            // Identity, not equality: two reference values can be equal by content and must still be
+            // consumed separately.
+            Set<PrismReferenceValue> takenLive = Collections.newSetFromMap(new IdentityHashMap<>());
+            List<PrismReferenceValue> resolvedDesired = new ArrayList<>();
+            for (PrismReferenceValue desiredValue : desiredValues) {
+                PrismReferenceValue match = matchingResolution(desiredValue, liveValues, takenLive, check);
+                if (match != null) {
+                    takenLive.add(match);
+                    resolvedDesired.add(desiredValue);
+                }
+            }
+            if (resolvedDesired.isEmpty()) {
+                continue;
+            }
+            resolvedDesired.forEach(mod::removeValueToAdd);
+            takenLive.forEach(mod::removeValueToDelete);
+            paths.add(mod.getPath().toString());
+            if (mod.isEmpty()) {
+                emptied.add(mod);
+            }
+        }
+        emptied.forEach(delta::removeModification);
+        return paths;
+    }
+
+    /** The live value that is {@code desired}'s resolution, or {@code null} when none of them is. */
+    private static PrismReferenceValue matchingResolution(PrismReferenceValue desired,
+            List<PrismReferenceValue> liveValues, Set<PrismReferenceValue> taken, SmartReferenceCheck check) {
+        if (desired.getOid() != null || desired.getFilter() == null) {
+            return null; // not a smart reference: it names its target outright, or names nothing
+        }
+        for (PrismReferenceValue live : liveValues) {
+            if (taken.contains(live) || live.getOid() == null) {
+                continue;
+            }
+            // A relation or target type spelled out in desired and contradicted by live is a real change,
+            // whatever the filter says; desired leaving them out is the normal shape.
+            if (desired.getRelation() != null && !desired.getRelation().equals(live.getRelation())) {
+                continue;
+            }
+            if (desired.getTargetType() != null && !desired.getTargetType().equals(live.getTargetType())) {
+                continue;
+            }
+            if (check.isResolutionOf(live, desired)) {
+                return live;
+            }
+        }
+        return null;
+    }
+
+    private static List<PrismReferenceValue> referenceValues(Collection<?> values) {
+        List<PrismReferenceValue> references = new ArrayList<>();
+        for (Object value : (values != null) ? values : List.of()) {
+            if (value instanceof PrismReferenceValue reference) {
+                references.add(reference);
+            }
+        }
+        return references;
+    }
+
     private static List<String> stripProtectedValues(ObjectDelta<?> delta) {
         List<String> skipped = new ArrayList<>();
         List<ItemDelta<?, ?>> toRemove = new ArrayList<>();
@@ -646,15 +794,26 @@ public final class DiffEngine {
         private final List<String> protectedSkippedPaths;
         private final List<String> accruedInPlaceEditPaths;
         private final List<String> inputWarnings;
+        private final List<String> smartReferencePaths;
 
         DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths,
                 List<String> protectedSkippedPaths, List<String> accruedInPlaceEditPaths,
-                List<String> inputWarnings) {
+                List<String> inputWarnings, List<String> smartReferencePaths) {
             this.delta = delta;
             this.mergeFallbackPaths = List.copyOf(mergeFallbackPaths);
             this.protectedSkippedPaths = List.copyOf(protectedSkippedPaths);
             this.accruedInPlaceEditPaths = List.copyOf(accruedInPlaceEditPaths);
             this.inputWarnings = List.copyOf(inputWarnings);
+            this.smartReferencePaths = List.copyOf(smartReferencePaths);
+        }
+
+        /**
+         * Paths where the live object holds midPoint's resolution of a smart reference the desired file
+         * writes as a filter, and the difference was therefore left alone (see
+         * {@code stripResolvedSmartReferences}).
+         */
+        public List<String> smartReferencePaths() {
+            return smartReferencePaths;
         }
 
         /**
