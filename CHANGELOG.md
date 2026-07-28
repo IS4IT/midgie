@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-07-28
+
+### Changed
+
+- **The container image can clone the tree itself.** It gained `openssh-client` (so `git clone` over SSH works at all — `ssh` was absent, and only HTTPS could be used), `less` (git's pager, so an interactive `git log` or `git diff` pages instead of failing), and an explicit `curl`, which the base image happens to ship but nothing guaranteed. Cloning over SSH still needs a key mounted at `0400` that the pod's UID can read, and a `known_hosts` or `StrictHostKeyChecking=accept-new`.
+
 ## [0.4.2] - 2026-07-28
 
 ### Added
@@ -172,7 +178,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/IS4IT/midgie/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/IS4IT/midgie/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/IS4IT/midgie/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/IS4IT/midgie/compare/v0.3.1...v0.4.0
