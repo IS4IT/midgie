@@ -5,6 +5,16 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A container image, `is4it/midgie`**, published to Docker Hub for `linux/amd64` and `linux/arm64` on every release tag. It carries the fat JAR, the `bin/midgie` launcher and git — which midgie forks for the deployment identity and for recovering previously applied content, so an image without it would apply fine and quietly detect no removals. The entrypoint is `midgie` itself, so a Kubernetes Job passes the subcommand line as `args:`; an interactive shell needs `--command -- sleep infinity` plus `kubectl exec`. `git safe.directory` is relaxed system-wide so a tree cloned by an init container under another UID stays readable rather than disabling tracking silently. Built from `docker/midgie/Dockerfile`; CI builds it for both platforms on every PR without pushing.
+
+### Changed
+
+- **A `--policy` selector segment that mixes a wildcard with other text is now refused when the file loads**, naming the line. `RoleType/App-*` is not a prefix match and `RoleType/* **/assignment` is not two rules on one line — both parsed into a literal segment no object name can equal, so the rule matched nothing and every object it was written for silently kept the CLI strategy, turning a `multivalue=merge` meant to protect accrued values back into replace. A wildcard has to be a whole segment (`RoleType/*` for every role, `RoleType/*/assignment` for one container of every role). An object name that really contains an asterisk is written `\*`, as a slash is `\/`, and `init --write-policy` emits that escape itself.
+
 ## [0.4.1] - 2026-07-28
 
 ### Added

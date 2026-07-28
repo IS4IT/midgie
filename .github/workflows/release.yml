@@ -2,9 +2,13 @@
 #
 # SPDX-License-Identifier: EUPL-1.2
 
-# Release: pushing a version tag (e.g. v0.1.0) builds the fat JAR stamped with the tag's version and
-# publishes a GitHub Release with the JAR attached and notes taken from CHANGELOG.md. The pom stays on
-# -SNAPSHOT; the tag is the single source of truth for the release version, applied with versions:set.
+# Release: pushing a version tag (e.g. v0.1.0) builds the fat JAR stamped with the tag's version, pushes
+# the multi-arch container image to docker.io/is4it/midgie, and publishes a GitHub Release with the JAR
+# attached and notes taken from CHANGELOG.md. The pom stays on -SNAPSHOT; the tag is the single source of
+# truth for the release version, applied with versions:set.
+#
+# The image push needs two repository secrets: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access
+# token with Read/Write on is4it/midgie).
 #
 # To cut a release: update CHANGELOG.md (move Unreleased -> the new version), then:
 #   git tag -a v0.1.0 -m "midgie 0.1.0" && git push origin v0.1.0
@@ -47,6 +51,45 @@ jobs:
 
       - name: Name the artifact with the version
         run: cp target/midgie.jar "midgie-${VERSION}.jar"
+
+      # --- container image (docker.io/is4it/midgie) ---------------------------
+      # Before the GitHub Release, so a registry failure does not leave a published release advertising an
+      # image that was never pushed. The JAR is architecture-independent and already built, so only the
+      # base image's apt install runs under emulation.
+      - name: Set up QEMU (for the linux/arm64 layer)
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute image tags
+        # A pre-release must not become ':latest' — same reason the GitHub Release is marked prerelease.
+        run: |
+          tags="is4it/midgie:${VERSION}"
+          case "$VERSION" in
+            *-*) ;;
+            *)   tags="${tags},is4it/midgie:latest" ;;
+          esac
+          echo "IMAGE_TAGS=${tags}" >> "$GITHUB_ENV"
+
+      - name: Build & push the image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: docker/midgie/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: JAR=midgie-${{ env.VERSION }}.jar
+          tags: ${{ env.IMAGE_TAGS }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Extract release notes from CHANGELOG.md
         run: |

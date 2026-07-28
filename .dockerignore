@@ -1,0 +1,11 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+#
+# The image build context is the project root, but the image needs exactly two files: the launcher and
+# one JAR. Everything else — .git, the rest of target/, the test rig — is excluded, so the context stays
+# small and a stale build artefact cannot end up in the image by accident.
+*
+!bin
+!target/midgie.jar
+!midgie-*.jar

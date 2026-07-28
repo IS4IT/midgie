@@ -46,6 +46,35 @@ classgraph (a transitive prism dependency) prints during startup. Those warnings
 stderr, so that launch flag is the only way to suppress them — running the JAR directly instead? Set
 `JDK_JAVA_OPTIONS=--sun-misc-unsafe-memory-access=allow`.
 
+### Container image
+
+Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
+
+```bash
+docker run --rm -v "$PWD:/work" is4it/midgie:0.4.1 diff a.xml b.xml
+
+# In a Job, command: is the entrypoint and args: the subcommand line.
+#   args: ["deploy", "/work", "--url", "https://mp/midpoint", "--yes"]
+```
+
+For a shell — to run midgie by hand against a checkout in the pod — the container needs something long-running, since the entrypoint would otherwise print help and exit:
+
+```bash
+kubectl run midgie --image=is4it/midgie:0.4.1 --restart=Never --command -- sleep infinity
+kubectl exec -it midgie -- bash          # then: midgie deploy /work --url ...
+docker run -d --name midgie --entrypoint sleep is4it/midgie:0.4.1 infinity   # the docker equivalent
+```
+
+`docker run <image> bash` does *not* give a shell — it runs `midgie bash`, which is rejected as an unknown subcommand. Use `--entrypoint bash`.
+
+Two things about the git side. **Clone with full history**: midgie refuses a shallow clone for tracking, so the usual `--depth 1` / `git-sync` default silently disables removal detection. And the image sets `safe.directory=*` system-wide, because a tree cloned by an init container is owned by a different UID than the one midgie runs as, and git's ownership refusal surfaces only as "the tree is not in a git repository" — tracking then goes unavailable without anything failing. If you would rather keep git's check, drop that line from `docker/midgie/Dockerfile` and run both containers as the same UID.
+
+The image runs as UID 1001 (group 0, so an OpenShift-assigned UID can still write `$HOME` and `/work`) and builds from `docker/midgie/Dockerfile`, which copies in a JAR you have already built:
+
+```bash
+mvn -q package && docker build -f docker/midgie/Dockerfile -t is4it/midgie:dev .
+```
+
 ## Commands
 
 `midgie` has four subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`init`** is a one-off that enables removal detection for a server (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
