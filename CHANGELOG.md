@@ -5,19 +5,11 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.1] - 2026-07-28
 
-### Fixed
+### Added
 
-- **A resource whose `connectorRef` is a smart reference is no longer broken by reconciling it.** midPoint resolves a reference written as a search filter *at import* and stores the OID; the desired file still carries only the filter, so a literal diff read that as a change and emitted a PATCH that stripped the OID. A modify does not re-resolve the filter — the docs are explicit that smart references work "only during object import" — so the reference was left unresolved and the resource stopped working. midgie now treats the resolved OID as satisfying the filter and reports the object in-sync, naming the path so the decision is visible.
-- **A PATCH that does set a reference by filter carries `?options=reevaluateSearchFilters`**, so midPoint resolves it instead of storing it unresolved. This is what makes a *genuine* change — re-pointing the filter at another connector — work rather than break the object. Sent only for deltas that actually carry such a reference: for non-raw operations midPoint records a warning that filters already on the object are untouched, so it is not something to send blindly.
-
-- **midPoint's own partial/handled-error statuses are no longer read as plain success.** The server answers
-  `250` for a partial error and `240` for a handled one; both are 2xx, so an "is it 2xx" test treated them as
-  clean. A write that came back that way was reported as applied, and a read was diffed as though the object
-  had arrived whole. Writes now fail with midPoint's own message. Reads warn and continue, because a resource
-  whose schema midPoint cannot complete answers 250 to every read while remaining perfectly deployable —
-  verified against a live server, where such a resource returns 250 on GET and search but 204 on PATCH.
+- **`--smart-refs accept|verify|resolve`** (also `smart-refs=` per object in `--policy`), for how a filter-written reference is judged against the OID midPoint resolved it to. `accept` (default) compares the filters when the server kept one and otherwise takes the live OID as the resolution; `verify` confirms it by running the filter against the server, treating a mismatch as a real change; `resolve` always sends the file's form for midPoint to re-resolve.
 
 ### Changed
 
@@ -26,9 +18,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the cluster — which is exactly the least-privilege deployment account whose version check used to go
   silently missing.
 
-### Added
+### Fixed
 
-- **`--smart-refs accept|verify|resolve`** (also `smart-refs=` per object in `--policy`), for how a filter-written reference is judged against the OID midPoint resolved it to. `accept` (default) compares the filters when the server kept one and otherwise takes the live OID as the resolution; `verify` confirms it by running the filter against the server, treating a mismatch as a real change; `resolve` always sends the file's form for midPoint to re-resolve.
+- **A resource whose `connectorRef` is a smart reference is no longer broken by reconciling it.** midPoint resolves a reference written as a search filter *at import* and stores the OID; the desired file still carries only the filter, so a literal diff read that as a change and emitted a PATCH that stripped the OID. A modify does not re-resolve the filter — the docs are explicit that smart references work "only during object import" — so the reference was left unresolved and the resource stopped working. midgie now treats the resolved OID as satisfying the filter and reports the object in-sync, naming the path so the decision is visible.
+- **A PATCH that does set a reference by filter carries `?options=reevaluateSearchFilters`**, so midPoint resolves it instead of storing it unresolved. This is what makes a *genuine* change — re-pointing the filter at another connector — work rather than break the object. Sent only for deltas that actually carry such a reference: for non-raw operations midPoint records a warning that filters already on the object are untouched, so it is not something to send blindly.
+- **midPoint's own partial/handled-error statuses are no longer read as plain success.** The server answers
+  `250` for a partial error and `240` for a handled one; both are 2xx, so an "is it 2xx" test treated them as
+  clean. A write that came back that way was reported as applied, and a read was diffed as though the object
+  had arrived whole. Writes now fail with midPoint's own message. Reads warn and continue, because a resource
+  whose schema midPoint cannot complete answers 250 to every read while remaining perfectly deployable —
+  verified against a live server, where such a resource returns 250 on GET and search but 204 on PATCH.
 
 ## [0.4.0] - 2026-07-28
 
@@ -163,7 +162,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/IS4IT/midgie/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/IS4IT/midgie/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/IS4IT/midgie/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/IS4IT/midgie/compare/v0.2.2...v0.3.0
