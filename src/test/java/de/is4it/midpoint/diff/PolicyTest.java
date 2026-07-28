@@ -231,6 +231,40 @@ class PolicyTest {
     }
 
     @Test
+    void aSegmentMixingAWildcardWithOtherTextIsRejected(@TempDir Path dir) throws Exception {
+        // Both of these parsed into a literal segment no name can equal, so the rule matched nothing and the
+        // objects it was written for silently kept the CLI strategy — the failure mode a merge rule is
+        // written to prevent. A load-time error with a line number beats an end-of-run "matched nothing" note.
+        IOException withinSegment = assertThrows(IOException.class,
+                () -> load(dir, "RoleType/App-* multivalue=merge"));      // not a prefix match
+        assertTrue(withinSegment.getMessage().contains("whole segment"), withinSegment.getMessage());
+        assertTrue(withinSegment.getMessage().contains("line 1"), withinSegment.getMessage());
+
+        // Two globs on one line: the selector is everything before the first knob, so this reads as one
+        // segment holding a space rather than as an object selector plus an item selector.
+        IOException twoGlobs = assertThrows(IOException.class,
+                () -> load(dir, "RoleType/* **/assignment multivalue=merge"));
+        assertTrue(twoGlobs.getMessage().contains("one selector is one glob"), twoGlobs.getMessage());
+
+        // The single-glob form of that intent stays valid.
+        assertTrue(load(dir, "RoleType/*/assignment multivalue=merge")
+                        .resolveFor("RoleType", "Manager", OID, baseline())
+                        .multiValue.isMerge(ItemPath.fromString("assignment")),
+                "Type/Name/item in one glob is how an item rule is scoped to a type");
+    }
+
+    @Test
+    void anAsteriskInAnObjectNameIsEscaped(@TempDir Path dir) throws Exception {
+        // Rejecting a partial wildcard would otherwise take away the only way to name such an object, and
+        // 'init --write-policy' emits names verbatim, so it needs a form that reads back.
+        Policy policy = load(dir, "RoleType/App \\* Admin scope=full");
+
+        assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("RoleType", "App * Admin", OID, baseline()).scope);
+        assertEquals(DiffEngine.Scope.PRESENT, policy.resolveFor("RoleType", "App X Admin", OID, baseline()).scope,
+                "and it stays a literal rather than becoming a wildcard");
+    }
+
+    @Test
     void malformedLinesAreRejected(@TempDir Path dir) {
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager"));             // no settings
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager foo=bar"));     // unknown knob

@@ -85,7 +85,7 @@ class InitCommandTest {
         // file it writes and midgie then rejects would break the command line midgie itself suggested.
         // Object names here carry the characters the selector grammar gives its own meaning to.
         Path tree = Files.createDirectories(dir.resolve("config"));
-        Files.writeString(tree.resolve("resource.xml"), resource("Prod / LDAP"), StandardCharsets.UTF_8);
+        Files.writeString(tree.resolve("resource.xml"), resource("Prod / LDAP *"), StandardCharsets.UTF_8);
         Files.writeString(tree.resolve("org.xml"), org("ou=people"), StandardCharsets.UTF_8);
         Path policy = dir.resolve("midgie.policy");
 
@@ -99,7 +99,7 @@ class InitCommandTest {
                 "a keyed container that carries its whole key is suggested:\n" + content);
 
         Policy loaded = Policy.load(policy.toFile());
-        StrategyOptions.Resolved resolved = loaded.resolveFor("ResourceType", "Prod / LDAP",
+        StrategyOptions.Resolved resolved = loaded.resolveFor("ResourceType", "Prod / LDAP *",
                 "11111111-1111-1111-1111-111111111111", baseline());
         assertTrue(resolved.multiValue.isMerge(
                         com.evolveum.midpoint.prism.path.ItemPath.fromString("schemaHandling/objectType")),

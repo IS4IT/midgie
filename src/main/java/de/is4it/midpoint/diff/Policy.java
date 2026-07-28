@@ -25,7 +25,9 @@ import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
  * Per-object / per-item diff-strategy overrides for {@code deploy}, loaded from a central policy file
  * ({@code --policy}). Each non-blank, non-{@code #} line is {@code <selector> [:] <key=value>…}: the selector
  * is a single glob over {@code Type/Name/item/subitem…} (or {@code oid:<oid>/item…}) with {@code *} (exactly
- * one segment) and {@code **} (zero or more segments) at any level.
+ * one segment) and {@code **} (zero or more segments) at any level. Each wildcard is a whole segment; a
+ * segment that mixes one with other text is rejected at load time rather than read as a literal that matches
+ * nothing.
  *
  * <p>A selector that stops at the object identity sets object-level knobs ({@code scope}, {@code equivalence},
  * {@code allow-inplace-merge}, and a default {@code multivalue}); a selector that reaches an item sets
@@ -134,7 +136,13 @@ final class Policy {
             throw new IOException("policy line " + lineNumber + " has a selector but no settings: " + line);
         }
         // The leading Type/Name segments name an object, so 'prefix:' stripping must not reach them.
-        GlobPath selector = GlobPath.parse(selectorText, identityDepth(selectorText));
+        GlobPath selector;
+        try {
+            selector = GlobPath.parse(selectorText, identityDepth(selectorText));
+        } catch (IllegalArgumentException e) {
+            throw new IOException("policy line " + lineNumber + " has an invalid selector: " + e.getMessage()
+                    + ": " + line);
+        }
         if (selectorText.isEmpty() || selector.isEmpty()) {
             throw new IOException("policy line " + lineNumber + " has an empty selector: " + line);
         }

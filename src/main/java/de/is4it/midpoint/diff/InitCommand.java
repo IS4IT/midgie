@@ -202,7 +202,7 @@ public class InitCommand implements Callable<Integer> {
                 continue;
             }
             String selector = object.getCompileTimeClass().getSimpleName() + "/"
-                    + escapeSlashes(object.getName() != null ? object.getName().getOrig() : "?");
+                    + escapeSelectorChars(object.getName() != null ? object.getName().getOrig() : "?");
             keyedByObject.computeIfAbsent(selector, key -> new LinkedHashMap<>()).putAll(keyed);
         }
 
@@ -252,9 +252,13 @@ public class InitCommand implements Callable<Integer> {
         return (selector.indexOf('=') >= 0) ? "\"" + selector + "\"" : selector;
     }
 
-    /** A {@code /} inside an object name is escaped, since the selector itself is a /-separated path. */
-    private static String escapeSlashes(String name) {
-        return name.replace("/", "\\/");
+    /**
+     * Escape the selector metacharacters an object name may contain: a {@code /}, since the selector itself
+     * is a /-separated path, and a {@code *}, which would otherwise be refused as a segment mixing a wildcard
+     * with other text.
+     */
+    private static String escapeSelectorChars(String name) {
+        return name.replace("*", "\\*").replace("/", "\\/");
     }
 
     private void status(String message) {

@@ -13,10 +13,10 @@ import com.evolveum.midpoint.prism.path.ItemPath;
 /**
  * A {@code /}-separated glob over path segments, used by the deploy strategy {@link Policy} and by per-path
  * multi-value rules ({@link DiffEngine.MultiValueStrategy.PathRule}). Two wildcards: {@code *} matches
- * exactly one segment, {@code **} matches zero or more segments, at any position. Literal segments match by
- * local name — a leading {@code prefix:} is stripped so a namespace-qualified selector lines up with the
- * diff's unqualified paths; an {@code oid:} head is kept verbatim, as it is an identity marker rather than a
- * namespace prefix.
+ * exactly one segment, {@code **} matches zero or more segments, at any position. Each is a whole segment —
+ * there is no matching within a segment. Literal segments match by local name — a leading {@code prefix:} is
+ * stripped so a namespace-qualified selector lines up with the diff's unqualified paths; an {@code oid:} head
+ * is kept verbatim, as it is an identity marker rather than a namespace prefix.
  */
 final class GlobPath {
 
@@ -42,6 +42,9 @@ final class GlobPath {
      * own naming convention puts colons in names ({@code Reconciliation: OpenDJ}), and stripping there made
      * a rule for {@code RoleType/IT:Helpdesk} silently target an unrelated role called {@code Helpdesk} —
      * or, with a space after the colon, match nothing at all.
+     *
+     * @throws IllegalArgumentException if a segment mixes a wildcard with other text (see
+     *         {@link #rejectPartialWildcard})
      */
     static GlobPath parse(String text, int identitySegments) {
         List<String> segs = new ArrayList<>();
@@ -51,10 +54,48 @@ final class GlobPath {
             if (seg.isEmpty()) {
                 continue;
             }
-            segs.add(index < identitySegments ? seg : normalize(seg));
+            rejectPartialWildcard(seg);
+            segs.add(unescapeStars(index < identitySegments ? seg : normalize(seg)));
             index++;
         }
         return new GlobPath(segs);
+    }
+
+    /**
+     * A segment either <em>is</em> a wildcard or holds none of one.
+     *
+     * <p>Both ways of getting this wrong used to parse into a literal segment that no name can equal, so the
+     * rule matched nothing and every object it was written for silently kept the CLI strategy — a
+     * {@code multivalue=merge} written to protect accrued values quietly became replace. One is expecting
+     * matching <em>within</em> a segment ({@code App-*} as "roles starting with App-"); the other is writing
+     * two globs on one line, which the whitespace-tolerant selector grammar swallows as a single segment
+     * holding a space. Neither is supported, so both are refused at load time instead. A name that genuinely
+     * contains an asterisk is written {@code \*}.
+     */
+    private static void rejectPartialWildcard(String seg) {
+        if (STAR.equals(seg) || GLOBSTAR.equals(seg) || !containsUnescapedStar(seg)) {
+            return;
+        }
+        throw new IllegalArgumentException("segment '" + seg + "' mixes '*' with other text; a wildcard has to"
+                + " be a whole segment ('*' one segment, '**' any depth), and one selector is one glob"
+                + " — write '\\*' for a literal asterisk in a name");
+    }
+
+    private static boolean containsUnescapedStar(String seg) {
+        for (int i = 0; i < seg.length(); i++) {
+            char c = seg.charAt(i);
+            if (c == '\\' && i + 1 < seg.length()) {
+                i++;    // whatever follows is a literal, including '*'
+            } else if (c == '*') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Turn {@code \*} into the literal asterisk it stands for, now that the wildcard check has run. */
+    private static String unescapeStars(String seg) {
+        return (seg.indexOf('\\') < 0) ? seg : seg.replace("\\*", "*");
     }
 
     /**
