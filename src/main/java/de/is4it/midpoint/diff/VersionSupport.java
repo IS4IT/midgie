@@ -53,25 +53,24 @@ final class VersionSupport {
         }
     }
 
-    /** The running server's version, from its node build info ({@code GET /nodes}). Null if unavailable. */
+    /**
+     * The running server's version, from the node it answers on ({@code GET /nodes/current}).
+     * {@code null} when it cannot be determined.
+     *
+     * <p>{@code /nodes/current} rather than a listing of every node: it is one object instead of a
+     * collection, it names the node actually serving the request rather than whichever entry of a cluster
+     * happens to carry build info, and it is readable by an account that may not enumerate all nodes —
+     * which is the shape of a least-privilege deployment account, and the case where this check used to go
+     * silently missing.
+     */
     static String liveVersion(PrismContext prismContext, MidpointRestClient client) {
         try {
-            String xml = client.listObjects("nodes");
-            ObjectListType list = prismContext.parserFor(xml).xml().parseRealValue(ObjectListType.class);
-            if (list == null) {
-                return null;
-            }
-            for (ObjectType object : list.getObject()) {
-                if (object instanceof NodeType) {
-                    BuildInformationType build = ((NodeType) object).getBuild();
-                    if (build != null && blankToNull(build.getVersion()) != null) {
-                        return build.getVersion();
-                    }
-                }
-            }
-            return null;
+            String xml = client.getObject("nodes", "current");
+            NodeType node = prismContext.parserFor(xml).xml().parseRealValue(NodeType.class);
+            BuildInformationType build = (node != null) ? node.getBuild() : null;
+            return (build != null) ? blankToNull(build.getVersion()) : null;
         } catch (Exception e) {
-            LOG.debug("could not read the live server version (GET /nodes)", e);
+            LOG.debug("could not read the live server version (GET /nodes/current)", e);
             return null;
         }
     }
@@ -88,7 +87,7 @@ final class VersionSupport {
             // Best-effort, but not mute. A least-privilege deploy account has no read on NodeType and gets
             // 403 here, so the guard against parsing a different major line with the bundled schema — the
             // hazard CLAUDE.md calls out — silently never ran.
-            System.err.println("midgie: note: could not read the server version (GET /nodes); "
+            System.err.println("midgie: note: could not read the server version (GET /nodes/current); "
                     + "the schema-version check did not run.");
             return;
         }

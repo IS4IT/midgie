@@ -349,6 +349,7 @@ public final class MidpointRestClient {
                     throw new RestException(status,
                             what + " failed: HTTP " + status + statusHint(status) + shortBody(response.body()));
                 }
+                checkMidpointResultStatus(status, what, responseBody, safeRead);
                 return response;
             } catch (java.net.ConnectException | java.net.http.HttpTimeoutException e) {
                 LOG.debug("{}  transport error: {}", what, e.toString());
@@ -375,6 +376,61 @@ public final class MidpointRestClient {
                 throw new IOException(what + " was interrupted", e);
             }
         }
+    }
+
+    /**
+     * midPoint signals an imperfect operation with its own 2xx codes, which a plain "is it 2xx" test reads as
+     * plain success: {@code 250} = partial error, {@code 240} = handled error
+     * ({@code AbstractRestController.createResponse}). The body is then either the payload or the
+     * {@code OperationResult}, depending on the endpoint.
+     *
+     * <p>A <b>write</b> that comes back this way did not fully succeed, and reporting it as applied is the
+     * worst outcome available, so it fails. A <b>read</b> is different: a resource whose schema midPoint
+     * cannot complete answers 250 to every GET while remaining perfectly deployable — refusing it would make
+     * a half-configured resource impossible to reconcile — so it warns and carries on. Verified against a
+     * live server: that resource's GET and search return 250 while its PATCH returns 204.
+     *
+     * <p>When the body is the {@code OperationResult} rather than the payload there is nothing to work with,
+     * so that fails too even for a read.
+     */
+    private static void checkMidpointResultStatus(int status, String what, String body, boolean safeRead)
+            throws RestException {
+        if (status != 240 && status != 250) {
+            return;
+        }
+        String kind = (status == 250) ? "partial" : "handled";
+        String reason = midpointResultMessage(body);
+        if (!safeRead || isOperationResultBody(body)) {
+            throw new RestException(status, what + " — midPoint reported a " + kind + " error (HTTP " + status
+                    + ")" + (reason.isEmpty() ? "." : ": " + reason));
+        }
+        System.err.println("midgie: warning: " + what + " — midPoint reported a " + kind + " error (HTTP "
+                + status + ")" + (reason.isEmpty() ? "" : ": " + reason)
+                + ". The object may be incomplete; treat a full-scope diff of it with care.");
+    }
+
+    /**
+     * Whether the response carries an {@code OperationResult} instead of the payload. Read off the root
+     * element's declared type: this class deliberately holds no prism context, and the discriminator is the
+     * envelope midPoint chose, not a guess at content.
+     */
+    private static boolean isOperationResultBody(String body) {
+        if (body == null) {
+            return false;
+        }
+        java.util.regex.Matcher root = java.util.regex.Pattern
+                .compile("xsi:type=\"[^\"]*OperationResultType\"").matcher(body);
+        return root.find() && root.start() < 2000;
+    }
+
+    /** midPoint's own explanation, when the body carries one. */
+    private static String midpointResultMessage(String body) {
+        if (body == null) {
+            return "";
+        }
+        java.util.regex.Matcher message = java.util.regex.Pattern
+                .compile("<message>(.*?)</message>", java.util.regex.Pattern.DOTALL).matcher(body);
+        return message.find() ? message.group(1).strip() : "";
     }
 
     /** Server-unavailable statuses worth retrying: 503, plus 502/504 from a proxy (e.g. midPoint starting). */

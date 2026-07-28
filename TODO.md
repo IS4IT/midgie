@@ -89,6 +89,15 @@ separates "you removed this" from "someone else added it". Full design in DESIGN
 
 ## J. Optional / deferred
 
+- [ ] **`--test-resources` after an apply/deploy.** midPoint exposes `POST /resources/{oid}/test`, which runs
+  the connector test and returns an `OperationResult`. Running it for every `ResourceType` a run touched
+  would turn "the PATCH was accepted" into "the resource actually works" — the gap that let a broken
+  `connectorRef` sit unnoticed. Opt-in, since it talks to the target system.
+- Investigated and rejected: the `exclude` retrieve option. It is honoured for ordinary items
+  (`?exclude=assignment` on the administrator: 14353 -> 11704 bytes) but ignored for `_metadata`/`metadata`,
+  and `include` is not a projection. Nothing to gain here anyway — midgie diffs the whole object, so
+  omitting any part of the live side would make it look absent and, under `--scope full`, invite a deletion.
+
 - [ ] **Fragment union engine (optional).** Merge all fragments of one object into a single desired object and reconcile it **once** (one PATCH per object) instead of file-by-file. This would make cross-file **multi-valued** composition correct by default (today two files sharing a multi-valued container clobber under the default replace — now *warned* at group time), give an atomic create (POST the whole object rather than POST-a-partial-then-PATCH), and make apply order-independent within an object. **Deferred** because the file-by-file `--scope present` fix already stops single-valued fragments from clobbering, so the remaining gain is niche; it also trades the clean "deploy a file ≡ apply that file" model for "deploy an object ≡ apply the merged desired", and needs a schema-aware `PrismObject` union (an extension of `DeployObject.collectSingleValued`/`collectMultiValued`). Revisit if the split-list pattern — or atomic create / order-independence — becomes a real need.
 
 > **Naming:** now that `deploy` applies, the tool does more than "diff", so it was renamed **midgie** (a wee Scots midge). The rename covers the artifact/JAR, launcher, main-class command name, message prefix, docs, CI, and the GitHub repo. Left as-is on purpose: the Java package `de.is4it.midpoint.diff`.

@@ -5,7 +5,9 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -227,6 +229,50 @@ class MidpointRestClientTest {
     }
 
     @Test
+    void aPartialErrorOnAWriteIsNotReportedAsSuccess() {
+        // midPoint answers 250 (partial error) and 240 (handled error) for an operation that did not fully
+        // succeed. Both are 2xx, so "is it 2xx" reads them as plain success and a PATCH that half-worked was
+        // reported as applied.
+        MidpointRestClient.RestException ex = assertThrows(MidpointRestClient.RestException.class,
+                () -> client.patchObject("users", "partial", "<objectModification/>"));
+
+        assertEquals(250, ex.statusCode());
+        assertTrue(ex.getMessage().contains("partial error"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("something did not finish"),
+                "midPoint's own message must survive: " + ex.getMessage());
+    }
+
+    @Test
+    void aPartialErrorOnAReadKeepsTheObjectButSaysSo() throws Exception {
+        // A resource whose schema midPoint cannot complete answers 250 to every read while remaining
+        // deployable — verified on a live server, where its GET returns 250 and its PATCH returns 204. So a
+        // read that still carries its payload must not be refused, or such a resource could never be
+        // reconciled at all.
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        String body;
+        try {
+            System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
+            body = client.getObject("users", "partial-with-object");
+        } finally {
+            System.setErr(originalErr);
+        }
+
+        assertTrue(body.contains("still-usable"), "the payload is returned: " + body);
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("partial error"),
+                "and the operator is told: " + err);
+    }
+
+    @Test
+    void aPartialErrorWhoseBodyIsOnlyTheResultFails() {
+        // Some endpoints answer 240/250 with the OperationResult instead of the payload. There is then
+        // nothing to parse, so a read fails too rather than handing the caller a result it will misread.
+        MidpointRestClient.RestException ex = assertThrows(MidpointRestClient.RestException.class,
+                () -> client.getObject("users", "partial"));
+        assertEquals(250, ex.statusCode());
+    }
+
+    @Test
     void writesAreNotRetried() {
         failuresRemaining.set(5);
         MidpointRestClient retrying = clientWith(
@@ -269,7 +315,18 @@ class MidpointRestClientTest {
         lastContentType = exchange.getRequestHeaders().getFirst("Content-Type");
         lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
-        if (lastPath.endsWith("/users/flaky")) {
+        if (lastPath.endsWith("/users/partial")) {
+            // The shape midPoint uses when it sends the OperationResult rather than the payload.
+            respond(exchange, 250, "<t:object xmlns:t=\"http://prism.evolveum.com/xml/ns/public/types-3\""
+                    + " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+                    + " xsi:type=\"c:OperationResultType\""
+                    + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\">"
+                    + "<status>partial_error</status><message>something did not finish</message></t:object>");
+        } else if (lastPath.endsWith("/users/partial-with-object")) {
+            // And the shape it uses when the payload still comes back (search does this).
+            respond(exchange, 250, "<user xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\">"
+                    + "<name>still-usable</name></user>");
+        } else if (lastPath.endsWith("/users/flaky")) {
             flakyRequests.incrementAndGet();
             if (failuresRemaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
                 respond(exchange, 503, "service unavailable");
