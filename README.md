@@ -77,6 +77,15 @@ The image runs as UID 1001 (group 0, so an OpenShift-assigned UID can still writ
 mvn -q package && docker build -f docker/midgie/Dockerfile -t is4it/midgie:dev .
 ```
 
+An image-only fix — a patched base image, a tool the image turns out to need — does not cost a midgie version. Rebuilding a released tag's image is a manual run of the release workflow, which checks out that tag and builds it with the same steps, so the rebuilt image cannot drift from the released one; the GitHub Release and its JAR are left alone.
+
+```bash
+gh workflow run Release -f tag=v0.4.3                        # rebuild that tag's image
+gh workflow run Release -f tag=v0.4.3 -f update_latest=true  # ...and move :latest to it
+```
+
+`:latest` stays put unless you ask for it, so rebuilding an older tag cannot drag it backwards (and a pre-release never takes it either way). The consequence for anyone pulling: a version tag names the midgie release, not one immutable build of it — pin the digest if you need the same bytes every time.
+
 ## Commands
 
 `midgie` has four subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`init`** is a one-off that enables removal detection for a server (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).

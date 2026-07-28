@@ -12,6 +12,11 @@
 #
 # To cut a release: update CHANGELOG.md (move Unreleased -> the new version), then:
 #   git tag -a v0.1.0 -m "midgie 0.1.0" && git push origin v0.1.0
+#
+# Run it by hand ('gh workflow run Release -f tag=v0.1.0') to rebuild and push the image for a tag that is
+# already released — an image-only fix (a base-image CVE, a missing tool) then costs no version bump. The
+# same steps build it, so the rebuilt image cannot drift from the released one. The GitHub Release is left
+# alone, and ':latest' only moves if you ask for it: rebuilding an older tag must not drag 'latest' back.
 name: Release
 
 on:
@@ -19,17 +24,46 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'      # v0.1.0
       - 'v[0-9]+.[0-9]+.[0-9]+-*'    # pre-releases, e.g. v0.1.0-rc1
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Released tag to rebuild the image for (e.g. v0.1.0)'
+        required: true
+        type: string
+      update_latest:
+        description: "Also move ':latest' to it (only for the newest release)"
+        required: false
+        default: false
+        type: boolean
+
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Rebuild image for {0}', inputs.tag) || format('Release {0}', github.ref_name) }}
 
 permissions:
   contents: write   # create the GitHub Release
+
+env:
+  # The tag being built: the one pushed, or the one asked for by hand.
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
     name: Build & publish
     runs-on: ubuntu-latest
     steps:
+      # A dispatch takes the tag as free text, and a branch name would sail through as a "version":
+      # 'main' carries no '-', so it would be treated as a final release and could take ':latest' with it.
+      - name: Check the requested tag is a version tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$'; then
+            echo "::error::'$TAG' is not a version tag (expected v1.2.3 or v1.2.3-rc1)."
+            exit 1
+          fi
+
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
@@ -39,7 +73,11 @@ jobs:
           cache: maven
 
       - name: Derive version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        # REVISION is read from the checkout, not from github.sha: a dispatch runs from a branch, so
+        # github.sha is that branch's head and would label the image with a commit it was not built from.
+        run: |
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "REVISION=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Stamp the release version into the build
         run: >
@@ -70,11 +108,15 @@ jobs:
 
       - name: Compute image tags
         # A pre-release must not become ':latest' — same reason the GitHub Release is marked prerelease.
+        # A tag push is always the newest release, so it takes ':latest'; a rebuild by hand only does when
+        # asked, since rebuilding an older tag would otherwise pull 'latest' backwards.
+        env:
+          UPDATE_LATEST: ${{ github.event_name == 'push' || inputs.update_latest }}
         run: |
           tags="is4it/midgie:${VERSION}"
           case "$VERSION" in
             *-*) ;;
-            *)   tags="${tags},is4it/midgie:latest" ;;
+            *)   if [ "$UPDATE_LATEST" = "true" ]; then tags="${tags},is4it/midgie:latest"; fi ;;
           esac
           echo "IMAGE_TAGS=${tags}" >> "$GITHUB_ENV"
 
@@ -89,9 +131,12 @@ jobs:
           tags: ${{ env.IMAGE_TAGS }}
           labels: |
             org.opencontainers.image.version=${{ env.VERSION }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.REVISION }}
 
+      # Only a tag push publishes. A rebuild by hand stops at the image: the release, its notes and its JAR
+      # already exist and describe the same commit.
       - name: Extract release notes from CHANGELOG.md
+        if: github.event_name == 'push'
         run: |
           awk -v ver="$VERSION" '
             $0 ~ "^## \\[" ver "\\]" { flag = 1; next }
@@ -103,6 +148,7 @@ jobs:
           fi
 
       - name: Publish GitHub Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: midgie ${{ env.VERSION }}
