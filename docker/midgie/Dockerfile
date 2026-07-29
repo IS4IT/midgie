@@ -25,9 +25,11 @@ ARG JAR=target/midgie.jar
 # Enough to fetch the tree in this container rather than having an init container do it: git over HTTPS
 # (ca-certificates, curl) and over SSH (openssh-client). curl is in the base image today, but naming it
 # here is what keeps it there. less is git's pager — without it an interactive 'git log' or 'git diff'
-# fails instead of paging, and this image is meant to be shelled into.
+# fails instead of paging, and this image is meant to be shelled into, as is vi for editing a file in
+# place. vim-tiny, not vim: the full package pulls vim-runtime and libpython for ~80 MB, against ~4 MB
+# for the one that provides /usr/bin/vi.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git less openssh-client \
+    && apt-get install -y --no-install-recommends ca-certificates curl git less openssh-client vim-tiny \
     && rm -rf /var/lib/apt/lists/*
 
 # git refuses a repository owned by another user, and midgie reports that refusal as "not in a git
