@@ -5,6 +5,20 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-29
+
+### Added
+
+- **The packaged Helm chart is attached to each release**, so it installs without a checkout: `helm install midgie https://github.com/IS4IT/midgie/releases/download/v<version>/midgie-<version>.tgz`. CI packages it with the release's version as both `version` and `appVersion` — every publish is then uniquely versioned without anyone remembering to bump `Chart.yaml`, and two different charts can never go out as the same version. The chart's `values-openshift.yaml` travels inside the package; installing straight from the URL, pass its three settings with `--set` instead of `-f`.
+
+### Changed
+
+- **The chart mounts an SSH key under the name it has in the Secret**, instead of renaming every key to `id_rsa`. ssh only auto-loads its own default filenames, so the chart now sets `GIT_SSH_COMMAND` to point at the key (with `IdentitiesOnly`, and `UserKnownHostsFile` when a `known_hosts` entry is mounted) — a Secret entry called `deploy-key` is used as one rather than having to be called something it is not.
+
+### Fixed
+
+- **The Helm chart can be installed on OpenShift**, with `-f charts/midgie/values-openshift.yaml`. The `restricted-v2` SCC assigns each namespace its own UID range and requires `fsGroup` to come from it, so the chart's `runAsUser: 1001` / `fsGroup: 1001` were rejected before the pod could be scheduled (`1001 is not an allowed group`). The preset nulls those fields and lets the SCC assign, keeping what `restricted-v2` does require — `runAsNonRoot`, `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped. The image was already built for an arbitrary UID: its user is in group 0 and `$HOME` is group-writable. CI now renders the preset and fails if a UID or GID reappears in it.
+
 ## [0.5.0] - 2026-07-29
 
 ### Added
@@ -188,7 +202,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/IS4IT/midgie/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/IS4IT/midgie/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/IS4IT/midgie/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/IS4IT/midgie/compare/v0.4.1...v0.4.2

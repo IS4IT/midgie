@@ -43,12 +43,15 @@ midpoint:
   # release. Use existingSecret for anything real.
   password: ""
 
-# -- SSH for cloning private repositories. The key is mounted at $HOME/.ssh/id_rsa.
+# -- SSH for cloning private repositories. The Secret's entries are mounted into $HOME/.ssh under the names
+# they have in the Secret, and GIT_SSH_COMMAND points ssh at them — so a key called 'deploy-key' is used as
+# such, rather than having to be called id_rsa to be picked up.
 ssh:
   enabled: false
   # A Secret holding the private key (and optionally a known_hosts entry).
   existingSecret: ""
   privateKeyKey: id_rsa
+  # Set to "" if the Secret has no known_hosts; then either mount one another way or use acceptNewHostKeys.
   knownHostsKey: known_hosts
   # ssh refuses a group- or world-readable key, so the mount is owner-read-only.
   defaultMode: 0400
@@ -69,7 +72,9 @@ resources:
   limits:
     memory: 1Gi
 
-# -- Matches the image: UID 1001, group 0. fsGroup makes the volume writable for that UID.
+# -- Matches the image: UID 1001, group 0. fsGroup is what makes the mounted volume writable for that UID.
+# On OpenShift use values-openshift.yaml instead: its SCC assigns a UID and fsGroup per namespace and
+# rejects a pod that pins its own.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1001

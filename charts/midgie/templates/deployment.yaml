@@ -33,8 +33,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "midgie.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
       securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: midgie
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
@@ -47,8 +49,10 @@ spec:
           args:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.securityContext }}
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             {{- if .Values.midpoint.url }}
             - name: MIDPOINT_URL
@@ -65,9 +69,9 @@ spec:
                   name: {{ include "midgie.passwordSecretName" . }}
                   key: {{ .Values.midpoint.passwordKey }}
             {{- end }}
-            {{- if and .Values.ssh.enabled .Values.ssh.acceptNewHostKeys }}
+            {{- if .Values.ssh.enabled }}
             - name: GIT_SSH_COMMAND
-              value: "ssh -o StrictHostKeyChecking=accept-new"
+              value: {{ include "midgie.gitSshCommand" . | quote }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -81,7 +85,7 @@ spec:
             {{- end }}
             {{- if .Values.ssh.enabled }}
             - name: ssh
-              mountPath: /home/midgie/.ssh
+              mountPath: {{ include "midgie.sshDir" . }}
               readOnly: true
             {{- end }}
       volumes:
@@ -96,12 +100,14 @@ spec:
             secretName: {{ required "ssh.existingSecret is required when ssh.enabled is set" .Values.ssh.existingSecret }}
             # ssh refuses a key any group or other can read, so this mode is not decoration.
             defaultMode: {{ .Values.ssh.defaultMode }}
+            # Each entry keeps the name it has in the Secret, so what you put in is what appears on disk;
+            # GIT_SSH_COMMAND above is what points ssh at it.
             items:
               - key: {{ .Values.ssh.privateKeyKey }}
-                path: id_rsa
+                path: {{ .Values.ssh.privateKeyKey }}
               {{- if .Values.ssh.knownHostsKey }}
               - key: {{ .Values.ssh.knownHostsKey }}
-                path: known_hosts
+                path: {{ .Values.ssh.knownHostsKey }}
               {{- end }}
         {{- end }}
       {{- with .Values.nodeSelector }}

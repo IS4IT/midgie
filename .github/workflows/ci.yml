@@ -102,6 +102,15 @@ jobs:
             --set ssh.acceptNewHostKeys=true \
             --set serviceAccount.create=true \
             --set persistence.existingClaim=someones-claim > /dev/null
+          # The OpenShift preset must keep removing the three fields its SCC rejects; a default that
+          # stopped being nulled would only show up as a pod that never schedules.
+          helm template midgie charts/midgie -f charts/midgie/values-openshift.yaml \
+            | grep -qE 'runAsUser|runAsGroup|fsGroup' \
+            && { echo "::error::values-openshift.yaml still pins a UID/GID"; exit 1; } || true
+          # The release attaches a packaged chart, versioned with the tag. Prove that packs here, where a
+          # failure costs a red PR rather than a half-published release.
+          helm package charts/midgie --destination /tmp --version 0.0.0-ci --app-version 0.0.0-ci
+          test -f /tmp/midgie-0.0.0-ci.tgz
 
   reuse:
     name: REUSE compliance

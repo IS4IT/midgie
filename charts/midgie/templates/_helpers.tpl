@@ -50,6 +50,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (include "midgie.fullname" .) .Values.persistence.existingClaim -}}
 {{- end -}}
 
+{{/* Where the ssh Secret is mounted. $HOME in the image, so ssh finds it without being told. */}}
+{{- define "midgie.sshDir" -}}
+/home/midgie/.ssh
+{{- end -}}
+
+{{/*
+How git should invoke ssh: at the key under the name it has in the Secret. ssh only auto-loads its own
+default filenames (id_rsa, id_ecdsa, id_ed25519, …), so a Secret entry called anything else — 'deploy-key',
+say — would be mounted and then never offered. IdentitiesOnly stops any other identity being tried first.
+*/}}
+{{- define "midgie.gitSshCommand" -}}
+ssh -i {{ include "midgie.sshDir" . }}/{{ .Values.ssh.privateKeyKey }} -o IdentitiesOnly=yes
+{{- if .Values.ssh.knownHostsKey }} -o UserKnownHostsFile={{ include "midgie.sshDir" . }}/{{ .Values.ssh.knownHostsKey }}{{ end }}
+{{- if .Values.ssh.acceptNewHostKeys }} -o StrictHostKeyChecking=accept-new{{ end }}
+{{- end -}}
+
 {{/* The Secret holding the midPoint password: an existing one, or the one this chart creates. */}}
 {{- define "midgie.passwordSecretName" -}}
 {{- default (include "midgie.fullname" .) .Values.midpoint.existingSecret -}}

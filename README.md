@@ -51,7 +51,7 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). git can clone over HTTPS and SSH (`curl`, `openssh-client`, `less`), so the tree can be fetched in the container itself rather than by an init container. It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
 
 ```bash
-docker run --rm -v "$PWD:/work" is4it/midgie:0.5.0 diff a.xml b.xml
+docker run --rm -v "$PWD:/work" is4it/midgie:0.5.1 diff a.xml b.xml
 
 # In a Job, command: is the entrypoint and args: the subcommand line.
 #   args: ["deploy", "/work", "--url", "https://mp/midpoint", "--yes"]
@@ -60,14 +60,14 @@ docker run --rm -v "$PWD:/work" is4it/midgie:0.5.0 diff a.xml b.xml
 For a shell — to run midgie by hand against a checkout in the pod — the container needs something long-running, since the entrypoint would otherwise print help and exit:
 
 ```bash
-kubectl run midgie --image=is4it/midgie:0.5.0 --restart=Never --command -- sleep infinity
+kubectl run midgie --image=is4it/midgie:0.5.1 --restart=Never --command -- sleep infinity
 kubectl exec -it midgie -- bash          # then: midgie deploy /work --url ...
-docker run -d --name midgie --entrypoint sleep is4it/midgie:0.5.0 infinity   # the docker equivalent
+docker run -d --name midgie --entrypoint sleep is4it/midgie:0.5.1 infinity   # the docker equivalent
 ```
 
 `docker run <image> bash` does *not* give a shell — it runs `midgie bash`, which is rejected as an unknown subcommand. Use `--entrypoint bash`.
 
-Cloning over SSH needs a key ssh will accept: mount it with `defaultMode: 0400` (ssh refuses a group- or world-readable key) and make sure the pod's UID can read it — `fsGroup: 0` matches the image's group — or point `GIT_SSH_COMMAND` at a copy whose permissions you fix first. An unknown host key fails the clone by default, so either mount a `known_hosts` or add `-o StrictHostKeyChecking=accept-new` via `GIT_SSH_COMMAND`.
+Cloning over SSH needs a key ssh will accept: mount the Secret with `defaultMode: 0400` and set `fsGroup` to the UID the pod runs as. Kubernetes then lands the file at `0440` owned `root:<fsGroup>` — readable by the pod, and still accepted by ssh, whose "unprotected private key" refusal only fires for a file owned by the calling UID. An unknown host key fails the clone by default, so either mount a `known_hosts` or add `-o StrictHostKeyChecking=accept-new` via `GIT_SSH_COMMAND`. The [Helm chart](#helm-chart) does all of this for you.
 
 Two things about the git side. **Clone with full history**: midgie refuses a shallow clone for tracking, so the usual `--depth 1` / `git-sync` default silently disables removal detection. And the image sets `safe.directory=*` system-wide, because a tree cloned by an init container is owned by a different UID than the one midgie runs as, and git's ownership refusal surfaces only as "the tree is not in a git repository" — tracking then goes unavailable without anything failing. If you would rather keep git's check, drop that line from `docker/midgie/Dockerfile` and run both containers as the same UID.
 
@@ -88,14 +88,17 @@ gh workflow run Release -f tag=v0.4.3 -f update_latest=true  # ...and move :late
 
 ### Helm chart
 
-`charts/midgie` puts that image in a namespace as a workbench you exec into, with a PersistentVolumeClaim for git checkouts so a clone survives restarts and image bumps.
+`charts/midgie` puts that image in a namespace as a workbench you exec into, with a PersistentVolumeClaim for git checkouts so a clone survives restarts and image bumps. Every release attaches the packaged chart, versioned with the release, so it installs without a checkout:
 
 ```bash
-helm install midgie charts/midgie -n midgie --create-namespace \
+helm install midgie https://github.com/IS4IT/midgie/releases/download/v0.5.1/midgie-0.5.1.tgz \
+  -n midgie --create-namespace \
   --set midpoint.url=https://mp.example/midpoint --set midpoint.user=administrator
 
 kubectl -n midgie exec -it deploy/midgie -- bash
 ```
+
+From a checkout it is `helm install midgie charts/midgie -n midgie …` instead.
 
 Inside the pod, `/work` is the volume and `midgie` is on `PATH`:
 
@@ -114,9 +117,33 @@ Everything is in [`charts/midgie/values.yaml`](charts/midgie/values.yaml), with 
 | `persistence.keepOnUninstall` | `true` | the claim is annotated `helm.sh/resource-policy: keep`, so `helm uninstall` does not throw away work in progress |
 | `midpoint.url` / `.user` | unset | become `MIDPOINT_URL` / `MIDPOINT_USER`, so commands in the pod need no `--url` |
 | `midpoint.existingSecret` / `.passwordKey` | unset, `password` | `MIDPOINT_PASSWORD` from a Secret you control. `midpoint.password` also works but lands in the release values — fine for a lab, not for a real server |
-| `ssh.*` | off | mounts a key Secret at `$HOME/.ssh` with mode `0400`, since ssh refuses a key others can read; `ssh.acceptNewHostKeys` sets `GIT_SSH_COMMAND` for trust-on-first-use when you have no `known_hosts` |
+| `ssh.*` | off | mounts a key Secret into `$HOME/.ssh`, each entry under the name it has in the Secret, and sets `GIT_SSH_COMMAND` to point ssh at it — ssh auto-loads only its own default filenames, so a `deploy-key` would otherwise be mounted and never offered. `ssh.acceptNewHostKeys` adds trust-on-first-use for when you have no `known_hosts` |
+
+The SSH Secret is yours to create — no private key goes through values:
+
+```bash
+ssh-keygen -t ed25519 -N '' -C midgie@cluster -f ./deploy-key    # no passphrase: nothing in the pod can answer a prompt
+ssh-keyscan github.com > ./known_hosts
+
+kubectl -n <namespace> create secret generic git-ssh \
+  --from-file=deploy-key=./deploy-key --from-file=known_hosts=./known_hosts
+
+helm upgrade --install midgie charts/midgie -n <namespace> \
+  --set ssh.enabled=true --set ssh.existingSecret=git-ssh --set ssh.privateKeyKey=deploy-key
+```
+
+Register `deploy-key.pub` as a **read-only** deploy key on the repository — midgie only clones and reads. Two details: you ask for mode `0400` but Kubernetes lands the file at `0440 root:<fsGroup>`, so the pod can read it and ssh still accepts it (its "unprotected private key" check only fires for a file owned by the calling UID); and a rotated key needs no restart, since Kubernetes refreshes mounted Secrets in place and ssh re-reads the file per invocation.
 
 Reinstalling under the **same** release name re-adopts a kept claim, so the checkouts come back. Under a different name it will not — pass `persistence.existingClaim` to pick the old one up.
+
+**On OpenShift, add `-f charts/midgie/values-openshift.yaml`** — or, installing from the packaged chart where that path does not exist, `--set podSecurityContext.runAsUser=null --set podSecurityContext.runAsGroup=null --set podSecurityContext.fsGroup=null`, which is exactly what the preset contains. The `restricted-v2` SCC gives each namespace its own UID range and requires `fsGroup` to come from it, so the chart's defaults (`runAsUser: 1001`, `fsGroup: 1001`) are rejected before the pod is ever scheduled — `1001 is not an allowed group … must be in the ranges: [1004170000, 1004179999]`. The preset nulls those three fields so the SCC assigns its own, and keeps the four things `restricted-v2` does want: `runAsNonRoot`, `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped. Nothing is lost — the image puts its user in group 0 and leaves `$HOME` group-writable (`770 1001:0`), which is exactly what an arbitrary assigned UID needs.
+
+One thing to watch there: `/work` is then writable only because OpenShift injects an `fsGroup` and the CSI driver chowns the volume to it. Storage that ignores `fsGroup` — NFS-backed classes often do — leaves the claim root-owned and the pod unable to write it. If that happens, read the range the namespace was given and pin a value from it rather than an invented one:
+
+```bash
+kubectl get ns <namespace> -o jsonpath='{.metadata.annotations.openshift\.io/sa\.scc\.supplemental-groups}{"\n"}'
+helm upgrade midgie charts/midgie -n <namespace> -f charts/midgie/values-openshift.yaml --set podSecurityContext.fsGroup=<from that range>
+```
 
 ## Commands
 

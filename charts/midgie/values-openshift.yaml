@@ -1,0 +1,23 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+#
+# OpenShift preset:  helm install midgie charts/midgie -n midgie -f charts/midgie/values-openshift.yaml
+#
+# OpenShift's restricted-v2 SCC assigns each namespace its own UID range and requires fsGroup to come from
+# it, so the chart's defaults — runAsUser 1001, fsGroup 1001 — are rejected outright:
+#
+#   .spec.securityContext.fsGroup: Invalid value: []int64{1001}: 1001 is not an allowed group
+#   .containers[0].runAsUser: Invalid value: 1001: must be in the ranges: [1004170000, 1004179999]
+#
+# Nulling them here removes them from the pod spec (Helm treats a null as "delete the default"), which lets
+# the SCC fill in a UID and fsGroup from the namespace's range. Nothing is lost by that: the image puts its
+# user in group 0 and leaves $HOME and /work group-writable, which is exactly what an arbitrary assigned UID
+# needs, and the PVC is chowned to the assigned fsGroup by the platform.
+#
+# What stays: runAsNonRoot, the RuntimeDefault seccomp profile, no privilege escalation and all capabilities
+# dropped — restricted-v2 wants all four.
+podSecurityContext:
+  runAsUser: null
+  runAsGroup: null
+  fsGroup: null

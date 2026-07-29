@@ -6,11 +6,13 @@ name: midgie
 description: A midgie pod to exec into, with a persistent volume for git checkouts
 type: application
 
-# Chart version; bumped when the chart changes, independently of midgie itself.
-version: 0.1.1
+# Both versions are overridden at package time by the release workflow, which stamps the release's
+# version into each — what ships is always midgie-<release>.tgz. These are what a 'helm package' by
+# hand produces, kept in step with the release they describe.
+version: 0.5.1
 
 # The midgie release the chart installs by default (image.tag overrides it).
-appVersion: "0.5.0"
+appVersion: "0.5.1"
 
 home: https://github.com/IS4IT/midgie
 sources:

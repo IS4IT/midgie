@@ -133,8 +133,19 @@ jobs:
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ env.REVISION }}
 
-      # Only a tag push publishes. A rebuild by hand stops at the image: the release, its notes and its JAR
-      # already exist and describe the same commit.
+      # Only a tag push publishes. A rebuild by hand stops at the image: the release, its notes, its JAR and
+      # its chart already exist and describe the same commit.
+      - name: Package the Helm chart
+        if: github.event_name == 'push'
+        # The chart's version tracks the release rather than the number in Chart.yaml, so every publish is
+        # uniquely versioned without anyone having to remember to bump it — which is what a Helm repo needs,
+        # and what stops two different charts going out as the same version. appVersion follows too: the
+        # chart's job is to install this release.
+        run: |
+          helm package charts/midgie --destination . \
+            --version "$VERSION" --app-version "$VERSION"
+          test -f "midgie-${VERSION}.tgz"
+
       - name: Extract release notes from CHANGELOG.md
         if: github.event_name == 'push'
         run: |
@@ -153,7 +164,9 @@ jobs:
         with:
           name: midgie ${{ env.VERSION }}
           body_path: release-notes.md
-          files: midgie-${{ env.VERSION }}.jar
+          files: |
+            midgie-${{ env.VERSION }}.jar
+            midgie-${{ env.VERSION }}.tgz
           fail_on_unmatched_files: true
           # The tag filter admits pre-releases (v0.4.0-rc1). Without this an RC is published as a normal
           # release and becomes the repository's "Latest", so releases/latest/download hands it to everyone.
