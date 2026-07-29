@@ -24,27 +24,35 @@ import org.w3c.dom.Element;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
+import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
+import picocli.CommandLine.Spec;
 
 /**
- * The {@code init} subcommand: enable delete detection for a server by creating midgie's state object.
+ * The {@code init} subcommand: the one-off set-up steps, each behind its own flag.
  *
- * <p>{@code deploy} never creates it — this is the one deliberate step that opts a server in, so midgie
- * cannot leave an unexplained object behind. The created {@code midgie-state} lookup table describes and
- * protects itself (see {@link SyncState}); running {@code init} again reports what is already there and
- * changes nothing.
+ * <p>{@code --create-state} enables delete detection for a server by creating midgie's state object.
+ * {@code deploy} never creates it — this is the deliberate step that opts a server in, so midgie cannot
+ * leave an unexplained object behind. The created {@code midgie-state} lookup table describes and protects
+ * itself (see {@link SyncState}); asking for it again reports what is already there and changes nothing.
+ * {@code --write-policy} seeds a starter {@code --policy} file for a tree.
+ *
+ * <p>Every step is opt-in: {@code init} on its own writes nothing, changes nothing and prints its help,
+ * because the flags say what they do to a server or a working copy and none of them should be the thing
+ * that happens when you were only exploring the command.
  *
  * <p>Given a PATH, it also prints the deployment identity derived for that tree — the repository's root
  * commit plus the tree's path inside it — which is the key its state row will use.
  *
- * <p>Exit codes: {@code 0} created or already present, {@code 2} error.
+ * <p>Exit codes: {@code 0} done (created, already present, or written), {@code 2} error or no step asked
+ * for.
  */
 @Command(
         name = "init",
         mixinStandardHelpOptions = true,
         versionProvider = VersionProvider.class,
-        description = "Create midgie's state object on the server, enabling delete detection for deploy."
+        description = "One-off set-up steps for a server or a tree; each is opt-in, so pick at least one."
 )
 public class InitCommand implements Callable<Integer> {
 
@@ -56,14 +64,22 @@ public class InitCommand implements Callable<Integer> {
             description = "Desired-state tree whose deployment identity should be reported (optional).")
     File path;
 
+    @Spec
+    CommandSpec spec;   // to print this subcommand's own help when no step is asked for
+
     @Mixin
     ConnectionOptions connectionOptions;
 
     @Mixin
     SchemaOptions schemaOptions;
 
+    @Option(names = "--create-state",
+            description = "Create midgie's state object on the server, enabling delete detection for deploy. "
+                    + "Reports and changes nothing if it already exists.")
+    boolean createState;
+
     @Option(names = "--write-policy", paramLabel = "FILE",
-            description = "Also write a starter --policy file for PATH, listing the objects whose multi-valued "
+            description = "Write a starter --policy file for PATH, listing the objects whose multi-valued "
                     + "containers have a schema natural key. Refuses to overwrite an existing file.")
     File writePolicy;
 
@@ -86,6 +102,15 @@ public class InitCommand implements Callable<Integer> {
             Logging.enableTrace();
         } else if (debug) {
             Logging.enableDebug();
+        }
+        // No step asked for. Printing help beats guessing at one: every step here writes something, to a
+        // server or to the working copy. Exit 2, not 0 — a pipeline whose 'init --create-state' lost its
+        // flag must fail rather than pass having done nothing.
+        if (!createState && writePolicy == null) {
+            System.err.println("midgie: init does nothing on its own — pick a step (--create-state, "
+                    + "--write-policy).");
+            spec.commandLine().usage(System.err);
+            return EXIT_ERROR;
         }
         if (!connectionOptions.isLive()) {
             System.err.println("midgie: init needs a running server — pass --url (or set MIDPOINT_URL).");
@@ -114,21 +139,22 @@ public class InitCommand implements Callable<Integer> {
                 VersionSupport.warnIfMismatch(prismContext, client);
             }
 
-            PrismObject<? extends Objectable> table = SyncState.find(prismContext, client);
-            if (table != null) {
-                status(SyncState.TABLE_NAME + " already exists (" + table.getOid() + "); nothing to do.");
-                String lifecycle = SyncState.lifecycleOf(table);
-                if (!SyncState.isEnabled(table)) {
-                    status("Note: its lifecycleState is '" + lifecycle
-                            + "', so midgie treats tracking as disabled. Set it to 'active' to re-enable.");
+            if (createState) {
+                PrismObject<? extends Objectable> table = SyncState.find(prismContext, client);
+                if (table != null) {
+                    status(SyncState.TABLE_NAME + " already exists (" + table.getOid() + "); nothing to do.");
+                    String lifecycle = SyncState.lifecycleOf(table);
+                    if (!SyncState.isEnabled(table)) {
+                        status("Note: its lifecycleState is '" + lifecycle
+                                + "', so midgie treats tracking as disabled. Set it to 'active' to re-enable.");
+                    }
+                } else {
+                    String oid = SyncState.create(prismContext, client);
+                    status("Created " + SyncState.TABLE_NAME + (oid != null ? " (" + oid + ")" : "")
+                            + " — deploy will now record what it applies and report removals.");
                 }
-            } else {
-                String oid = SyncState.create(prismContext, client);
-                status("Created " + SyncState.TABLE_NAME + (oid != null ? " (" + oid + ")" : "")
-                        + " — deploy will now record what it applies and report removals.");
+                reportIdentity();   // the key this tree's state row will use: part of the tracking step
             }
-
-            reportIdentity();
             if (writePolicy != null) {
                 return seedPolicy(prismContext, client);
             }

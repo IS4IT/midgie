@@ -83,7 +83,7 @@ the midPoint source tree.
   the surviving fragments themselves, at the removal's own depth, since a survivor set enumerated by diffing
   a fragment against an empty object yields whole-container paths that no nested removal could ever match.
   Reported by default; deleting is opt-in. State lives in a `midgie-state` `LookupTableType` created solely
-  by `midgie init` — never implicitly, so midgie leaves no unexplained object behind.
+  by `midgie init --create-state` — never implicitly, so midgie leaves no unexplained object behind.
 
   `--prune` then applies the detected removals: `--dry-run`-able, gated by its own confirmation (the apply
   pass returns without prompting when it has nothing to do, so a prune-only run would otherwise delete
@@ -151,9 +151,11 @@ the midPoint source tree.
   unless `--yes`/`-y` is given. `--dry-run` prints the delta and changes nothing.
 - `midgie deploy <tree> [--url …]` → discover a folder tree, sort it by dependency, and print the apply
   order or reconcile it object by object. Its own section below.
-- `midgie init --url …` → create the `midgie-state` object that delete detection needs, and optionally seed
-  a starter `--policy` file for a tree (`--write-policy`). Never implicit: `deploy` reports that tracking is
-  off rather than creating anything.
+- `midgie init --url …` → the one-off set-up steps, each behind its own flag: `--create-state` creates the
+  `midgie-state` object that delete detection needs, `--write-policy` seeds a starter `--policy` file for a
+  tree. Never implicit, at two levels: `deploy` reports that tracking is off rather than creating anything,
+  and `init` with no step prints its help and exits 2 rather than picking one — every step writes something,
+  to a server or to the working copy.
 
 Connection details default from `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD`. To keep the
 password off the command line (it leaks into `ps` and shell history), resolve it — in order — from

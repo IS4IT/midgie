@@ -120,7 +120,8 @@ public class DeployCommand implements Callable<Integer> {
 
     @Option(names = "--prune",
             description = "Delete the values this tree deployed previously and no longer declares (needs "
-                    + "'midgie init'). Only ever removes values it applied itself, never accrued state.")
+                    + "'midgie init --create-state'). Only ever removes values it applied itself, never "
+                    + "accrued state.")
     boolean prune;
 
     @Option(names = "--app", paramLabel = "NAME",
@@ -404,8 +405,8 @@ public class DeployCommand implements Callable<Integer> {
 
     /**
      * Work out whether this run can track removals, explaining once when it cannot. midgie never creates the
-     * state object here — {@code midgie init} is the deliberate opt-in — so an untracked server just keeps
-     * behaving exactly as before.
+     * state object here — {@code midgie init --create-state} is the deliberate opt-in — so an untracked
+     * server just keeps behaving exactly as before.
      */
     private Tracking resolveTracking(PrismContext prismContext, MidpointRestClient client) {
         File tree = (paths != null && !paths.isEmpty()) ? paths.get(0) : null;
@@ -436,7 +437,7 @@ public class DeployCommand implements Callable<Integer> {
         }
         if (table == null) {
             note("note: no " + SyncState.TABLE_NAME + " on the server, so removals cannot be detected — "
-                    + "run 'midgie init --url …' to enable it.");
+                    + "run 'midgie init --create-state --url …' to enable it.");
             return new Tracking(identity, null, null, null);
         }
         if (!SyncState.isEnabled(table)) {

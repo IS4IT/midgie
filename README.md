@@ -88,7 +88,9 @@ gh workflow run Release -f tag=v0.4.3 -f update_latest=true  # ...and move :late
 
 ## Commands
 
-`midgie` has four subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`init`** is a one-off that enables removal detection for a server (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
+`midgie` has four subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-policy` seeds a policy file for a tree (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
+
+Every `init` step is opt-in, because each one writes something: `init` on its own prints its help and exits 2 rather than picking a step for you.
 
 > Each object is compared with **itself**, not another object: its *desired* state (how you want it) against its *current* state (how it is now), and the delta transforms current → desired. If both sides carry an OID and the OIDs differ, the run is refused.
 
@@ -135,10 +137,10 @@ Dropping a value from a file is invisible to an ordinary diff: `desired` simply 
 Last-applied comes from **version control**: `git show <lastRev>:<file>` is the fragment as it was when midgie last deployed it, so the only thing that must be stored is the revision. Enable it once per server:
 
 ```bash
-bin/midgie init --url https://mp.example/midpoint --user administrator config/
+bin/midgie init --create-state --url https://mp.example/midpoint --user administrator config/
 ```
 
-That creates a `midgie-state` lookup table which records, per tree, the revision last applied. `deploy` never creates it — until you run `init`, deploy behaves exactly as before and simply notes that detection is off. Afterwards each deploy records what it applied and reports what has since disappeared:
+That creates a `midgie-state` lookup table which records, per tree, the revision last applied. `deploy` never creates it — until you run `init --create-state`, deploy behaves exactly as before and simply notes that detection is off. Afterwards each deploy records what it applied and reports what has since disappeared:
 
 ```
 midgie: 1 value(s) deployed at 2d58fd57e470… are no longer declared by the tree (reported only — pass --prune to remove them):
@@ -158,7 +160,7 @@ Deleting a *fragment* is handled the same way and needs no special case: you get
 
 A tree is identified by its repository's **root commit** plus its path inside the repo (e.g. `df7f507/config`). The root commit is part of the history, so every clone agrees on it no matter which remotes it has — which matters when the same repo is pushed to both a customer's git and your own. Detection is skipped, with a note, when the tree is not in a git repository or the clone is **shallow** (a `--depth 1` checkout cannot recover previous content; fetch full history, e.g. `fetch-depth: 0`). `--app NAME` pins the identity for setups where that derivation does not fit.
 
-`init` can also seed a starter policy for the tree:
+`init` also seeds a starter policy for a tree — a separate step, so it neither needs nor implies `--create-state`:
 
 ```bash
 bin/midgie init config/ --url … --write-policy midgie.policy
@@ -166,7 +168,7 @@ bin/midgie init config/ --url … --write-policy midgie.policy
 
 It walks the tree and, for each object that declares a multi-valued container the schema gives a natural key **and whose values actually carry the whole key**, writes one object-level line (`<Type>/<Name>  equivalence=natural-keys`) plus a per-container line (`<Type>/<Name>/<container>  multivalue=merge`) — commenting which containers prompted each line. The merge rules are deliberately scoped to those paths rather than to the whole object. That "actually carry it" condition matters: `assignment` and `inducement` declare an `identifier` that real config usually omits, and a composite key like `kind + intent` is often written with only the `kind` — suggesting key matching in either case would be actively wrong, since prism then pairs unrelated values and the accrued-value guard refuses the result. The file is a starting point to review, not a finished policy, and an existing file is never overwritten.
 
-The state object describes and protects itself: it is `indestructible` (midPoint refuses to delete it — clear the flag first if you really mean to), carries a `description`/`documentation` explaining it to an admin who has never heard of midgie, and is marked `subtype=midgie`. To switch tracking off without deleting anything, set its `lifecycleState` to `archived`. Losing it is harmless — detection simply stops until `init` recreates it; midgie never deletes anything as a result.
+The state object describes and protects itself: it is `indestructible` (midPoint refuses to delete it — clear the flag first if you really mean to), carries a `description`/`documentation` explaining it to an admin who has never heard of midgie, and is marked `subtype=midgie`. To switch tracking off without deleting anything, set its `lifecycleState` to `archived`. Losing it is harmless — detection simply stops until `init --create-state` recreates it; midgie never deletes anything as a result.
 
 The order is two-tier: extension **schemas** first (raw `.xsd` inputs and exported `SchemaType` objects, sorted among themselves by `<xsd:import>` dependency and registered so extension attributes resolve), then **objects** (sorted by their reference OIDs). Objects are identified by OID, or by type+name when they carry no OID, so several files may declare *fragments* of one object — each applied individually. A genuine contradiction between fragments (a different type under one OID, or a single-valued item set to two values) is an error; same-object non-overlapping fragments are fine.
 
@@ -190,7 +192,7 @@ The contract lets CI gate on drift without parsing output:
 | `deploy --dry-run` / `--plan` | nothing to change | would change something | error |
 | `deploy` (real apply) | all applied/in-sync/skipped/declined | — | a unit failed, or error |
 | `deploy` (offline, no `--url`) | printed the apply order | — | error |
-| `init` | created, or already present | — | error |
+| `init` | the step ran (created, already present, or written) | — | error, or no step asked for |
 
 ## Flags
 

@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`init` no longer creates the state object unless asked: that step is now `--create-state`.** `init` is becoming the home for several one-off set-up steps, and each of them writes something — to a server or to a working copy — so none should be what happens by default. `init` with no step now prints its help and exits 2 rather than opting a server into tracking because someone was reading the command's help. **Breaking**: `midgie init --url …` used to create `midgie-state`; it now does nothing. Add `--create-state`. The messages that point at it (`deploy`'s "removals cannot be detected" note, `--prune`'s help, the state object's own documentation) name the flag.
+
 ## [0.4.3] - 2026-07-28
 
 ### Changed

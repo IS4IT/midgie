@@ -27,8 +27,8 @@ import com.evolveum.prism.xml.ns._public.types_3.PolyStringType;
  * you deliberately removed from one that merely accrued on the server.
  *
  * <p>The object is <b>never created implicitly</b>: {@code deploy} only uses a table that already exists, and
- * {@code midgie init} is the one thing that creates it. That way midgie never leaves an unexplained object on
- * someone's server, and enabling tracking stays a deliberate act.
+ * {@code midgie init --create-state} is the one thing that creates it. That way midgie never leaves an
+ * unexplained object on someone's server, and enabling tracking stays a deliberate act.
  *
  * <p>On creation it describes and protects itself for an administrator who has never heard of this tool —
  * {@code indestructible} (midPoint's model layer then refuses to delete it), a {@code description} and
@@ -67,9 +67,9 @@ final class SyncState {
             It is bookkeeping only: no midPoint behaviour depends on it.
 
             Losing it is harmless. If this object is removed, midgie simply stops detecting removals until \
-            'midgie init' recreates it - it never deletes anything as a result. It is marked indestructible \
-            only to prevent accidental deletion; clear that flag first if you really want it gone. To switch \
-            tracking off without deleting anything, set lifecycleState to 'archived'.""";
+            'midgie init --create-state' recreates it - it never deletes anything as a result. It is marked \
+            indestructible only to prevent accidental deletion; clear that flag first if you really want it \
+            gone. To switch tracking off without deleting anything, set lifecycleState to 'archived'.""";
 
     private SyncState() {
     }
@@ -131,8 +131,8 @@ final class SyncState {
     }
 
     /**
-     * Create the state table. Only {@code midgie init} calls this. Returns the new OID, or {@code null} when
-     * the server did not report one.
+     * Create the state table. Only {@code midgie init --create-state} calls this. Returns the new OID, or
+     * {@code null} when the server did not report one.
      */
     static String create(PrismContext prismContext, MidpointRestClient client)
             throws SchemaException, IOException {

@@ -61,8 +61,8 @@ class InitCommandTest {
     }
 
     @Test
-    void initCreatesTheStateObjectAndIsIdempotent(@TempDir Path dir) {
-        Result created = run("init", "--url", url, "-u", "administrator", "-p", "s3cret");
+    void createStateCreatesTheStateObjectAndIsIdempotent(@TempDir Path dir) {
+        Result created = run("init", "--create-state", "--url", url, "-u", "administrator", "-p", "s3cret");
 
         assertEquals(0, created.exit, created.err);
         assertTrue(requests.contains("POST /midpoint/ws/rest/lookupTables"),
@@ -71,12 +71,41 @@ class InitCommandTest {
 
         stateExists = true;
         requests.clear();
-        Result again = run("init", "--url", url, "-u", "administrator", "-p", "s3cret");
+        Result again = run("init", "--create-state", "--url", url, "-u", "administrator", "-p", "s3cret");
 
         assertEquals(0, again.exit, again.err);
         assertFalse(requests.contains("POST /midpoint/ws/rest/lookupTables"),
                 "a second init must change nothing: " + requests);
         assertTrue(again.out.contains("already exists"), again.out);
+    }
+
+    @Test
+    void initWithoutAStepPrintsHelpAndChangesNothing() {
+        // Every step writes something. Creating the state object because no flag was given would put an
+        // object on someone's server for a command they may only have been reading the help of — and a
+        // pipeline whose '--create-state' went missing must fail rather than pass having done nothing.
+        Result result = run("init", "--url", url, "-u", "administrator", "-p", "s3cret");
+
+        assertEquals(2, result.exit, result.out);
+        assertTrue(requests.isEmpty(), "the server must not be touched: " + requests);
+        assertTrue(result.err.contains("--create-state"), result.err);
+        assertTrue(result.err.contains("Usage:"), "the help must be printed: " + result.err);
+    }
+
+    @Test
+    void writingAPolicyDoesNotCreateTheStateObject(@TempDir Path dir) throws Exception {
+        // The two steps are independent: seeding a policy file says nothing about wanting a server opted
+        // into tracking.
+        Path tree = Files.createDirectories(dir.resolve("config"));
+        Files.writeString(tree.resolve("resource.xml"), resource("Prod"), StandardCharsets.UTF_8);
+
+        Result result = run("init", tree.toString(), "--url", url, "-u", "administrator", "-p", "s3cret",
+                "--write-policy", dir.resolve("midgie.policy").toString());
+
+        assertEquals(0, result.exit, result.err);
+        assertTrue(Files.exists(dir.resolve("midgie.policy")), "the policy file must be written");
+        assertFalse(requests.contains("POST /midpoint/ws/rest/lookupTables"),
+                "no state object without --create-state: " + requests);
     }
 
     @Test
