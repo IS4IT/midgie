@@ -49,6 +49,7 @@ public class Main implements java.util.concurrent.Callable<Integer> {
      */
     static CommandLine commandLine() {
         CommandLine commandLine = new CommandLine(new Main());
+        installConfigDefaults(commandLine);
         // picocli's default for an execution exception is 1, which this tool's contract defines as
         // "differences found". A typo'd --cacert or a malformed MIDPOINT_URL would then report drift to a CI
         // gate — and dump a Java stack trace at the operator. Every failure is a 2.
@@ -66,6 +67,43 @@ public class Main implements java.util.concurrent.Callable<Integer> {
             return CommandLine.ExitCode.USAGE;
         });
         return commandLine;
+    }
+
+    /**
+     * Install {@code midgie.properties} as the source of option defaults, when there is one.
+     *
+     * <p>A file that cannot be trusted fails every run rather than being skipped: a config the tool decided
+     * to ignore is worse than none, since the operator goes on believing the settings in it apply. Help is
+     * the exception — it is how you look up what a valid key is called.
+     */
+    private static void installConfigDefaults(CommandLine commandLine) {
+        try {
+            ConfigDefaults defaults = ConfigDefaults.load();
+            if (defaults != null) {
+                defaults.validate(commandLine);
+                commandLine.setDefaultValueProvider(defaults);
+                LOG.debug("defaults from {}", defaults.file());
+            }
+        } catch (Exception e) {
+            commandLine.setExecutionStrategy(parseResult -> {
+                if (helpRequested(parseResult)) {
+                    return new CommandLine.RunLast().execute(parseResult);
+                }
+                System.err.println("midgie: " + e.getMessage());
+                LOG.debug("config file rejected", e);
+                return EXIT_ERROR;
+            });
+        }
+    }
+
+    /** Whether help or version was asked for at any level of the parsed command line. */
+    private static boolean helpRequested(CommandLine.ParseResult parseResult) {
+        for (CommandLine.ParseResult level = parseResult; level != null; level = level.subcommand()) {
+            if (level.isUsageHelpRequested() || level.isVersionHelpRequested()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -97,19 +135,33 @@ public class Main implements java.util.concurrent.Callable<Integer> {
     }
 
     /**
-     * Whether {@code --insecure} appears among the options. Read straight off the argument list because the
-     * decision has to be made before picocli runs a command, and a command is what would build the client.
-     * Anything after a {@code --} separator is a positional argument, not an option.
+     * Whether {@code --insecure} appears among the options, or is set in the config file. Read straight off
+     * the argument list because the decision has to be made before picocli runs a command, and a command is
+     * what would build the client — which is also why the file is consulted here rather than left to the
+     * default-value provider: a config-file {@code insecure} that only reached the parser would switch off
+     * certificate trust while leaving hostname verification on, and fail in a way that looks like a
+     * certificate problem. Anything after a {@code --} separator is a positional argument, not an option.
      */
     static boolean insecureRequested(String[] args) {
         for (String arg : args) {
             if ("--".equals(arg)) {
-                return false;
+                break;
             }
             if ("--insecure".equals(arg)) {
                 return true;
             }
         }
-        return false;
+        return configuredInsecure();
+    }
+
+    /** {@code insecure=true} in the config file. A broken file is not diagnosed here; the run will say so. */
+    private static boolean configuredInsecure() {
+        try {
+            ConfigDefaults defaults = ConfigDefaults.load();
+            return defaults != null && defaults.isEnabled("insecure");
+        } catch (Exception e) {
+            LOG.debug("could not read the config file while latching hostname verification", e);
+            return false;
+        }
     }
 }

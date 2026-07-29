@@ -151,6 +151,16 @@ the midPoint source tree.
   unless `--yes`/`-y` is given. `--dry-run` prints the delta and changes nothing.
 - `midgie deploy <tree> [--url …]` → discover a folder tree, sort it by dependency, and print the apply
   order or reconcile it object by object. Its own section below.
+- **Config file (`midgie.properties`)** → defaults for any option, so the settings that never change for an
+  environment (server, account, CA certificate) leave the command line. Resolved from `-Dmidgie.conf`,
+  `$MIDGIE_CONF`, `$HOME/.midgie.properties`, `/etc/midgie/midgie.properties` — the explicit two error rather
+  than falling through when the path is missing. Keys are option names without dashes, optionally qualified
+  with a command; precedence is CLI > `MIDPOINT_*` env > file > built-in default. `ConfigDefaults` wraps
+  picocli's `PropertiesDefaultProvider` (which looks up `<qualified.command>.<key>` then `<key>`) and adds the
+  env rule plus validation: an unknown key is an error, since a mistyped setting that silently does nothing is
+  the failure mode the policy file's "matched no object" note exists to prevent, and `yes`/`prune` are refused
+  because a file is not where a person confirms a write or a delete. `insecure` is also read in `Main.main`,
+  before the hostname-verification latch, or it would half-apply.
 - `midgie init --url …` → the one-off set-up steps, each behind its own flag: `--create-state` creates the
   `midgie-state` object that delete detection needs, `--write-policy` seeds a starter `--policy` file for a
   tree. Never implicit, at two levels: `deploy` reports that tracking is off rather than creating anything,

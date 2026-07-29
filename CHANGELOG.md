@@ -5,6 +5,16 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A config file, `midgie.properties`, supplying defaults for any option.** The settings that never change for an environment — the server, the account, the CA certificate that makes TLS verify rather than needing `--insecure` — had to be repeated on every command line, and in a container there was nowhere to put them at all. Found at `-Dmidgie.conf`, `$MIDGIE_CONF`, `$HOME/.midgie.properties` or `/etc/midgie/midgie.properties` (a ConfigMap mount, in a pod); keys are option names without the dashes, optionally qualified with a command (`midgie.deploy.scope`). Precedence is command line, then the `MIDPOINT_*` environment variables, then the file, then the built-in default — a variable describes the process a run was launched into, so it outranks a file on the machine. A key that is not an option is an error naming the file, since a mistyped setting that silently does nothing is the failure this tool exists to prevent; `yes` and `prune` are refused outright, because a file is not where someone confirms that a run may write without asking or delete.
+
+### Changed
+
+- **The container image has `vi`** (`vim-tiny`), for editing a file in the pod you shell into.
+
 ## [0.5.1] - 2026-07-29
 
 ### Added

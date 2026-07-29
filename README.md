@@ -379,6 +379,32 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 
 `deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--policy <file>`, and `--confirm-each-apply` — described in the `deploy` section above.
 
+## Config file — `midgie.properties`
+
+The settings that never change for an environment — the server, the account, the CA certificate that makes TLS verify instead of needing `--insecure` — can live in a properties file instead of on every command line:
+
+```properties
+# midgie.properties
+url    = https://mp.example/midpoint
+user   = deployer
+cacert = /etc/ssl/corp-ca.pem
+scope  = present
+
+midgie.deploy.retry = true      # qualified with a command: only 'deploy' gets it
+```
+
+```bash
+midgie init --create-state          # no --url, --user or --cacert needed
+```
+
+**Where it comes from**, first match wins: the `midgie.conf` system property (`JAVA_OPTS=-Dmidgie.conf=…`), the `MIDGIE_CONF` environment variable, `$HOME/.midgie.properties`, `/etc/midgie/midgie.properties`. The first two name the file explicitly, so a path that does not exist is an error rather than a quiet fall-through to a different file. In a pod, `/etc/midgie/midgie.properties` is a ConfigMap mount and `$HOME/.midgie.properties` is yours if you [put `$HOME` on the volume](#helm-chart).
+
+**Keys** are option names without the dashes — `url`, `cacert`, `create-if-absent` — applying to every subcommand that has that option, or qualified with the command to narrow them (`midgie.deploy.scope`). **Precedence**: an option on the command line wins, then the `MIDPOINT_*` environment variables, then this file, then the option's built-in default. Environment beats file deliberately: a variable describes the process this run was launched into — a pod's deployment, typically — and a file on the same machine should not quietly redirect it somewhere else.
+
+Two things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. And **`yes` and `prune` are refused**: they decide whether a run writes without asking and whether it deletes, and a file on disk is not where a person confirms that — pass them on the command line.
+
+A CA certificate is the case worth spelling out. With `cacert` in the file, TLS verifies properly for every command with nothing extra typed, so `--insecure` stops being the path of least resistance.
+
 ## Environment variables
 
 | var | equivalent of |
@@ -386,6 +412,7 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 | `MIDPOINT_URL` | `--url` |
 | `MIDPOINT_USER` | `--user` |
 | `MIDPOINT_PASSWORD` | password (after the `--password*` flags, before the prompt) |
+| `MIDGIE_CONF` | path to the [config file](#config-file--midgieproperties) (also `-Dmidgie.conf`) |
 | `MIDGIE_JAR` | JAR path used by the `bin/midgie` launcher |
 | `JDK_JAVA_OPTIONS` | set to `--sun-misc-unsafe-memory-access=allow` when running the JAR directly on JDK 23+ |
 
