@@ -51,7 +51,7 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). git can clone over HTTPS and SSH (`curl`, `openssh-client`, `less`), so the tree can be fetched in the container itself rather than by an init container. It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
 
 ```bash
-docker run --rm -v "$PWD:/work" is4it/midgie:0.4.1 diff a.xml b.xml
+docker run --rm -v "$PWD:/work" is4it/midgie:0.5.0 diff a.xml b.xml
 
 # In a Job, command: is the entrypoint and args: the subcommand line.
 #   args: ["deploy", "/work", "--url", "https://mp/midpoint", "--yes"]
@@ -60,9 +60,9 @@ docker run --rm -v "$PWD:/work" is4it/midgie:0.4.1 diff a.xml b.xml
 For a shell — to run midgie by hand against a checkout in the pod — the container needs something long-running, since the entrypoint would otherwise print help and exit:
 
 ```bash
-kubectl run midgie --image=is4it/midgie:0.4.1 --restart=Never --command -- sleep infinity
+kubectl run midgie --image=is4it/midgie:0.5.0 --restart=Never --command -- sleep infinity
 kubectl exec -it midgie -- bash          # then: midgie deploy /work --url ...
-docker run -d --name midgie --entrypoint sleep is4it/midgie:0.4.1 infinity   # the docker equivalent
+docker run -d --name midgie --entrypoint sleep is4it/midgie:0.5.0 infinity   # the docker equivalent
 ```
 
 `docker run <image> bash` does *not* give a shell — it runs `midgie bash`, which is rejected as an unknown subcommand. Use `--entrypoint bash`.

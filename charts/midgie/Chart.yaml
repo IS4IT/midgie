@@ -7,10 +7,10 @@ description: A midgie pod to exec into, with a persistent volume for git checkou
 type: application
 
 # Chart version; bumped when the chart changes, independently of midgie itself.
-version: 0.1.0
+version: 0.1.1
 
 # The midgie release the chart installs by default (image.tag overrides it).
-appVersion: "0.4.3"
+appVersion: "0.5.0"
 
 home: https://github.com/IS4IT/midgie
 sources:
