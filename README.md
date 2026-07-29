@@ -91,14 +91,15 @@ gh workflow run Release -f tag=v0.4.3 -f update_latest=true  # ...and move :late
 `charts/midgie` puts that image in a namespace as a workbench you exec into, with a PersistentVolumeClaim for git checkouts so a clone survives restarts and image bumps. Every release attaches the packaged chart, versioned with the release, so it installs without a checkout:
 
 ```bash
-helm install midgie https://github.com/IS4IT/midgie/releases/download/v0.5.1/midgie-0.5.1.tgz \
-  -n midgie --create-namespace \
+gh release download v0.5.1 -R IS4IT/midgie -p 'midgie-*.tgz'
+
+helm install midgie ./midgie-0.5.1.tgz -n midgie --create-namespace \
   --set midpoint.url=https://mp.example/midpoint --set midpoint.user=administrator
 
 kubectl -n midgie exec -it deploy/midgie -- bash
 ```
 
-From a checkout it is `helm install midgie charts/midgie -n midgie …` instead.
+The download is a separate step because **this repository is private**: `helm install <release URL>` cannot authenticate and gets a 404. Once it is public, the URL can be passed to `helm install` directly. From a checkout it is `helm install midgie charts/midgie -n midgie …` instead.
 
 Inside the pod, `/work` is the volume and `midgie` is on `PATH`:
 

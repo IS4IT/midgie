@@ -9,7 +9,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **The packaged Helm chart is attached to each release**, so it installs without a checkout: `helm install midgie https://github.com/IS4IT/midgie/releases/download/v<version>/midgie-<version>.tgz`. CI packages it with the release's version as both `version` and `appVersion` — every publish is then uniquely versioned without anyone remembering to bump `Chart.yaml`, and two different charts can never go out as the same version. The chart's `values-openshift.yaml` travels inside the package; installing straight from the URL, pass its three settings with `--set` instead of `-f`.
+- **The packaged Helm chart is attached to each release**, so it installs without a checkout: `gh release download v<version> -R IS4IT/midgie -p 'midgie-*.tgz'`, then `helm install midgie ./midgie-<version>.tgz`. (Passing the release URL straight to `helm install` needs the repository to be public; while it is private, helm cannot authenticate and gets a 404.) CI packages it with the release's version as both `version` and `appVersion` — every publish is then uniquely versioned without anyone remembering to bump `Chart.yaml`, and two different charts can never go out as the same version. The chart's `values-openshift.yaml` travels inside the package; installing straight from the URL, pass its three settings with `--set` instead of `-f`.
 
 ### Changed
 
