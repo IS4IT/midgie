@@ -1,0 +1,97 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+# -- Image to run. The tag defaults to the chart's appVersion.
+image:
+  repository: is4it/midgie
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The image's entrypoint is midgie itself, so the pod would run one command and exit. This keeps it up so
+# there is something to exec into; midgie is then run by hand inside the pod. Replace it to make the pod do
+# a job instead (e.g. command: ["midgie"], args: ["deploy", "/work/config", "--url", "…", "--yes"]) — but a
+# Deployment restarts a completed pod, so a real job belongs in a Job, not here.
+command: ["sleep"]
+args: ["infinity"]
+
+# -- The volume holding git checkouts. It outlives the pod, so a clone survives a restart or an image bump.
+persistence:
+  enabled: true
+  mountPath: /work
+  size: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  # "" uses the cluster's default StorageClass; "-" disables dynamic provisioning.
+  storageClass: ""
+  # Bring your own claim instead of letting the chart create one.
+  existingClaim: ""
+  # Keep the claim (and the checkouts) when the release is uninstalled. Deleting a release should not throw
+  # away work in progress; drop the claim by hand when you mean to.
+  keepOnUninstall: true
+
+# -- Connection details for the midPoint server, as the environment variables midgie reads. Anything left
+# empty is simply not set, so it can be passed on the command line inside the pod instead.
+midpoint:
+  url: ""
+  user: ""
+  # Read the password from a Secret that already exists. Preferred: nothing sensitive enters the values file.
+  existingSecret: ""
+  passwordKey: password
+  # Convenience only — this ends up in the release's values, so it is readable by anyone who can read the
+  # release. Use existingSecret for anything real.
+  password: ""
+
+# -- SSH for cloning private repositories. The key is mounted at $HOME/.ssh/id_rsa.
+ssh:
+  enabled: false
+  # A Secret holding the private key (and optionally a known_hosts entry).
+  existingSecret: ""
+  privateKeyKey: id_rsa
+  knownHostsKey: known_hosts
+  # ssh refuses a group- or world-readable key, so the mount is owner-read-only.
+  defaultMode: 0400
+  # With no known_hosts, an unknown host key fails the clone. 'accept-new' trusts the host on first contact
+  # — convenient, and no worse than what most CI does, but it is trust-on-first-use, not verification.
+  acceptNewHostKeys: false
+
+# -- Extra environment variables, e.g. JAVA_OPTS or a proxy.
+extraEnv: []
+# - name: JAVA_OPTS
+#   value: "-Xmx768m"
+
+# -- The JVM parses midPoint's whole schema at startup, which is the memory floor here.
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# -- Matches the image: UID 1001, group 0. fsGroup makes the volume writable for that UID.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 0
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
+
+nameOverride: ""
+fullnameOverride: ""
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

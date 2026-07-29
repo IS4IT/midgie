@@ -1,0 +1,35 @@
+{{/*
+Copyright (c) 2026 IS4IT
+
+SPDX-License-Identifier: EUPL-1.2
+*/}}
+midgie {{ default .Chart.AppVersion .Values.image.tag }} is running in namespace {{ .Release.Namespace }}.
+
+Get a shell:
+
+  kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "midgie.fullname" . }} -- bash
+
+{{ if .Values.persistence.enabled -}}
+Clone into {{ .Values.persistence.mountPath }} — that is the persistent volume ({{ .Values.persistence.size }}), so a checkout
+survives a restart or an image bump:
+
+  git clone <repo> {{ .Values.persistence.mountPath }}/config      # full history: a shallow clone disables removal detection
+  midgie deploy {{ .Values.persistence.mountPath }}/config --dry-run
+{{- else -}}
+Persistence is off, so anything you clone is lost when the pod restarts. Set persistence.enabled=true.
+{{- end }}
+
+{{ if .Values.midpoint.url -}}
+MIDPOINT_URL is set to {{ .Values.midpoint.url }}{{ if .Values.midpoint.user }} and MIDPOINT_USER to {{ .Values.midpoint.user }}{{ end }}, so --url can be left off.
+{{- else -}}
+No MIDPOINT_URL is set: pass --url (and --user) to each command, or set midpoint.url in values.
+{{- end }}
+{{- if .Values.midpoint.password }}
+
+Note: midpoint.password was passed through values, so it is readable by anyone who can read this release.
+Use midpoint.existingSecret for anything that matters.
+{{- end }}
+
+Before 'deploy --prune' can report removals, the server needs midgie's state object once:
+
+  midgie init --create-state --url <url> --user <user>

@@ -86,6 +86,38 @@ gh workflow run Release -f tag=v0.4.3 -f update_latest=true  # ...and move :late
 
 `:latest` stays put unless you ask for it, so rebuilding an older tag cannot drag it backwards (and a pre-release never takes it either way). The consequence for anyone pulling: a version tag names the midgie release, not one immutable build of it — pin the digest if you need the same bytes every time.
 
+### Helm chart
+
+`charts/midgie` puts that image in a namespace as a workbench you exec into, with a PersistentVolumeClaim for git checkouts so a clone survives restarts and image bumps.
+
+```bash
+helm install midgie charts/midgie -n midgie --create-namespace \
+  --set midpoint.url=https://mp.example/midpoint --set midpoint.user=administrator
+
+kubectl -n midgie exec -it deploy/midgie -- bash
+```
+
+Inside the pod, `/work` is the volume and `midgie` is on `PATH`:
+
+```bash
+git clone https://git.example/config.git /work/config    # full history — a shallow clone disables removal detection
+midgie deploy /work/config --dry-run                      # --url/--user come from the environment
+```
+
+It is a Deployment of exactly one pod (a `ReadWriteOnce` claim cannot be shared, and this is a workbench, not a service) with `strategy: Recreate` — under `RollingUpdate` the replacement pod would wait for a claim the old one still holds and never start. The image's entrypoint is `midgie` itself, so the pod is kept alive by `command: ["sleep"], args: ["infinity"]`; point those at `midgie` and its subcommand to make the pod do a job instead, though a real job belongs in a `Job`, since a Deployment restarts a pod that has completed.
+
+Everything is in [`charts/midgie/values.yaml`](charts/midgie/values.yaml), with the settings worth knowing:
+
+| value | default | |
+|---|---|---|
+| `persistence.size` / `.storageClass` / `.mountPath` | `5Gi`, cluster default, `/work` | `persistence.existingClaim` mounts a claim you made yourself |
+| `persistence.keepOnUninstall` | `true` | the claim is annotated `helm.sh/resource-policy: keep`, so `helm uninstall` does not throw away work in progress |
+| `midpoint.url` / `.user` | unset | become `MIDPOINT_URL` / `MIDPOINT_USER`, so commands in the pod need no `--url` |
+| `midpoint.existingSecret` / `.passwordKey` | unset, `password` | `MIDPOINT_PASSWORD` from a Secret you control. `midpoint.password` also works but lands in the release values — fine for a lab, not for a real server |
+| `ssh.*` | off | mounts a key Secret at `$HOME/.ssh` with mode `0400`, since ssh refuses a key others can read; `ssh.acceptNewHostKeys` sets `GIT_SSH_COMMAND` for trust-on-first-use when you have no `known_hosts` |
+
+Reinstalling under the **same** release name re-adopts a kept claim, so the checkouts come back. Under a different name it will not — pass `persistence.existingClaim` to pick the old one up.
+
 ## Commands
 
 `midgie` has four subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-policy` seeds a policy file for a tree (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).

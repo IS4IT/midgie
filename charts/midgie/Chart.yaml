@@ -1,0 +1,24 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+apiVersion: v2
+name: midgie
+description: A midgie pod to exec into, with a persistent volume for git checkouts
+type: application
+
+# Chart version; bumped when the chart changes, independently of midgie itself.
+version: 0.1.0
+
+# The midgie release the chart installs by default (image.tag overrides it).
+appVersion: "0.4.3"
+
+home: https://github.com/IS4IT/midgie
+sources:
+  - https://github.com/IS4IT/midgie
+keywords:
+  - midpoint
+  - identity-management
+  - gitops
+maintainers:
+  - name: IS4IT
+    url: https://github.com/IS4IT

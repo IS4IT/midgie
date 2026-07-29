@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A Helm chart, `charts/midgie`**, that runs the image in a namespace as a workbench to `kubectl exec` into, with a PersistentVolumeClaim mounted at `/work` so git checkouts survive a pod restart or an image bump. One pod, `strategy: Recreate` (a `ReadWriteOnce` claim cannot be handed to a second pod during a rolling update), kept alive with `sleep infinity` because the image's entrypoint is midgie itself. The claim is annotated `helm.sh/resource-policy: keep`, so `helm uninstall` does not throw away work in progress. Optional: `MIDPOINT_URL`/`MIDPOINT_USER` from values and `MIDPOINT_PASSWORD` from a Secret, and an SSH key mounted at `0400` for cloning private repositories.
+
 ### Changed
 
 - **`init` no longer creates the state object unless asked: that step is now `--create-state`.** `init` is becoming the home for several one-off set-up steps, and each of them writes something — to a server or to a working copy — so none should be what happens by default. `init` with no step now prints its help and exits 2 rather than opting a server into tracking because someone was reading the command's help. **Breaking**: `midgie init --url …` used to create `midgie-state`; it now does nothing. Add `--create-state`. The messages that point at it (`deploy`'s "removals cannot be detected" note, `--prune`'s help, the state object's own documentation) name the flag.

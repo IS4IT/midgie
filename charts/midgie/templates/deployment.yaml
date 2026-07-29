@@ -1,0 +1,118 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "midgie.fullname" . }}
+  labels:
+    {{- include "midgie.labels" . | nindent 4 }}
+spec:
+  # One pod, always. This is a workbench you exec into, and a ReadWriteOnce claim cannot be shared anyway.
+  replicas: 1
+  strategy:
+    # Not RollingUpdate: the new pod would wait for a claim the old one still holds, and never start.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "midgie.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "midgie.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "midgie.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: midgie
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- if .Values.midpoint.url }}
+            - name: MIDPOINT_URL
+              value: {{ .Values.midpoint.url | quote }}
+            {{- end }}
+            {{- if .Values.midpoint.user }}
+            - name: MIDPOINT_USER
+              value: {{ .Values.midpoint.user | quote }}
+            {{- end }}
+            {{- if or .Values.midpoint.password .Values.midpoint.existingSecret }}
+            - name: MIDPOINT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "midgie.passwordSecretName" . }}
+                  key: {{ .Values.midpoint.passwordKey }}
+            {{- end }}
+            {{- if and .Values.ssh.enabled .Values.ssh.acceptNewHostKeys }}
+            - name: GIT_SSH_COMMAND
+              value: "ssh -o StrictHostKeyChecking=accept-new"
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: work
+              mountPath: {{ .Values.persistence.mountPath }}
+            {{- end }}
+            {{- if .Values.ssh.enabled }}
+            - name: ssh
+              mountPath: /home/midgie/.ssh
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: work
+          persistentVolumeClaim:
+            claimName: {{ include "midgie.claimName" . }}
+        {{- end }}
+        {{- if .Values.ssh.enabled }}
+        - name: ssh
+          secret:
+            secretName: {{ required "ssh.existingSecret is required when ssh.enabled is set" .Values.ssh.existingSecret }}
+            # ssh refuses a key any group or other can read, so this mode is not decoration.
+            defaultMode: {{ .Values.ssh.defaultMode }}
+            items:
+              - key: {{ .Values.ssh.privateKeyKey }}
+                path: id_rsa
+              {{- if .Values.ssh.knownHostsKey }}
+              - key: {{ .Values.ssh.knownHostsKey }}
+                path: known_hosts
+              {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

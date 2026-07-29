@@ -79,6 +79,30 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: false
 
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # helm ships with the GitHub-hosted runner image; no action to pin for this.
+      - name: Lint and render
+        run: |
+          helm lint charts/midgie
+          helm template midgie charts/midgie > /dev/null
+          # Again with the optional paths on, since those templates are otherwise never rendered — the
+          # ssh block also carries a 'required', which only fires when ssh.enabled is set.
+          helm template midgie charts/midgie \
+            --set midpoint.url=https://mp.example/midpoint \
+            --set midpoint.user=administrator \
+            --set midpoint.password=s3cret \
+            --set ssh.enabled=true \
+            --set ssh.existingSecret=git-key \
+            --set ssh.acceptNewHostKeys=true \
+            --set serviceAccount.create=true \
+            --set persistence.existingClaim=someones-claim > /dev/null
+
   reuse:
     name: REUSE compliance
     runs-on: ubuntu-latest
