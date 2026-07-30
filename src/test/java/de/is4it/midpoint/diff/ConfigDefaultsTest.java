@@ -11,6 +11,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -49,8 +50,8 @@ class ConfigDefaultsTest {
     void anOptionTakesItsDefaultFromTheFile(@TempDir Path dir) throws Exception {
         // --scope full also diffs what the desired file does not mention, so the dropped description becomes
         // a delete; under the built-in 'present' the same pair is in sync. The exit code shows which ran.
-        Path desired = write(dir, "desired.xml", user(null));
-        Path current = write(dir, "current.xml", user("only on the server"));
+        Path desired = writeXml(dir, "desired.xml", user(null));
+        Path current = writeXml(dir, "current.xml", user("only on the server"));
 
         assertEquals(0, run("diff", desired.toString(), current.toString()).exit,
                 "without a config file the built-in default (present) applies");
@@ -62,8 +63,8 @@ class ConfigDefaultsTest {
 
     @Test
     void theCommandLineBeatsTheFile(@TempDir Path dir) throws Exception {
-        Path desired = write(dir, "desired.xml", user(null));
-        Path current = write(dir, "current.xml", user("only on the server"));
+        Path desired = writeXml(dir, "desired.xml", user(null));
+        Path current = writeXml(dir, "current.xml", user("only on the server"));
         useConfig(dir, "scope = full");
 
         assertEquals(0, run("diff", desired.toString(), current.toString(), "--scope", "present").exit,
@@ -72,8 +73,8 @@ class ConfigDefaultsTest {
 
     @Test
     void aQualifiedKeyAppliesToOneCommandOnly(@TempDir Path dir) throws Exception {
-        Path desired = write(dir, "desired.xml", user(null));
-        Path current = write(dir, "current.xml", user("only on the server"));
+        Path desired = writeXml(dir, "desired.xml", user(null));
+        Path current = writeXml(dir, "current.xml", user("only on the server"));
         useConfig(dir, "midgie.apply.scope = full");   // apply, not diff
 
         assertEquals(0, run("diff", desired.toString(), current.toString()).exit,
@@ -99,6 +100,52 @@ class ConfigDefaultsTest {
         assertEquals(null, withEnv.defaultValue(url), "the file stands aside for MIDPOINT_URL");
         assertEquals("https://from-the-file/midpoint", withoutEnv.defaultValue(url),
                 "and applies when the variable is not set");
+    }
+
+    @Test
+    void filesOnTheSearchPathAreMergedPerKey(@TempDir Path dir) throws Exception {
+        // The point of merging: a site file holds what is true of the machine, a user file adds only what
+        // differs, and neither has to repeat the other. First-match-wins made the user file shadow the site
+        // file entirely, so the CA certificate had to be copied into every user's file to survive.
+        Path site = write(dir, "site.properties", "cacert = /etc/ssl/corp.pem", "scope = full", "user = site");
+        Path user = write(dir, "user.properties", "user = deployer", "url = https://mp.example/midpoint");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, site.toFile(), user.toFile());
+        defaults.validate(Main.commandLine());
+
+        assertEquals("/etc/ssl/corp.pem", value(defaults, "diff", "--cacert"), "site-only key survives");
+        assertEquals("full", value(defaults, "diff", "--scope"), "site-only key survives");
+        assertEquals("https://mp.example/midpoint", value(defaults, "diff", "--url"), "user-only key applies");
+        assertEquals("deployer", value(defaults, "diff", "--user"), "the later layer wins the key both set");
+        assertEquals(2, defaults.sources().size(), defaults.sources().toString());
+    }
+
+    @Test
+    void anExplicitlyNamedFileIsTheTopLayer(@TempDir Path dir) throws Exception {
+        Path site = write(dir, "site.properties", "cacert = /etc/ssl/corp.pem", "url = https://site/midpoint");
+        Path user = write(dir, "user.properties", "url = https://user/midpoint");
+        Path named = write(dir, "named.properties", "url = https://named/midpoint");
+        System.setProperty(ConfigDefaults.PATH_PROPERTY, named.toString());
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, site.toFile(), user.toFile());
+
+        assertEquals("https://named/midpoint", value(defaults, "diff", "--url"),
+                "naming a file is the most deliberate of the three, so it wins");
+        assertEquals("/etc/ssl/corp.pem", value(defaults, "diff", "--cacert"),
+                "and it still layers on top rather than replacing what is underneath");
+    }
+
+    @Test
+    void aRefusedKeyNamesTheFileItCameFrom(@TempDir Path dir) throws Exception {
+        // With several files merged, naming "the config file" would send the operator to the wrong one.
+        Path site = write(dir, "site.properties", "url = https://mp.example/midpoint");
+        Path user = write(dir, "user.properties", "yes = true");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, site.toFile(), user.toFile());
+        IOException error = assertThrows(IOException.class, () -> defaults.validate(Main.commandLine()));
+
+        assertTrue(error.getMessage().contains(user.toString()), error.getMessage());
+        assertFalse(error.getMessage().contains(site.toString()), error.getMessage());
     }
 
     @Test
@@ -178,9 +225,71 @@ class ConfigDefaultsTest {
         assertTrue(error.getMessage().contains(file.toString()), error.getMessage());
     }
 
+    @Test
+    void findingNoFileAtAllIsAlsoLogged(@TempDir Path dir) throws Exception {
+        // Silence cannot be read: "there is no config file" and "--debug did not work" look the same, which
+        // is exactly the wrong ambiguity while working out where a setting came from.
+        List<String> logged = capturingConfigLog(() ->
+                ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                        dir.resolve("absent-user").toFile()));
+
+        assertTrue(logged.stream().anyMatch(line -> line.contains("no midgie.properties")), logged.toString());
+        assertTrue(logged.stream().anyMatch(line -> line.contains("absent-site")), logged.toString());
+        assertTrue(logged.stream().anyMatch(line -> line.contains("absent-user")), logged.toString());
+    }
+
+    @Test
+    void theLogNamesKeysAndFilesButNeverValues(@TempDir Path dir) throws Exception {
+        // 'password' is a legitimate key, so the provenance log has to stop at the key name.
+        Path site = write(dir, "site.properties", "url = https://mp.example/midpoint");
+        Path user = write(dir, "user.properties", "password = hunter2", "url = https://other.example/midpoint");
+
+        List<String> logged = capturingConfigLog(() -> ConfigDefaults.load(name -> null, site.toFile(), user.toFile()));
+
+        assertTrue(logged.stream().anyMatch(line -> line.contains("password")), logged.toString());
+        assertTrue(logged.stream().anyMatch(line -> line.contains("overrides")), "the shadowed url: " + logged);
+        assertFalse(logged.stream().anyMatch(line -> line.contains("hunter2")),
+                "a value must never reach the log: " + logged);
+    }
+
+    /** Run something with the config logger at DEBUG, returning the lines it wrote. */
+    private static List<String> capturingConfigLog(ThrowingRunnable body) throws Exception {
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ConfigDefaults.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        ch.qos.logback.classic.Level original = logger.getLevel();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            body.run();
+        } finally {
+            logger.setLevel(original);
+            logger.detachAppender(appender);
+        }
+        return appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
     // --- fixtures ---
 
-    private static Path write(Path dir, String name, String xml) throws IOException {
+    /** The default an option would take from the merged files. */
+    private static String value(ConfigDefaults defaults, String command, String option) throws Exception {
+        return defaults.defaultValue(Main.commandLine().getSubcommands().get(command)
+                .getCommandSpec().findOption(option));
+    }
+
+    private static Path write(Path dir, String name, String... lines) throws IOException {
+        Path file = dir.resolve(name);
+        Files.writeString(file, String.join("\n", lines) + "\n", StandardCharsets.UTF_8);
+        return file;
+    }
+
+    private static Path writeXml(Path dir, String name, String xml) throws IOException {
         Path file = dir.resolve(name);
         Files.writeString(file, xml, StandardCharsets.UTF_8);
         return file;

@@ -38,4 +38,34 @@ final class Logging {
             logbackOurs.setLevel(ch.qos.logback.classic.Level.TRACE);
         }
     }
+
+    /**
+     * Switch logging on straight from the argument list, before picocli has parsed anything.
+     *
+     * <p>Each subcommand does this again for itself, which is enough for everything it does — but not for
+     * what happens while the command line is being <em>built</em>: reading and merging the config files. Those
+     * decisions were logged into a logger that was still off, so {@code --debug} could never answer the one
+     * question a layered config raises, which is where a setting came from. Anything after a {@code --}
+     * separator is a positional argument, not an option.
+     */
+    static void enableFrom(String[] args) {
+        for (String arg : args) {
+            if ("--".equals(arg)) {
+                return;
+            }
+            if ("--trace".equals(arg)) {
+                enableTrace();
+                return;
+            }
+        }
+        for (String arg : args) {
+            if ("--".equals(arg)) {
+                return;
+            }
+            if ("--debug".equals(arg) || "-v".equals(arg)) {
+                enableDebug();
+                return;
+            }
+        }
+    }
 }

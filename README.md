@@ -397,9 +397,31 @@ midgie.deploy.retry = true      # qualified with a command: only 'deploy' gets i
 midgie init --create-state          # no --url, --user or --cacert needed
 ```
 
-**Where it comes from**, first match wins: the `midgie.conf` system property (`JAVA_OPTS=-Dmidgie.conf=…`), the `MIDGIE_CONF` environment variable, `$HOME/.midgie.properties`, `/etc/midgie/midgie.properties`. The first two name the file explicitly, so a path that does not exist is an error rather than a quiet fall-through to a different file. In a pod, `/etc/midgie/midgie.properties` is a ConfigMap mount and `$HOME/.midgie.properties` is yours if you [put `$HOME` on the volume](#helm-chart).
+**Where it comes from**: `/etc/midgie/midgie.properties`, then `$HOME/.midgie.properties`, then a file named by `MIDGIE_CONF` or the `midgie.conf` system property (`JAVA_OPTS=-Dmidgie.conf=…`). All of them are read and **merged per key**, later layers winning — so a site file can hold what is true of the machine and a user file add only what differs, without either repeating the other:
+
+```properties
+# /etc/midgie/midgie.properties — the machine
+cacert = /etc/ssl/corp-ca.pem
+retries = 3
+
+# ~/.midgie.properties — you
+url  = https://mp-test.example/midpoint
+user = deployer
+```
+
+Naming a file explicitly is the most deliberate of the three, so it sits on top; and because it was named on purpose, a path that does not exist is an error rather than a quiet skip. In a pod, `/etc/midgie/midgie.properties` is a ConfigMap mount and `$HOME/.midgie.properties` is yours if you [put `$HOME` on the volume](#helm-chart).
 
 **Keys** are option names without the dashes — `url`, `cacert`, `create-if-absent` — applying to every subcommand that has that option, or qualified with the command to narrow them (`midgie.deploy.scope`). **Precedence**: an option on the command line wins, then the `MIDPOINT_*` environment variables, then this file, then the option's built-in default. Environment beats file deliberately: a variable describes the process this run was launched into — a pod's deployment, typically — and a file on the same machine should not quietly redirect it somewhere else.
+
+`midgie <command> -v` names every file it read and which key came from which — keys and their source only, never values, since one of those keys is `password`:
+
+```
+config: 3 setting(s) from /home/you/.midgie.properties
+config: 2 setting(s) from /etc/midgie/midgie.properties
+config:   user from /home/you/.midgie.properties overrides /etc/midgie/midgie.properties
+config: cacert <- /etc/midgie/midgie.properties
+config: url    <- /home/you/.midgie.properties
+```
 
 Two things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. And **`yes` and `prune` are refused**: they decide whether a run writes without asking and whether it deletes, and a file on disk is not where a person confirms that — pass them on the command line.
 

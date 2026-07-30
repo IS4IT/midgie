@@ -48,6 +48,17 @@ public class Main implements java.util.concurrent.Callable<Integer> {
      * regression in either of them.
      */
     static CommandLine commandLine() {
+        return commandLine(new String[0]);
+    }
+
+    /**
+     * As {@link #commandLine()}, but with the argument list to hand — which matters only for logging: the
+     * config files are read while this is being built, so {@code --debug} has to be switched on from argv
+     * before that happens, or the one question a layered config raises (which file a setting came from) is
+     * answered into a logger that is still off.
+     */
+    static CommandLine commandLine(String[] args) {
+        Logging.enableFrom(args);
         CommandLine commandLine = new CommandLine(new Main());
         installConfigDefaults(commandLine);
         // picocli's default for an execution exception is 1, which this tool's contract defines as
@@ -61,7 +72,7 @@ public class Main implements java.util.concurrent.Callable<Integer> {
         });
         // The default parameter-exception handler echoes every unmatched token, so one typo publishes a
         // secret: 'midgie diff a.xml b.xml --pasword hunter2' printed the password into the log.
-        commandLine.setParameterExceptionHandler((exception, args) -> {
+        commandLine.setParameterExceptionHandler((exception, unparsed) -> {
             System.err.println("midgie: " + safeMessage(exception));
             exception.getCommandLine().usage(System.err);
             return CommandLine.ExitCode.USAGE;
@@ -82,7 +93,7 @@ public class Main implements java.util.concurrent.Callable<Integer> {
             if (defaults != null) {
                 defaults.validate(commandLine);
                 commandLine.setDefaultValueProvider(defaults);
-                LOG.debug("defaults from {}", defaults.file());
+                LOG.debug("defaults from {}", defaults.sources());
             }
         } catch (Exception e) {
             commandLine.setExecutionStrategy(parseResult -> {
@@ -131,7 +142,7 @@ public class Main implements java.util.concurrent.Callable<Integer> {
         // on first use of java.net.http, so leaving the decision to whichever client is constructed first
         // makes --insecure depend on call order rather than on the flag.
         MidpointRestClient.latchHostnameVerification(insecureRequested(args));
-        System.exit(commandLine().execute(args));
+        System.exit(commandLine(args).execute(args));
     }
 
     /**

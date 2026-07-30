@@ -5,6 +5,13 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`--debug` now shows where each setting came from** — every file read, every key that one layer overrode in another, and which file each effective key came from. Keys and their source only, never values, since one of them is `password`. Finding no file at all is logged too, naming the paths searched — silence could not be told apart from the flag not working. The lines existed before but were written into a logger that was still off: each subcommand switches logging on for itself, and the config files are read earlier than that, while the command line is being built.
+- **The `midgie.properties` files on the search path are merged instead of the first one found winning.** `/etc/midgie/midgie.properties`, then `$HOME/.midgie.properties`, then a file named by `$MIDGIE_CONF`/`-Dmidgie.conf`, layered per key with the later one winning — so a site file can hold what is true of the machine (a CA certificate, a retry count) while a user file adds only what differs (the server, the account), and neither has to repeat the other. Previously a user file shadowed the site file outright, so anything in it had to be copied into every user's file to survive. Each key remembers which file it came from, so a validation error names the file actually at fault.
+
 ## [0.6.1] - 2026-07-30
 
 ### Fixed

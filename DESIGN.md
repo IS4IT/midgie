@@ -152,9 +152,11 @@ the midPoint source tree.
 - `midgie deploy <tree> [--url …]` → discover a folder tree, sort it by dependency, and print the apply
   order or reconcile it object by object. Its own section below.
 - **Config file (`midgie.properties`)** → defaults for any option, so the settings that never change for an
-  environment (server, account, CA certificate) leave the command line. Resolved from `-Dmidgie.conf`,
-  `$MIDGIE_CONF`, `$HOME/.midgie.properties`, `/etc/midgie/midgie.properties` — the explicit two error rather
-  than falling through when the path is missing. Keys are option names without dashes, optionally qualified
+  environment (server, account, CA certificate) leave the command line. Read from `/etc/midgie/midgie.properties`, then
+  `$HOME/.midgie.properties`, then a file named by `$MIDGIE_CONF`/`-Dmidgie.conf`, and **merged per key** with
+  later layers winning — a site file holds what is true of the machine, a user file adds only what differs.
+  A named path that does not exist is an error rather than a silent skip, and each key remembers which file
+  it came from so a validation error names the right one. Keys are option names without dashes, optionally qualified
   with a command; precedence is CLI > `MIDPOINT_*` env > file > built-in default. `ConfigDefaults` wraps
   picocli's `PropertiesDefaultProvider` (which looks up `<qualified.command>.<key>` then `<key>`) and adds the
   env rule plus validation: an unknown key is an error, since a mistyped setting that silently does nothing is
