@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A hostname that does not resolve says so**, instead of `cannot connect to … (is the server up and the URL correct? null)`. The JDK reports a DNS failure as a `ConnectException` carrying no message, with `UnresolvedAddressException` two levels down the cause chain, so the generic wording sent the operator to check a server that was never contacted — and the `null` was the exception's absent message. The error now names the host and points at DNS, adding that a container does not inherit the resolver of the shell that started it, which is where this usually bites.
+
 ## [0.6.0] - 2026-07-29
 
 ### Added

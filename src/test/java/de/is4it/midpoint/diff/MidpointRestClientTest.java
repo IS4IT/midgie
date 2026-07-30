@@ -135,6 +135,23 @@ class MidpointRestClientTest {
     }
 
     @Test
+    void anUnresolvableHostIsReportedAsDnsRatherThanAsAServerProblem() {
+        // The JDK reports a DNS failure as a ConnectException whose own message is null, so the generic
+        // wording came out as "cannot connect to … (is the server up and the URL correct? null)" and sent
+        // the operator to check a server that was never contacted. '.invalid' is reserved by RFC 2606 and
+        // never resolves.
+        MidpointRestClient unresolvable = new MidpointRestClient(
+                java.net.URI.create("https://midgie-no-such-host.invalid/midpoint"), "u", "p", false);
+
+        java.io.IOException ex =
+                assertThrows(java.io.IOException.class, () -> unresolvable.getObject("users", "x"));
+
+        assertTrue(ex.getMessage().contains("cannot resolve host"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("midgie-no-such-host.invalid"), ex.getMessage());
+        assertFalse(ex.getMessage().contains("null"), "no null where a diagnosis belongs: " + ex.getMessage());
+    }
+
+    @Test
     void createReturnsOidFromLocationHeader() throws Exception {
         String oid = client.createObject("users", "<user/>");
 

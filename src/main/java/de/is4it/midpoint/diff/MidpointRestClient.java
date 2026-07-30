@@ -359,11 +359,28 @@ public final class MidpointRestClient {
                     continue;
                 }
                 if (e instanceof java.net.ConnectException) {
+                    if (isUnresolvedHost(e)) {
+                        // The JDK reports a DNS failure as a ConnectException whose own message is null,
+                        // with UnresolvedAddressException two levels down. Read as "cannot connect … null",
+                        // that sends the operator to check the server and the URL, when neither was ever
+                        // contacted: the name did not resolve where midgie is running, which in a container
+                        // is a different resolver from the shell that started it.
+                        throw new TransportException(what + " — cannot resolve host '" + restBase.getHost()
+                                + "'. Check the name, and the DNS of the machine or container midgie runs "
+                                + "in — a container does not inherit the resolver of the shell that started "
+                                + "it.", e);
+                    }
                     throw new TransportException(what + " — cannot connect to " + restBase
-                            + " (is the server up and the URL correct? " + e.getMessage() + ")", e);
+                            + " (is the server up and the URL correct?" + detail(e) + ")", e);
                 }
                 throw new TransportException(what + " — timed out talking to " + restBase
                         + " (" + e.getMessage() + ")", e);
+            } catch (java.net.UnknownHostException e) {
+                // Not every path wraps a DNS failure in ConnectException; this one says so outright.
+                LOG.debug("{}  cannot resolve host: {}", what, e.toString());
+                throw new TransportException(what + " — cannot resolve host '" + restBase.getHost()
+                        + "'. Check the name, and the DNS of the machine or container midgie runs in — a "
+                        + "container does not inherit the resolver of the shell that started it.", e);
             } catch (javax.net.ssl.SSLException e) {
                 // The commonest TLS misconfiguration is a private CA with no --cacert. The raw JDK message
                 // ("PKIX path building failed ...") names neither the server nor the flags that fix it.
@@ -434,6 +451,31 @@ public final class MidpointRestClient {
     }
 
     /** Server-unavailable statuses worth retrying: 503, plus 502/504 from a proxy (e.g. midPoint starting). */
+    /**
+     * Whether a failure is really "that name does not resolve". The JDK's HTTP client reports it as a
+     * {@link java.net.ConnectException} carrying no message of its own, with the real cause — an
+     * {@link java.nio.channels.UnresolvedAddressException} or {@link java.net.UnknownHostException} — further
+     * down the chain, so only the chain can tell it apart from a refused connection.
+     */
+    private static boolean isUnresolvedHost(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.nio.channels.UnresolvedAddressException
+                    || cause instanceof java.net.UnknownHostException) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                break;   // a self-referencing cause would loop forever
+            }
+        }
+        return false;
+    }
+
+    /** An exception's message as a trailing detail, or nothing at all — {@code null} is not a diagnosis. */
+    private static String detail(Throwable error) {
+        String message = error.getMessage();
+        return (message == null || message.isBlank()) ? "" : " " + message;
+    }
+
     private static boolean isTransient(int status) {
         return status == 502 || status == 503 || status == 504;
     }
