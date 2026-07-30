@@ -11,6 +11,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A hostname that does not resolve says so**, instead of `cannot connect to … (is the server up and the URL correct? null)`. The JDK reports a DNS failure as a `ConnectException` carrying no message, with `UnresolvedAddressException` two levels down the cause chain, so the generic wording sent the operator to check a server that was never contacted — and the `null` was the exception's absent message. The error now names the host and points at DNS, adding that a container does not inherit the resolver of the shell that started it, which is where this usually bites.
 
+- **A `--policy` rule that did apply is no longer reported as having matched nothing.** The "matched no object in this tree" note was emitted before the apply pass, but a rule is only marked as having matched when it is offered to an object, which happens inside that pass — so every rule looked unmatched, on every run that used `--policy`, including the ones being applied. The note now runs after the pass, and still names a selector that genuinely matched nothing.
+
 ## [0.6.0] - 2026-07-29
 
 ### Added

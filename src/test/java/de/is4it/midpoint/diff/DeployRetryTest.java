@@ -34,6 +34,8 @@ import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Drives the real {@code deploy} CLI against a stub server where one object's PATCH fails on the first
@@ -89,6 +91,36 @@ class DeployRetryTest {
         assertEquals(2, exit, "a single pass leaves the flaky unit failed");
     }
 
+    @Test
+    void aPolicyRuleThatAppliedIsNotReportedAsUnmatched(@TempDir Path dir) throws Exception {
+        // A rule is marked as having matched when it is offered to an object, which happens inside the apply
+        // pass. Reporting the unmatched ones before that pass made every rule look unmatched — including the
+        // one about to be applied — so the note cried wolf on exactly the files it was working on.
+        writeTree(dir);
+        Path policy = dir.resolve("midgie.policy");
+        Files.writeString(policy, "RoleType/Role  multivalue=merge\n", StandardCharsets.UTF_8);
+
+        Result result = deployCapturing(dir, "--policy", policy.toString());
+
+        assertEquals(0, result.exit(), result.err());
+        assertFalse(result.err().contains("matched no object"),
+                "the rule applies to both roles in the tree: " + result.err());
+    }
+
+    @Test
+    void aPolicyRuleThatMatchesNothingIsStillReported(@TempDir Path dir) throws Exception {
+        writeTree(dir);
+        Path policy = dir.resolve("midgie.policy");
+        Files.writeString(policy, "RoleType/NoSuchRole  multivalue=merge\n", StandardCharsets.UTF_8);
+
+        Result result = deployCapturing(dir, "--policy", policy.toString());
+
+        assertEquals(0, result.exit(), result.err());
+        assertTrue(result.err().contains("matched no object"),
+                "a typo'd selector must still be named: " + result.err());
+        assertTrue(result.err().contains("NoSuchRole"), result.err());
+    }
+
     // --- helpers ---
 
     private int deploy(Path dir, String... extra) {
@@ -98,6 +130,32 @@ class DeployRetryTest {
         System.arraycopy(base, 0, args, 0, base.length);
         System.arraycopy(extra, 0, args, base.length, extra.length);
         return runCli(args);
+    }
+
+    /** As {@link #deploy}, but without {@code --quiet} and keeping the output, since notes are the subject. */
+    private Result deployCapturing(Path dir, String... extra) {
+        String[] base = {"deploy", dir.toString(), "--url", host, "-u", "administrator", "-p", "x",
+                "--yes", "--no-live-schema"};
+        String[] args = new String[base.length + extra.length];
+        System.arraycopy(base, 0, args, 0, base.length);
+        System.arraycopy(extra, 0, args, base.length, extra.length);
+
+        PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        try {
+            System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
+            System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
+            int exit = new CommandLine(new Main()).execute(args);
+            return new Result(exit, out.toString(StandardCharsets.UTF_8), err.toString(StandardCharsets.UTF_8));
+        } finally {
+            System.setOut(originalOut);
+            System.setErr(originalErr);
+        }
+    }
+
+    private record Result(int exit, String out, String err) {
     }
 
     private static int runCli(String... args) {

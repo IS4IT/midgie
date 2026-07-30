@@ -331,9 +331,12 @@ public class DeployCommand implements Callable<Integer> {
                 note("warning: --prune has nothing to compare against, so nothing will be removed.");
             }
 
-            reportUnmatchedPolicyRules();
-
             Integer exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
+
+            // After the pass, not before it: a rule is only marked as having matched when it is offered to
+            // an object, and that happens inside the pass. Reported earlier, every rule looked unmatched —
+            // including the ones that were about to be applied.
+            reportUnmatchedPolicyRules();
 
             // Prune after the tree is applied, so the desired state lands first and only leftovers go.
             if (prune && !removals.isEmpty() && planDir == null) {
