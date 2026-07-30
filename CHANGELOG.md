@@ -13,6 +13,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A `--policy` rule that did apply is no longer reported as having matched nothing.** The "matched no object in this tree" note was emitted before the apply pass, but a rule is only marked as having matched when it is offered to an object, which happens inside that pass — so every rule looked unmatched, on every run that used `--policy`, including the ones being applied. The note now runs after the pass, and still names a selector that genuinely matched nothing.
 
+- **A missing `--policy` file says what is missing.** `NoSuchFileException` carries only the path as its message, so the run failed with a bare `midgie: midgie.policy` — which reads like a complaint about the file's contents rather than its absence. The message now matches the one `--schema` already gave, and covers a directory passed by mistake.
+
 ## [0.6.0] - 2026-07-29
 
 ### Added

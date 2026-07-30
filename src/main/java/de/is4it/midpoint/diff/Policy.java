@@ -71,6 +71,11 @@ final class Policy {
 
     /** Parse and validate the policy file. Throws with the line number on a malformed rule. */
     static Policy load(File file) throws IOException {
+        if (!file.isFile() || !file.canRead()) {
+            // NoSuchFileException carries only the path as its message, so the run failed with a bare
+            // 'midgie: midgie.policy' — which reads like the file was the problem rather than its absence.
+            throw new IOException("--policy file does not exist or is not readable: " + file);
+        }
         List<Rule> rules = new ArrayList<>();
         int lineNumber = 0;
         int order = 0;

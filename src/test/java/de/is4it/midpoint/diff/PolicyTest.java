@@ -265,6 +265,17 @@ class PolicyTest {
     }
 
     @Test
+    void aMissingPolicyFileSaysWhatIsMissing(@TempDir Path dir) {
+        // NoSuchFileException's message is only the path, so the run used to fail with a bare
+        // 'midgie: midgie.policy' — indistinguishable from a complaint about the file's contents.
+        IOException ex = assertThrows(IOException.class,
+                () -> Policy.load(dir.resolve("absent.policy").toFile()));
+
+        assertTrue(ex.getMessage().contains("does not exist"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("--policy"), ex.getMessage());
+    }
+
+    @Test
     void malformedLinesAreRejected(@TempDir Path dir) {
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager"));             // no settings
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager foo=bar"));     // unknown knob

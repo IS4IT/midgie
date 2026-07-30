@@ -228,6 +228,14 @@ class DeployCliTest {
     }
 
     @Test
+    void aMissingPolicyFileSaysSo(@TempDir Path dir) {
+        Result r = run("deploy", TREE, "--url", DEAD_HOST, "--user", "u", "-p", "x",
+                "--policy", dir.resolve("absent.policy").toString());
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--policy file does not exist"), r.err);
+    }
+
+    @Test
     void yesAndConfirmEachApplyAreMutuallyExclusive() {
         Result r = run("deploy", TREE, "--yes", "--confirm-each-apply");
         assertEquals(2, r.exit);
