@@ -5,8 +5,13 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.io.Console;
 import java.io.File;
+import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.cert.CertificateEncodingException;
+import java.security.cert.X509Certificate;
 import java.nio.file.Files;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -83,17 +88,33 @@ public class InitCommand implements Callable<Integer> {
                     + "containers have a schema natural key. Refuses to overwrite an existing file.")
     File writePolicy;
 
+    @Option(names = "--write-cacert", paramLabel = "FILE",
+            description = "Fetch the certificate chain --url presents, show it, and write the issuing CA(s) "
+                    + "as the PEM --cacert takes. Asks before writing; refuses to overwrite.")
+    File writeCacert;
+
+    @Option(names = "--write-properties", paramLabel = "FILE",
+            description = "Write an annotated midgie.properties template: every option that can carry a "
+                    + "default, commented out, with its help text. Refuses to overwrite an existing file.")
+    File writeProperties;
+
+    @Option(names = {"--yes", "-y"},
+            description = "Answer the --write-cacert trust prompt with yes (required in non-interactive use).")
+    boolean assumeYes;
+
     @Option(names = {"--quiet", "-q"},
             description = "Suppress status output; keep errors and the exit code.")
     boolean quiet;
 
     @Option(names = {"--debug", "-v"},
-            description = "Log a full DEBUG trace on stderr (this tool's own decisions plus framework logs) for troubleshooting.")
+            description = "Follow what midgie is doing on stderr: one line per step and per object-level "
+                    + "decision. Use --trace for the detail behind them.")
     boolean debug;
 
     @Option(names = "--trace",
-            description = "Even more than --debug: also log REST request/response bodies and full HTTP error "
-                    + "bodies (may include sensitive values). Implies --debug.")
+            description = "Everything --debug shows plus the detail behind it: per-file and per-value "
+                    + "decisions, stack traces, REST request/response bodies (may include sensitive values), "
+                    + "and the prism/framework logs.")
     boolean trace;
 
     @Override
@@ -106,27 +127,55 @@ public class InitCommand implements Callable<Integer> {
         // No step asked for. Printing help beats guessing at one: every step here writes something, to a
         // server or to the working copy. Exit 2, not 0 — a pipeline whose 'init --create-state' lost its
         // flag must fail rather than pass having done nothing.
-        if (!createState && writePolicy == null) {
+        if (!createState && writePolicy == null && writeCacert == null && writeProperties == null) {
             System.err.println("midgie: init does nothing on its own — pick a step (--create-state, "
-                    + "--write-policy).");
+                    + "--write-policy, --write-cacert, --write-properties).");
             spec.commandLine().usage(System.err);
             return EXIT_ERROR;
         }
-        if (!connectionOptions.isLive()) {
-            System.err.println("midgie: init needs a running server — pass --url (or set MIDPOINT_URL).");
+        // Every refusal first, before any step has written anything: a mistyped --write-policy used to exit 2
+        // having already created the state object, so the operator saw an error for a command that had in
+        // fact changed the server. The same holds now that one run can write three files.
+        if (writePolicy != null && path == null) {
+            System.err.println("midgie: --write-policy needs a PATH to scan for keyed containers.");
             return EXIT_ERROR;
         }
-        // Before touching the server: a mistyped --write-policy used to exit 2 having already created the
-        // state object, so the operator saw an error for a command that had in fact changed the server.
-        if (writePolicy != null) {
-            if (path == null) {
-                System.err.println("midgie: --write-policy needs a PATH to scan for keyed containers.");
+        for (File target : new File[] {writePolicy, writeCacert, writeProperties}) {
+            if (target != null && target.exists()) {
+                System.err.println("midgie: " + target + " already exists; refusing to overwrite it.");
                 return EXIT_ERROR;
             }
-            if (writePolicy.exists()) {
-                System.err.println("midgie: " + writePolicy + " already exists; refusing to overwrite it.");
-                return EXIT_ERROR;
+        }
+
+        try {
+            // Needs nothing but the command model, so it works offline — you write the file that holds the
+            // URL before you have anywhere to point it.
+            if (writeProperties != null) {
+                Io.writePayload(writeProperties, PropertiesTemplate.render(spec.root()).stripTrailing());
+                status("Wrote " + writeProperties + " — uncomment what this machine should not have to repeat, "
+                        + "then move it to ~/.midgie.properties or point $MIDGIE_CONF at it.");
             }
+            // Needs the host, but no account: you cannot authenticate to a server you do not trust yet.
+            if (writeCacert != null) {
+                Integer failure = writeCacert();
+                if (failure != null) {
+                    return failure;
+                }
+            }
+        } catch (Exception e) {
+            String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
+            System.err.println("midgie: " + message);
+            LOG.debug("init failed", e);
+            return EXIT_ERROR;
+        }
+
+        if (!createState && writePolicy == null) {
+            return 0;   // the offline steps are done and neither of the live ones was asked for
+        }
+        if (!connectionOptions.isLive()) {
+            System.err.println("midgie: init needs a running server for --create-state/--write-policy — "
+                    + "pass --url (or set MIDPOINT_URL).");
+            return EXIT_ERROR;
         }
         MidpointRestClient client = connectionOptions.newClient();
         if (client == null) {
@@ -165,6 +214,65 @@ public class InitCommand implements Callable<Integer> {
             LOG.debug("init failed", e);
             return EXIT_ERROR;
         }
+    }
+
+    /**
+     * Fetch the chain the server presents, show it, and — once the operator says so — write its issuers as
+     * the PEM {@code --cacert} reads. Returns an exit code on failure, or {@code null} when it went fine.
+     *
+     * <p>The confirmation is the security. Fetching a certificate means trusting whatever answers the
+     * connection, so the only thing separating this from writing an impostor's CA into your trust file is a
+     * person comparing the fingerprint with what the CA's owner published. That is why the fingerprints are
+     * printed, why the prompt defaults to no, and why a non-interactive run refuses instead of assuming.
+     */
+    private Integer writeCacert() throws IOException {
+        URI url = connectionOptions.url();
+        if (url == null) {
+            System.err.println("midgie: --write-cacert needs --url (or MIDPOINT_URL) to fetch a "
+                    + "certificate from.");
+            return EXIT_ERROR;
+        }
+        List<X509Certificate> chain = ServerCertificates.fetch(url, connectionOptions.timeout());
+        List<X509Certificate> anchors = ServerCertificates.anchors(chain);
+
+        status(url.getHost() + " presented " + chain.size() + " certificate(s):");
+        for (int i = 0; i < chain.size(); i++) {
+            status("[" + i + "]" + (i == 0 ? " the server itself" : " issuer")
+                    + "\n" + ServerCertificates.describe(chain.get(i)));
+        }
+        status("");
+        status("About to trust " + anchors.size() + " of them" + (chain.size() > 1 ? " (the issuers)" : "")
+                + ". Check the sha256 above against what the CA's owner publishes: anything that answered "
+                + "this connection could have presented these.");
+
+        Console console = System.console();
+        boolean interactive = console != null;
+        String answer = interactive
+                ? console.readLine("Write %s and trust it for later runs? [y/N] ", writeCacert)
+                : null;
+        switch (ApplyCommand.decideConfirmation(assumeYes, interactive, answer)) {
+            case PROCEED:
+                break;
+            case ABORTED:
+                System.err.println("midgie: aborted — nothing was written.");
+                return 0;
+            case NON_INTERACTIVE:
+            default:
+                System.err.println("midgie: refusing to write a trust file without confirmation in a "
+                        + "non-interactive session; re-run interactively, or with --yes if the fingerprints "
+                        + "are already known to be right.");
+                return EXIT_ERROR;
+        }
+
+        try {
+            Io.writePayload(writeCacert, ServerCertificates.toPem(anchors).stripTrailing());
+        } catch (CertificateEncodingException e) {
+            throw new IOException("cannot encode the certificate: " + e.getMessage(), e);
+        }
+        status("Wrote " + writeCacert + " — pass it as '--cacert " + writeCacert + "', or put "
+                + "'cacert = " + writeCacert.getAbsolutePath() + "' in midgie.properties, and TLS verifies "
+                + "instead of needing --insecure.");
+        return null;
     }
 
     /** Print the identity the given tree will be tracked under, or why it cannot be tracked. */

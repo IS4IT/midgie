@@ -74,6 +74,11 @@ public final class ConnectionOptions {
     int retries;
 
     /** The resolved base URL: {@code --url} if given, else {@code MIDPOINT_URL}. Null when neither is set. */
+    /** The per-request timeout, also used for the TLS handshake in {@code init --write-cacert}. */
+    java.time.Duration timeout() {
+        return java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds));
+    }
+
     public URI url() {
         URI raw = rawUrl();
         if (raw == null || raw.getRawUserInfo() == null) {
@@ -139,7 +144,7 @@ public final class ConnectionOptions {
         MidpointRestClient.Config config = new MidpointRestClient.Config()
                 .insecure(insecure)
                 .caCert(caCert)
-                .requestTimeout(java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds)))
+                .requestTimeout(timeout())
                 .maxRetries(retries);
         return new MidpointRestClient(url(), user, password, config);
     }

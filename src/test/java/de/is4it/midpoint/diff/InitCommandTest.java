@@ -136,6 +136,64 @@ class InitCommandTest {
     }
 
     @Test
+    void writePropertiesNeedsNoServerAndProducesAFileMidgieAccepts(@TempDir Path dir) throws Exception {
+        // It writes the file that holds the URL, so requiring a URL to write it would be a circle. And the
+        // template is generated from the command model, so this is the guard that the model and the config
+        // reader agree: every key it offers has to be one ConfigDefaults will take.
+        Path template = dir.resolve("midgie.properties");
+
+        Result result = run("init", "--write-properties", template.toString());
+
+        assertEquals(0, result.exit, result.err);
+        assertTrue(requests.isEmpty(), "no server was needed: " + requests);
+
+        String written = Files.readString(template, StandardCharsets.UTF_8);
+        assertTrue(written.contains("#url ="), written);
+        // Each line carries what the option does when nobody sets it, so uncommenting one changes nothing
+        // until its value is edited — and the template doubles as a record of the defaults.
+        assertTrue(written.contains("#insecure = false"), "a flag's default comes from its field: " + written);
+        assertTrue(written.contains("#scope = present"), written);
+        assertTrue(written.contains("#timeout = 30"), written);
+        assertFalse(written.contains("\n#yes = "), "a file may not waive the confirmation: " + written);
+        assertFalse(written.contains("\n#prune = "), "nor decide to delete: " + written);
+
+        // Uncomment everything and hand it back: what midgie writes, midgie must read.
+        Path uncommented = dir.resolve("uncommented.properties");
+        Files.writeString(uncommented, written.lines()
+                .filter(line -> line.matches("#[a-z][^ ]* =.*"))
+                .map(line -> line.substring(1))
+                .collect(java.util.stream.Collectors.joining("\n")), StandardCharsets.UTF_8);
+        System.setProperty(ConfigDefaults.PATH_PROPERTY, uncommented.toString());
+        try {
+            ConfigDefaults.load(name -> null).validate(Main.commandLine());
+        } finally {
+            System.clearProperty(ConfigDefaults.PATH_PROPERTY);
+        }
+    }
+
+    @Test
+    void writeCacertNeedsAUrlToFetchFrom(@TempDir Path dir) {
+        Result result = run("init", "--write-cacert", dir.resolve("ca.pem").toString());
+
+        assertEquals(2, result.exit, result.out);
+        assertTrue(result.err.contains("--url"), result.err);
+    }
+
+    @Test
+    void neitherNewFileIsEverOverwritten(@TempDir Path dir) throws Exception {
+        for (String option : new String[] {"--write-properties", "--write-cacert"}) {
+            Path existing = dir.resolve("mine" + option + ".txt");
+            Files.writeString(existing, "mine\n", StandardCharsets.UTF_8);
+
+            Result result = run("init", option, existing.toString(), "--url", url, "-u", "a", "-p", "b");
+
+            assertEquals(2, result.exit, option + ": " + result.out);
+            assertEquals("mine\n", Files.readString(existing, StandardCharsets.UTF_8), option);
+            assertTrue(result.err.contains("refusing to overwrite"), result.err);
+        }
+    }
+
+    @Test
     void anExistingPolicyFileIsNeverOverwrittenAndNothingIsCreatedFirst(@TempDir Path dir) throws Exception {
         Path policy = dir.resolve("midgie.policy");
         Files.writeString(policy, "# mine\n", StandardCharsets.UTF_8);

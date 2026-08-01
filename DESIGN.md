@@ -163,9 +163,13 @@ the midPoint source tree.
   the failure mode the policy file's "matched no object" note exists to prevent, and `yes`/`prune` are refused
   because a file is not where a person confirms a write or a delete. `insecure` is also read in `Main.main`,
   before the hostname-verification latch, or it would half-apply.
-- `midgie init --url …` → the one-off set-up steps, each behind its own flag: `--create-state` creates the
+- `midgie init …` → the one-off set-up steps, each behind its own flag: `--create-state` creates the
   `midgie-state` object that delete detection needs, `--write-policy` seeds a starter `--policy` file for a
-  tree. Never implicit, at two levels: `deploy` reports that tracking is off rather than creating anything,
+  tree, `--write-cacert` fetches the chain a server presents and writes its issuers as the PEM `--cacert`
+  takes (trust-on-first-use, so fingerprints are shown and confirmed; no account needed, since you cannot
+  authenticate to a server you do not trust yet), and `--write-properties` writes an annotated config
+  template generated from the command model. The last two need no server, so the live check applies only
+  to the first two. Never implicit, at two levels: `deploy` reports that tracking is off rather than creating anything,
   and `init` with no step prints its help and exits 2 rather than picking one — every step writes something,
   to a server or to the working copy.
 

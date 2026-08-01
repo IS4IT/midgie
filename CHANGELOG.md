@@ -7,6 +7,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`init --write-cacert FILE`** — fetch the certificate chain a server presents, show each certificate with its SHA-256 fingerprint, and on confirmation write the issuing CA(s) as the PEM `--cacert` reads. What `openssl s_client -showcerts` was for, without leaving midgie or hand-editing PEM blocks. It needs no account, since you cannot authenticate to a server you do not trust yet, and it writes the issuers rather than the leaf, which would pin one certificate and break at its next renewal. The confirmation is the security: fetching a certificate means trusting whatever answered, so the fingerprints are printed, the prompt defaults to no, and a non-interactive run refuses unless `--yes` says the fingerprints are already known.
+- **`init --write-properties FILE`** — an annotated `midgie.properties` template: every option that can carry a default, commented out, with its help text, the search path, the precedence rules, and the two keys a file may not set. Generated from the command model, so an option added later appears in it without anyone remembering; a test uncomments the lot and hands it back to the config reader, so what midgie writes is always something midgie accepts. Needs no server — it writes the file that holds the URL.
+
 ### Changed
 
 - **`--debug` now shows where each setting came from** — every file read, every key that one layer overrode in another, and which file each effective key came from. Keys and their source only, never values, since one of them is `password`. Finding no file at all is logged too, naming the paths searched — silence could not be told apart from the flag not working. The lines existed before but were written into a logger that was still off: each subcommand switches logging on for itself, and the config files are read earlier than that, while the command line is being built.
