@@ -214,7 +214,7 @@ final class RemovalDetector {
             result = new DiffEngine(prismContext).diff(desired, lastApplied, EquivalenceStrategy.REAL_VALUE,
                     DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll());
         } catch (Exception e) {
-            LOG.debug("could not compare {} against revision {}", sourceFile, lastRevision, e);
+            LOG.trace("could not compare {} against revision {}", sourceFile, lastRevision, e);
             return;
         }
         Class<?> objectClass = lastApplied.getCompileTimeClass();
@@ -226,13 +226,13 @@ final class RemovalDetector {
             }
             String path = mod.getPath().toString();
             if (isUndeletable(mod.getPath(), mod.getDefinition())) {
-                LOG.debug("{} is required and is never a removal candidate ({})", path, sourceFile);
+                LOG.trace("{} is required and is never a removal candidate ({})", path, sourceFile);
                 continue;
             }
             for (PrismValue value : mod.getValuesToDelete()) {
                 String rendered = render(value);
                 if (stillDeclaredBy(siblings, mod.getPath(), value)) {
-                    LOG.debug("{} at {} still declared by another fragment; not a removal", rendered, path);
+                    LOG.trace("{} at {} still declared by another fragment; not a removal", rendered, path);
                     continue;
                 }
                 removals.add(new Removal(objectLabel, path, rendered, sourceFile, objectClass, oid,
@@ -310,7 +310,7 @@ final class RemovalDetector {
             } catch (Exception e) {
                 // Unknown beats wrong: a fragment we cannot read might well declare the value, and treating
                 // it as "not declared" is what leads --prune to delete something still in the tree.
-                LOG.debug("could not read {} from {}; treating the value as still declared", idFree,
+                LOG.trace("could not read {} from {}; treating the value as still declared", idFree,
                         sibling.sourceFile(), e);
                 return true;
             }
@@ -371,7 +371,7 @@ final class RemovalDetector {
         try {
             return prismContext.parseObject(content);
         } catch (Exception e) {
-            LOG.debug("could not parse {} at revision {}", repoRelativePath, lastRevision, e);
+            LOG.trace("could not parse {} at revision {}", repoRelativePath, lastRevision, e);
             return null;
         }
     }
@@ -383,7 +383,7 @@ final class RemovalDetector {
             empty.setOid(template.getOid());
             return empty;
         } catch (Exception e) {
-            LOG.debug("could not instantiate an empty {}", template.getCompileTimeClass(), e);
+            LOG.trace("could not instantiate an empty {}", template.getCompileTimeClass(), e);
             return null;
         }
     }

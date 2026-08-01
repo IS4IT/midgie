@@ -70,7 +70,7 @@ final class VersionSupport {
             BuildInformationType build = (node != null) ? node.getBuild() : null;
             return (build != null) ? blankToNull(build.getVersion()) : null;
         } catch (Exception e) {
-            LOG.debug("could not read the live server version (GET /nodes/current)", e);
+            LOG.trace("could not read the live server version (GET /nodes/current)", e);
             return null;
         }
     }

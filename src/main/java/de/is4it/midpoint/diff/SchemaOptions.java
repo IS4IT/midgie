@@ -188,7 +188,7 @@ public final class SchemaOptions {
             }
             System.err.println("midgie: warning: could not read extension schema from the server ("
                     + e.getMessage() + "); continuing with base schema only.");
-            LOG.debug("live schema read failed", e);
+            LOG.trace("live schema read failed", e);
         }
     }
 

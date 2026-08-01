@@ -15,27 +15,30 @@ final class Logging {
     }
 
     /**
-     * Raise the root logger to DEBUG for troubleshooting (framework logs still go to stderr via logback.xml).
-     * No-op if the SLF4J binding is not logback.
+     * Raise <em>this tool's</em> loggers to DEBUG: what midgie is doing, one line per step and per
+     * object-level decision. Deliberately not the root logger — prism's own DEBUG output runs to a dozen
+     * lines ({@code ClassPathUtil} alone prints one per scanned package) before midgie has done anything,
+     * which drowned the flow this switch exists to show. {@code --trace} still turns it on. No-op if the
+     * SLF4J binding is not logback.
      */
     static void enableDebug() {
-        Logger root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
-        if (root instanceof ch.qos.logback.classic.Logger logbackRoot) {
-            logbackRoot.setLevel(ch.qos.logback.classic.Level.DEBUG);
-        }
+        setLevel(LoggerFactory.getLogger(Logging.class.getPackageName()), ch.qos.logback.classic.Level.DEBUG);
     }
 
     /**
-     * Everything {@link #enableDebug()} does (framework at DEBUG), plus this tool's own loggers at TRACE, so
-     * the extra {@code LOG.trace} detail — REST request/response bodies and full HTTP error bodies — is
-     * emitted <em>without</em> also unleashing the framework's very verbose TRACE logging. Implied by
-     * {@code --trace}. No-op if the SLF4J binding is not logback.
+     * Everything for real debugging: this tool's own loggers at TRACE — per-file and per-value decisions,
+     * stack traces, REST request/response bodies — plus the framework at DEBUG, since a prism or schema
+     * problem is diagnosed from its own logs. Implied by {@code --trace}. No-op if the SLF4J binding is not
+     * logback.
      */
     static void enableTrace() {
-        enableDebug();
-        Logger ours = LoggerFactory.getLogger(Logging.class.getPackageName());
-        if (ours instanceof ch.qos.logback.classic.Logger logbackOurs) {
-            logbackOurs.setLevel(ch.qos.logback.classic.Level.TRACE);
+        setLevel(LoggerFactory.getLogger(Logging.class.getPackageName()), ch.qos.logback.classic.Level.TRACE);
+        setLevel(LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME), ch.qos.logback.classic.Level.DEBUG);
+    }
+
+    private static void setLevel(Logger logger, ch.qos.logback.classic.Level level) {
+        if (logger instanceof ch.qos.logback.classic.Logger logback) {
+            logback.setLevel(level);
         }
     }
 

@@ -64,8 +64,12 @@ final class GitRevision {
 
     /** Run {@code args} at most once per {@link GitRevision}, remembering even a null result. */
     private String cached(String key, String... args) {
+        return cached(key, false, args);
+    }
+
+    private String cached(String key, boolean expectedToFail, String... args) {
         String value = cache.computeIfAbsent(key, ignored -> {
-            String result = run(args);
+            String result = run(expectedToFail, args);
             return (result != null) ? result : ABSENT;
         });
         return ABSENT.equals(value) ? null : value;
@@ -152,7 +156,8 @@ final class GitRevision {
      */
     boolean hasRevision(String revision) {
         return isCommitish(revision)
-                && cached("verify-" + revision, "rev-parse", "--verify", "--quiet", revision + "^{commit}") != null;
+                && cached("verify-" + revision, true, "rev-parse", "--verify", "--quiet",
+                        revision + "^{commit}") != null;
     }
 
     /**
@@ -173,10 +178,10 @@ final class GitRevision {
      */
     String fileAt(String revision, String repoRelativePath) {
         if (!isCommitish(revision)) {
-            LOG.debug("refusing to read a file at '{}': not a commit sha", revision);
+            LOG.trace("refusing to read a file at '{}': not a commit sha", revision);
             return null;
         }
-        return run("show", revision + ":" + repoRelativePath);
+        return run(true, "show", revision + ":" + repoRelativePath);
     }
 
     /**
@@ -196,7 +201,7 @@ final class GitRevision {
     List<String> deletedSince(String revision) {
         List<String> paths = new ArrayList<>();
         if (!isCommitish(revision)) {
-            LOG.debug("refusing to diff against '{}': not a commit sha", revision);
+            LOG.trace("refusing to diff against '{}': not a commit sha", revision);
             return paths;
         }
         String out = run("-c", "core.quotePath=false", "-c", "diff.relative=false",
@@ -245,6 +250,17 @@ final class GitRevision {
      * installed, or a timeout.
      */
     private String run(String... args) {
+        return run(false, args);
+    }
+
+    /**
+     * @param expectedToFail whether a non-zero exit is an answer rather than a fault — {@code git show
+     *     <rev>:<path>} is how this class asks "did this file exist then?", and git says no by exiting 128
+     *     with a message beginning "fatal:". Logging that at {@code --debug} put a line reading like a crash
+     *     next to every file in the tree; the reader following a deploy does not need it, and the reader
+     *     debugging one still gets it at {@code --trace}.
+     */
+    private String run(boolean expectedToFail, String... args) {
         List<String> command = new ArrayList<>();
         command.add("git");
         command.addAll(Arrays.asList(args));
@@ -274,8 +290,12 @@ final class GitRevision {
             if (process.exitValue() != 0) {
                 // Several callers degrade to "detection off" on a null result, so without git's own reason
                 // an unreachable revision or a misconfigured identity cannot be diagnosed at any log level.
-                LOG.debug("git {} exited {}: {}", String.join(" ", args), process.exitValue(),
-                        drained(stderr));
+                String reason = drained(stderr);
+                if (expectedToFail) {
+                    LOG.trace("git {} exited {}: {}", String.join(" ", args), process.exitValue(), reason);
+                } else {
+                    LOG.debug("git {} exited {}: {}", String.join(" ", args), process.exitValue(), reason);
+                }
                 return null;
             }
             stderr.cancel(true);

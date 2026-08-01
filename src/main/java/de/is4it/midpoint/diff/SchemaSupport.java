@@ -12,6 +12,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -29,6 +32,8 @@ import com.evolveum.prism.xml.ns._public.types_3.SchemaDefinitionType;
  * {@code SchemaType} object and {@code registerDynamicSchemaExtensions} + {@code reload}.
  */
 final class SchemaSupport {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SchemaSupport.class);
 
     /** The XSD namespace of an {@code <xsd:schema>} document element. */
     static final String XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema";
@@ -79,7 +84,10 @@ final class SchemaSupport {
         if (schemas.isEmpty()) {
             return;
         }
-        prismContext.getSchemaRegistry().registerDynamicSchemaExtensions(dedupeByNamespace(schemas));
+        Map<String, Element> deduped = dedupeByNamespace(schemas);
+        LOG.debug("registering {} extension schema(s) of {} collected: {}",
+                deduped.size(), schemas.size(), deduped.keySet());
+        prismContext.getSchemaRegistry().registerDynamicSchemaExtensions(deduped);
         prismContext.reload();
     }
 
@@ -98,6 +106,11 @@ final class SchemaSupport {
                 result.put(entry.getKey(), entry.getValue());   // keep every no-namespace schema
             } else if (seen.add(namespace)) {
                 result.put(entry.getKey(), entry.getValue());   // first schema for this namespace wins
+            } else {
+                // The dropped one is usually the server's copy of a schema the tree also carries, which is
+                // the intent — but "my --schema file had no effect" has no other answer at any log level.
+                LOG.debug("schema {} skipped: {} was already taken by an earlier source",
+                        entry.getKey(), namespace);
             }
         }
         return result;

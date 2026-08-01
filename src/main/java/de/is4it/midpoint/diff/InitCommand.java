@@ -165,7 +165,7 @@ public class InitCommand implements Callable<Integer> {
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midgie: " + message);
-            LOG.debug("init failed", e);
+            LOG.trace("init failed", e);
             return EXIT_ERROR;
         }
 
@@ -211,7 +211,7 @@ public class InitCommand implements Callable<Integer> {
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midgie: " + message);
-            LOG.debug("init failed", e);
+            LOG.trace("init failed", e);
             return EXIT_ERROR;
         }
     }
@@ -324,7 +324,7 @@ public class InitCommand implements Callable<Integer> {
             } catch (Exception e) {
                 System.err.println("midgie: warning: could not read " + file
                         + " while seeding the policy (" + e.getMessage() + "); it has no suggestions.");
-                LOG.debug("skipping {} while seeding the policy", file, e);
+                LOG.trace("skipping {} while seeding the policy", file, e);
                 skipped++;
                 continue;
             }

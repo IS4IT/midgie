@@ -77,12 +77,14 @@ public class DiffCommand implements Callable<Integer> {
     boolean quiet;
 
     @Option(names = {"--debug", "-v"},
-            description = "Log a full DEBUG trace on stderr (this tool's own decisions plus framework logs) for troubleshooting.")
+            description = "Follow what midgie is doing on stderr: one line per step and per object-level "
+                    + "decision. Use --trace for the detail behind them.")
     boolean debug;
 
     @Option(names = "--trace",
-            description = "Even more than --debug: also log REST request/response bodies and full HTTP error "
-                    + "bodies (may include sensitive values). Implies --debug.")
+            description = "Everything --debug shows plus the detail behind it: per-file and per-value "
+                    + "decisions, stack traces, REST request/response bodies (may include sensitive values), "
+                    + "and the prism/framework logs.")
     boolean trace;
 
     @Option(names = {"--match-by-name", "-m"},
@@ -192,7 +194,7 @@ public class DiffCommand implements Callable<Integer> {
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midgie: " + message);
-            LOG.debug("diff failed", e);
+            LOG.trace("diff failed", e);
             return EXIT_ERROR;
         }
     }

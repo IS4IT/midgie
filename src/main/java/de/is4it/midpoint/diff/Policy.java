@@ -51,22 +51,27 @@ final class Policy {
         final boolean itemLevel;
         final Map<String, String> settings;
         final int order;
+        final int lineNumber;   // so a message can say where to change it, not just what it says
         final String source;    // the line as written, for the "matched nothing" report
         boolean matched;
 
-        Rule(GlobPath selector, boolean itemLevel, Map<String, String> settings, int order, String source) {
+        Rule(GlobPath selector, boolean itemLevel, Map<String, String> settings, int order, int lineNumber,
+                String source) {
             this.selector = selector;
             this.itemLevel = itemLevel;
             this.settings = settings;
             this.order = order;
+            this.lineNumber = lineNumber;
             this.source = source;
         }
     }
 
     private final List<Rule> rules;
+    private final File file;
 
-    private Policy(List<Rule> rules) {
+    private Policy(List<Rule> rules, File file) {
         this.rules = rules;
+        this.file = file;
     }
 
     /** Parse and validate the policy file. Throws with the line number on a malformed rule. */
@@ -92,7 +97,7 @@ final class Policy {
             // nothing to tune, and rejecting it would break the very command line init tells you to run.
             LOG.debug("policy file {} has no rules; every object keeps the CLI strategy", file);
         }
-        return new Policy(rules);
+        return new Policy(rules, file);
     }
 
     private static Rule parseLine(String line, int lineNumber, int order) throws IOException {
@@ -175,7 +180,7 @@ final class Policy {
             }
             settings.put(key, value);
         }
-        return new Rule(selector, itemLevel, settings, order, line.strip());
+        return new Rule(selector, itemLevel, settings, order, lineNumber, line.strip());
     }
 
     /**
@@ -293,7 +298,51 @@ final class Policy {
         itemRules.addAll(baseline.multiValue.pathRules());
         DiffEngine.MultiValueStrategy multiValue =
                 DiffEngine.MultiValueStrategy.of(globalMerge, itemRules, identity);
+        logApplied(type, name, scopeRule, equivalenceRule, allowInplaceRule, smartRefsRule, globalMergeRule);
         return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace, smartRefs);
+    }
+
+    /**
+     * Say which rule set what for this object, when any did.
+     *
+     * <p>The only feedback the policy gave was the "matched no object" note, which answers the opposite
+     * question: it names rules that reached nothing, and stays silent about the ones that did — so "was my
+     * rule applied to this object?" had no answer at any log level. Nothing is logged for an object no rule
+     * touched, which is most of a tree.
+     */
+    private void logApplied(String type, String name, Rule scope, Rule equivalence, Rule allowInplace,
+            Rule smartRefs, Rule multivalue) {
+        if (!LOG.isDebugEnabled()) {
+            return;
+        }
+        // Grouped by rule, since one line commonly sets two or three knobs and repeating its text per knob
+        // makes the log line longer than the policy file.
+        Map<Rule, List<String>> byRule = new LinkedHashMap<>();
+        addApplied(byRule, "scope", scope);
+        addApplied(byRule, "equivalence", equivalence);
+        addApplied(byRule, "allow-inplace-merge", allowInplace);
+        addApplied(byRule, "smart-refs", smartRefs);
+        addApplied(byRule, "multivalue", multivalue);
+        if (byRule.isEmpty()) {
+            return;
+        }
+        List<String> applied = new ArrayList<>();
+        for (Map.Entry<Rule, List<String>> entry : byRule.entrySet()) {
+            applied.add(String.join(", ", entry.getValue()) + " (" + at(entry.getKey()) + ")");
+        }
+        LOG.debug("policy: {}/{} ← {}", type, name, String.join("; ", applied));
+    }
+
+    /** Where a rule lives, in the form an editor jumps to — the answer to "and where do I change it?". */
+    private String at(Rule rule) {
+        return file.getPath() + ":" + rule.lineNumber;
+    }
+
+    private static void addApplied(Map<Rule, List<String>> byRule, String knob, Rule rule) {
+        if (rule != null) {
+            byRule.computeIfAbsent(rule, key -> new ArrayList<>())
+                    .add(knob + "=" + rule.settings.get(knob));
+        }
     }
 
     /**
@@ -308,7 +357,7 @@ final class Policy {
         List<String> unmatched = new ArrayList<>();
         for (Rule rule : rules) {
             if (!rule.matched) {
-                unmatched.add(rule.source);
+                unmatched.add(at(rule) + ": " + rule.source);
             }
         }
         return unmatched;

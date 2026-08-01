@@ -51,11 +51,26 @@ class LoggingTest {
     @Test
     void debugIsOnBeforeTheConfigFilesAreRead() {
         root().setLevel(Level.INFO);
+        ours().setLevel(Level.INFO);
 
         Main.commandLine(new String[] {"deploy", "tree", "-v"});
 
-        assertEquals(Level.DEBUG, root().getLevel(),
+        assertEquals(Level.DEBUG, ours().getLevel(),
                 "the factory reads the config files, so it has to switch logging on first");
+    }
+
+    @Test
+    void debugLeavesTheFrameworkAlone() {
+        // The regression this guards: -v used to raise the root logger, so prism's own DEBUG came with it —
+        // ClassPathUtil alone prints a line per scanned package, a dozen of them before midgie does anything.
+        // -v is for following what midgie does; the framework belongs to --trace.
+        root().setLevel(Level.WARN);
+        ours().setLevel(Level.INFO);
+
+        Logging.enableFrom(new String[] {"deploy", "tree", "-v"});
+
+        assertEquals(Level.DEBUG, ours().getLevel(), "this tool's own loggers speak");
+        assertEquals(Level.WARN, root().getLevel(), "and nothing else does");
     }
 
     @Test

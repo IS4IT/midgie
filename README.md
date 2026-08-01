@@ -384,8 +384,8 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 | `--format xml\|json\|summary` | *(diff, apply)* `xml` (default) / `json`: the `ObjectModificationType`. `summary`: a human-readable changed-path list. |
 | `-o, --output FILE` | *(diff, apply)* Write the delta to `FILE` instead of stdout. |
 | `-q, --quiet` | Suppress advisory notes/status; keep the delta payload, errors, and exit code. |
-| `-v, --debug` | Log a full DEBUG trace on stderr — the tool's own decisions (mode, connection, every REST call, per-object outcome) plus framework logs, each line timestamped. |
-| `--trace` | Everything `--debug` logs, plus full REST request/response bodies and HTTP error bodies. Implies `--debug`; may include sensitive values. |
+| `-v, --debug` | Follow what midgie is doing on stderr: one line per step (mode, connection, config files, schema registration, each REST call) and per object-level decision (the diff summary, the reconcile outcome, which policy rule applied). midgie's own loggers only — the prism/framework logs stay quiet. |
+| `--trace` | Everything `--debug` shows plus the detail behind it: per-file and per-value decisions, stack traces, full REST request/response bodies (**may include sensitive values**), and the framework logs. |
 | `-c, --create-if-absent` | *(apply, deploy)* `POST` the whole desired object if it does not exist. |
 | `-m, --match-by-name` | *(diff, apply, deploy)* Resolve an OID-less object on the server by type + name (a single match). |
 | `--dry-run` | *(apply, deploy)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |

@@ -67,7 +67,7 @@ public class Main implements java.util.concurrent.Callable<Integer> {
         commandLine.setExecutionExceptionHandler((exception, parsed, parseResult) -> {
             String message = (exception.getMessage() != null) ? exception.getMessage() : exception.toString();
             System.err.println("midgie: " + message);
-            LOG.debug("command failed", exception);
+            LOG.trace("command failed", exception);
             return EXIT_ERROR;
         });
         // The default parameter-exception handler echoes every unmatched token, so one typo publishes a
@@ -101,7 +101,7 @@ public class Main implements java.util.concurrent.Callable<Integer> {
                     return new CommandLine.RunLast().execute(parseResult);
                 }
                 System.err.println("midgie: " + e.getMessage());
-                LOG.debug("config file rejected", e);
+                LOG.trace("config file rejected", e);
                 return EXIT_ERROR;
             });
         }
@@ -171,7 +171,10 @@ public class Main implements java.util.concurrent.Callable<Integer> {
             ConfigDefaults defaults = ConfigDefaults.load();
             return defaults != null && defaults.isEnabled("insecure");
         } catch (Exception e) {
-            LOG.debug("could not read the config file while latching hostname verification", e);
+            // A one-liner, not the stack: nothing else reports this path, and the run itself will fail on the
+            // same file a moment later with a message of its own.
+            LOG.debug("could not read the config file while latching hostname verification: {}",
+                    e.getMessage());
             return false;
         }
     }

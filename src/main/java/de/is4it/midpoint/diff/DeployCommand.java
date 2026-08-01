@@ -134,12 +134,14 @@ public class DeployCommand implements Callable<Integer> {
     boolean quiet;
 
     @Option(names = {"--debug", "-v"},
-            description = "Log a full DEBUG trace on stderr (this tool's own decisions plus framework logs) for troubleshooting.")
+            description = "Follow what midgie is doing on stderr: one line per step and per object-level "
+                    + "decision. Use --trace for the detail behind them.")
     boolean debug;
 
     @Option(names = "--trace",
-            description = "Even more than --debug: also log REST request/response bodies and full HTTP error "
-                    + "bodies (may include sensitive values). Implies --debug.")
+            description = "Everything --debug shows plus the detail behind it: per-file and per-value "
+                    + "decisions, stack traces, REST request/response bodies (may include sensitive values), "
+                    + "and the prism/framework logs.")
     boolean trace;
 
     // Resolved once per run.
@@ -375,7 +377,7 @@ public class DeployCommand implements Callable<Integer> {
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midgie: " + message);
-            LOG.debug("deploy failed", e);
+            LOG.trace("deploy failed", e);
             return EXIT_ERROR;
         }
     }
@@ -435,7 +437,7 @@ public class DeployCommand implements Callable<Integer> {
             // exactly like a healthy one.
             note("note: removals cannot be detected — could not read " + SyncState.TABLE_NAME + ": "
                     + safe(e.getMessage()));
-            LOG.debug("could not read {}", SyncState.TABLE_NAME, e);
+            LOG.trace("could not read {}", SyncState.TABLE_NAME, e);
             return new Tracking(identity, null, null, null);
         }
         if (table == null) {
@@ -575,7 +577,7 @@ public class DeployCommand implements Callable<Integer> {
             } catch (Exception e) {
                 warn("could not remove " + group.size() + " value(s) from " + entry.getKey()
                         + ": " + safe(e.getMessage()));
-                LOG.debug("prune failed for {}", entry.getKey(), e);
+                LOG.trace("prune failed for {}", entry.getKey(), e);
                 failed++;
             }
         }
@@ -603,7 +605,7 @@ public class DeployCommand implements Callable<Integer> {
             if (present) {
                 stillOurs.add(removal);
             } else {
-                LOG.debug("not pruning {} at {}: the live object no longer holds that value",
+                LOG.trace("not pruning {} at {}: the live object no longer holds that value",
                         removal.value, removal.path);
                 note("note: leaving " + removal.path + " alone — the server no longer holds the value that "
                         + "was removed from " + removal.sourceFile + " (already changed or removed).");
@@ -638,7 +640,7 @@ public class DeployCommand implements Callable<Integer> {
         } catch (Exception e) {
             // Bookkeeping must never fail a deploy that already succeeded.
             note("warning: could not record the deployed revision: " + safe(e.getMessage()));
-            LOG.debug("recording the revision failed", e);
+            LOG.trace("recording the revision failed", e);
         }
     }
 
@@ -826,7 +828,7 @@ public class DeployCommand implements Callable<Integer> {
                 tally.failed++;
                 tally.failedUnits.add(unit);
                 reportUnit(unit, preview ? "error" : "failed", safe(e.getMessage()), true);
-                LOG.debug("unit {} {} failed", unit.typeName(), unit.identityLabel(), e);
+                LOG.trace("unit {} {} failed", unit.typeName(), unit.identityLabel(), e);
             }
         }
         return tally;
@@ -938,7 +940,7 @@ public class DeployCommand implements Callable<Integer> {
                 }
                 tally.failed++;
                 reportUnit(unit, "error", safe(e.getMessage()), true);
-                LOG.debug("planning {} {} failed", unit.typeName(), unit.identityLabel(), e);
+                LOG.trace("planning {} {} failed", unit.typeName(), unit.identityLabel(), e);
             }
         }
         emitSummary(tally, true);
@@ -1029,7 +1031,7 @@ public class DeployCommand implements Callable<Integer> {
                 }
                 failed.add(entry);
                 reportEntry(entry, "failed", safe(e.getMessage()), true);
-                LOG.debug("plan entry {}/{} failed", entry.restType, entry.oid, e);
+                LOG.trace("plan entry {}/{} failed", entry.restType, entry.oid, e);
             }
         }
         return failed;

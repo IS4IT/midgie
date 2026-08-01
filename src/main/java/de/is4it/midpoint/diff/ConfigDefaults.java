@@ -152,7 +152,7 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
         }
         // Keys and their source, never values: one of these keys is 'password'.
         for (Map.Entry<String, File> entry : new TreeMap<>(origin).entrySet()) {
-            LOG.debug("config: {} <- {}", entry.getKey(), entry.getValue());
+            LOG.trace("config: {} <- {}", entry.getKey(), entry.getValue());
         }
         return new ConfigDefaults(List.copyOf(layers), merged, origin, env);
     }
@@ -264,7 +264,7 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
                 if (value != null && !value.isBlank()) {
                     // The environment describes the process this run was launched into; the file describes a
                     // machine. Letting the file win would mean a pod's MIDPOINT_URL was quietly ignored.
-                    LOG.debug("config: {} not applied, {} is set", key, variable);
+                    LOG.trace("config: {} not applied, {} is set", key, variable);
                     return null;
                 }
             }

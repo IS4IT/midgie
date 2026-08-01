@@ -78,7 +78,7 @@ final class LiveLookup {
         String oid = (oidOverride != null && !oidOverride.isBlank()) ? oidOverride : desired.getOid();
         if (oid != null && !oid.isBlank()) {
             PrismObject<? extends Objectable> current = byOid(prismContext, client, clazz, restType, oid);
-            LOG.debug("resolve {} by oid {} → {}", restType, oid, current != null ? "found" : "absent");
+            LOG.trace("resolve {} by oid {} → {}", restType, oid, current != null ? "found" : "absent");
             return new Target(restType, oid, current);
         }
         if (!matchByName) {
@@ -87,7 +87,7 @@ final class LiveLookup {
         }
         String name = nameOf(desired);
         List<PrismObject<? extends Objectable>> matches = byName(prismContext, client, clazz, restType, name);
-        LOG.debug("resolve {} by name '{}' → {} match(es)", restType, name, matches.size());
+        LOG.trace("resolve {} by name '{}' → {} match(es)", restType, name, matches.size());
         if (matches.size() > 1) {
             throw new SchemaException("--match-by-name found " + matches.size() + " " + restType
                     + " named '" + name + "'; refusing an ambiguous match.");
@@ -129,7 +129,7 @@ final class LiveLookup {
                 matches.add(object.asPrismObject());
             }
         }
-        LOG.debug("search {} → {} object(s)", restType, matches.size());
+        LOG.trace("search {} → {} object(s)", restType, matches.size());
         return matches;
     }
 

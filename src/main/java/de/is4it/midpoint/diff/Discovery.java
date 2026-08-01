@@ -87,7 +87,7 @@ final class Discovery {
         try {
             return COMMON_3_NAMESPACE.equals(DOMUtil.parseFile(file).getDocumentElement().getNamespaceURI());
         } catch (Exception e) {
-            LOG.debug("could not re-read the root element of {}", file, e);
+            LOG.trace("could not re-read the root element of {}", file, e);
             return false;
         }
     }
@@ -99,28 +99,28 @@ final class Discovery {
             root = DOMUtil.parseFile(file).getDocumentElement();
         } catch (Exception e) {
             warnings.add("skipped " + file + " — not well-formed XML (" + e.getMessage() + ")");
-            LOG.debug("classify {} → not well-formed XML", file, e);
+            LOG.trace("classify {} → not well-formed XML", file, e);
             return;
         }
 
         if (SchemaSupport.isXsdSchema(root)) {
             schemas.add(new SchemaFile(file, root, SchemaSupport.targetNamespace(root),
                     SchemaSupport.importedNamespaces(root), null));
-            LOG.debug("classify {} → raw XSD schema", file);
+            LOG.trace("classify {} → raw XSD schema", file);
         } else if ("schema".equals(root.getLocalName()) && COMMON_3_NAMESPACE.equals(root.getNamespaceURI())) {
             try {
                 PrismObject<? extends Objectable> object = prismContext.parseObject(file);
                 Element schemaElement = SchemaSupport.schemaElement(file.getName(), object.asObjectable());
                 schemas.add(new SchemaFile(file, schemaElement, SchemaSupport.targetNamespace(schemaElement),
                         SchemaSupport.importedNamespaces(schemaElement), Fragment.of(object, file)));
-                LOG.debug("classify {} → SchemaType object (deployable schema)", file);
+                LOG.trace("classify {} → SchemaType object (deployable schema)", file);
             } catch (Exception e) {
                 warnings.add("skipped schema " + file + " — " + e.getMessage());
-                LOG.debug("classify {} → skipped SchemaType", file, e);
+                LOG.trace("classify {} → skipped SchemaType", file, e);
             }
         } else {
             objectFiles.add(file);
-            LOG.debug("classify {} → candidate object ({})", file, root.getLocalName());
+            LOG.trace("classify {} → candidate object ({})", file, root.getLocalName());
         }
     }
 

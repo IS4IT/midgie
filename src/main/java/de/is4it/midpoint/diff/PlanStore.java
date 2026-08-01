@@ -130,7 +130,7 @@ final class PlanStore {
         java.nio.file.Path target = new File(dir, fileName).toPath();
         Io.restrictToOwner(target);
         Files.writeString(target, body + System.lineSeparator(), StandardCharsets.UTF_8);
-        LOG.debug("plan file written: {}", fileName);
+        LOG.trace("plan file written: {}", fileName);
     }
 
     /** Read a plan directory into apply-ordered entries (sorted by filename). */
@@ -192,7 +192,7 @@ final class PlanStore {
             return false;
         } catch (Exception e) {
             // An unreadable body is about to fail the replay anyway; assume the safe direction meanwhile.
-            LOG.debug("could not inspect a plan body for reference filters", e);
+            LOG.trace("could not inspect a plan body for reference filters", e);
             return true;
         }
     }

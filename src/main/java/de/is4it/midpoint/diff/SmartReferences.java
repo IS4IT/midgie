@@ -71,7 +71,7 @@ final class SmartReferences {
         try {
             QName targetType = (desired.getTargetType() != null) ? desired.getTargetType() : live.getTargetType();
             if (targetType == null) {
-                LOG.debug("cannot verify a smart reference with no target type; treating it as a change");
+                LOG.trace("cannot verify a smart reference with no target type; treating it as a change");
                 return false;
             }
             restType = ObjectTypes.getRestTypeFromClass(
@@ -92,13 +92,13 @@ final class SmartReferences {
                 return false;
             }
             boolean same = matches.get(0).getOid() != null && matches.get(0).getOid().equals(live.getOid());
-            LOG.debug("verify smart reference on {}: filter resolves to {}, live holds {} → {}", restType,
+            LOG.trace("verify smart reference on {}: filter resolves to {}, live holds {} → {}", restType,
                     matches.get(0).getOid(), live.getOid(), same ? "in sync" : "changed");
             return same;
         } catch (Exception e) {
             // Unverifiable is not "verified": treat it as a change. The delta that follows carries
             // reevaluateSearchFilters, so the server re-resolves rather than storing anything broken.
-            LOG.debug("could not verify a smart reference against {}", restType, e);
+            LOG.trace("could not verify a smart reference against {}", restType, e);
             return false;
         }
     }

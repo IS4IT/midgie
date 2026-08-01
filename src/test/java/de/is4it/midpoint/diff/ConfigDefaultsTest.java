@@ -252,7 +252,7 @@ class ConfigDefaultsTest {
                 "a value must never reach the log: " + logged);
     }
 
-    /** Run something with the config logger at DEBUG, returning the lines it wrote. */
+    /** Run something with the config logger at TRACE, returning every line it wrote at either level. */
     private static List<String> capturingConfigLog(ThrowingRunnable body) throws Exception {
         ch.qos.logback.classic.Logger logger =
                 (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ConfigDefaults.class);
@@ -261,7 +261,7 @@ class ConfigDefaultsTest {
         ch.qos.logback.classic.Level original = logger.getLevel();
         appender.start();
         logger.addAppender(appender);
-        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        logger.setLevel(ch.qos.logback.classic.Level.TRACE);
         try {
             body.run();
         } finally {

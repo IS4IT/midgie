@@ -180,7 +180,7 @@ final class Reconciler {
 
     /** Execute a planned {@code CREATE}/{@code PATCH}. Returns the affected OID (created OID for a POST). */
     String execute(Outcome outcome) throws IOException {
-        LOG.debug("execute {} {}/{}", outcome.action, outcome.restType, outcome.oid);
+        LOG.trace("execute {} {}/{}", outcome.action, outcome.restType, outcome.oid);
         switch (outcome.action) {
             case CREATE:
                 String created = client.createObject(outcome.restType, outcome.createBody);
