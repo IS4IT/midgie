@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -42,6 +43,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ServerCertificatesTest {
 
+    /** Committed, so the parts that need only a certificate run anywhere. */
+    private static final Path TEST_CA = Path.of("src/test/resources/tls/test-ca.crt");
+
+    /**
+     * The rig's own key material, which {@code docker/tls/gen-certs.sh} generates and {@code .gitignore}
+     * keeps out of the repository. The handshake tests therefore skip where it is absent — CI, a fresh
+     * clone — in the same way the live integration tests skip without a rig, rather than failing for the
+     * absence of something no commit contains.
+     */
     private static final Path SERVER_CERT = Path.of("docker/tls/server.crt");
     private static final Path SERVER_KEY = Path.of("docker/tls/server.key");
 
@@ -50,6 +60,9 @@ class ServerCertificatesTest {
 
     @BeforeEach
     void startServer() throws Exception {
+        if (!Files.exists(SERVER_KEY) || !Files.exists(SERVER_CERT)) {
+            return;   // only the two handshake tests need it; the rest work off the committed certificate
+        }
         SSLContext context = SSLContext.getInstance("TLS");
         context.init(keyManagers(), null, null);
 
@@ -65,11 +78,15 @@ class ServerCertificatesTest {
 
     @AfterEach
     void stopServer() {
-        server.stop(0);
+        if (server != null) {
+            server.stop(0);
+        }
     }
 
     @Test
     void theChainIsFetchedFromAServerNothingTrustsYet() throws Exception {
+        assumeTrue(server != null,
+                "no rig certificates at docker/tls — run docker/tls/gen-certs.sh to exercise the handshake");
         List<X509Certificate> chain = ServerCertificates.fetch(url, Duration.ofSeconds(10));
 
         assertEquals(1, chain.size(), "the rig's server sends its own certificate");
@@ -79,6 +96,8 @@ class ServerCertificatesTest {
 
     @Test
     void aLoneCertificateIsItsOwnAnchor() throws Exception {
+        assumeTrue(server != null,
+                "no rig certificates at docker/tls — run docker/tls/gen-certs.sh to exercise the handshake");
         List<X509Certificate> chain = ServerCertificates.fetch(url, Duration.ofSeconds(10));
 
         // Trusting the leaf pins one certificate and breaks at its next renewal, so anchors() normally drops
@@ -88,8 +107,8 @@ class ServerCertificatesTest {
 
     @Test
     void issuersAreTheAnchorsWhenTheServerSendsAChain() throws Exception {
-        X509Certificate leaf = certificate(SERVER_CERT);
-        X509Certificate ca = certificate(Path.of("docker/tls/ca.crt"));
+        X509Certificate ca = certificate(TEST_CA);
+        X509Certificate leaf = ca;   // stands in for a leaf: anchors() slices the chain, it does not verify
 
         List<X509Certificate> anchors = ServerCertificates.anchors(List.of(leaf, ca));
 
@@ -98,7 +117,7 @@ class ServerCertificatesTest {
 
     @Test
     void thePemItWritesParsesBackAsTheSameCertificate() throws Exception {
-        X509Certificate ca = certificate(Path.of("docker/tls/ca.crt"));
+        X509Certificate ca = certificate(TEST_CA);
 
         String pem = ServerCertificates.toPem(List.of(ca));
         CertificateFactory factory = CertificateFactory.getInstance("X.509");
@@ -113,7 +132,7 @@ class ServerCertificatesTest {
     @Test
     void theFingerprintIsTheOneOpensslWouldPrint() throws Exception {
         // openssl x509 -noout -fingerprint -sha256: uppercase hex, colon-separated, 32 bytes.
-        String fingerprint = ServerCertificates.fingerprint(certificate(Path.of("docker/tls/ca.crt")));
+        String fingerprint = ServerCertificates.fingerprint(certificate(TEST_CA));
 
         assertEquals(32, fingerprint.split(":").length, fingerprint);
         assertTrue(fingerprint.matches("([0-9A-F]{2}:){31}[0-9A-F]{2}"), fingerprint);
