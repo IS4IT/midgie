@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Arrow keys work in `vi` in the container image.** `vim-tiny` starts in vi-compatible mode, where an arrow key in insert mode arrives as its escape sequence: `ESC` leaves insert, then `[`, then `A`/`B`/`C`/`D` run append/back/change/delete — so the keys typed letters and opened lines instead of moving the cursor. The image now sets `nocompatible` (and `backspace=indent,eol,start`, the same compatibility stopping backspace from crossing an indent or a line break) in `/etc/vim/vimrc.tiny`, which is the file `vim.tiny` reads and the one that set `compatible` in the first place — the usual `/etc/vim/vimrc.local` hook belongs to full vim and would have looked right while changing nothing.
+
 ## [0.7.0] - 2026-08-01
 
 ### Added

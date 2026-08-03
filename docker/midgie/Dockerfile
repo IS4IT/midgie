@@ -32,6 +32,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git less openssh-client vim-tiny \
     && rm -rf /var/lib/apt/lists/*
 
+# vim-tiny starts in vi-compatible mode, where an arrow key in insert mode is read as its escape sequence:
+# ESC leaves insert, then '[', then A/B/C/D run append/back/change/delete. The keys type letters and open
+# lines instead of moving the cursor. It has to go in vimrc.tiny, which is the file vim.tiny actually reads
+# and the one that sets 'compatible' in the first place — the usual /etc/vim/vimrc.local hook belongs to
+# full vim and would look right while changing nothing. backspace= goes with it: the same compatibility
+# stops backspace crossing an indent, a line break, or the point where insert began.
+RUN printf '\nset nocompatible\nset backspace=indent,eol,start\n' >> /etc/vim/vimrc.tiny
+
 # git refuses a repository owned by another user, and midgie reports that refusal as "not in a git
 # repository (or git is not available)" — after which tracking is silently unavailable and --prune finds
 # nothing to remove. That is exactly the case here: an init container clones as one UID, this container

@@ -48,7 +48,7 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 
 ### Container image
 
-Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). git can clone over HTTPS and SSH (`curl`, `openssh-client`, `less`), so the tree can be fetched in the container itself rather than by an init container. It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
+Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). git can clone over HTTPS and SSH (`curl`, `openssh-client`, `less`), so the tree can be fetched in the container itself rather than by an init container, and `vi` is there to edit a file in place. It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
 
 ```bash
 docker run --rm -v "$PWD:/work" is4it/midgie:0.7.0 diff a.xml b.xml
