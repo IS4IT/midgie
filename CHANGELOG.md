@@ -5,6 +5,13 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-08-05
+
+### Fixed
+
+- **The fragment-clobber warning stops once the merge rule it asks for is in place.** When two files set the same multi-valued item on one object, `deploy` warns that a later PATCH overwrites the earlier one and names `multivalue=merge` as the fix — but the code emitting it never saw the strategy, so it went on saying the same thing after the rule had been added. Doing what a message asks and seeing no change is worse than no message: it teaches that the advice does not work. Grouping now asks whether the path is already merged and stays quiet when it is, saying so under `-v`. The check goes through the fully resolved strategy, so `--multivalue merge` and `--path` rules count too, not only the `--policy` file.
+- **A bad `--scope`, `--equivalence`, `--multivalue` or `--path` value now fails an offline `deploy`.** The strategy was only resolved for live runs, so offline these were parsed but never validated and a malformed value was silently ignored. (This is also what made the warning above keep firing for anyone who set merge on the command line rather than in a policy file.)
+
 ## [0.8.1] - 2026-08-05
 
 ### Added
@@ -269,7 +276,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/IS4IT/midgie/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/IS4IT/midgie/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/IS4IT/midgie/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/IS4IT/midgie/compare/v0.7.0...v0.7.1

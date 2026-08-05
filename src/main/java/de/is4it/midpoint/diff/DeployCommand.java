@@ -25,6 +25,7 @@ import org.w3c.dom.Element;
 import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
+import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
@@ -255,12 +256,15 @@ public class DeployCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
 
+        // Resolved whether or not this run writes: grouping consults the strategy before anything is
+        // applied, and a bad --scope/--path value should fail an offline run too rather than be ignored.
+        globalStrategy = strategyOptions.resolve();
+        if (globalStrategy == null) {
+            return EXIT_ERROR;
+        }
+
         MidpointRestClient client = null;
         if (live) {
-            globalStrategy = strategyOptions.resolve();
-            if (globalStrategy == null) {
-                return EXIT_ERROR;
-            }
             client = connectionOptions.newClient();
             if (client == null) {
                 return EXIT_ERROR;
@@ -297,8 +301,8 @@ public class DeployCommand implements Callable<Integer> {
 
             List<String> warnings = new ArrayList<>(scan.warnings());
             List<String> unreadable = new ArrayList<>();
-            List<DeployObject> objects =
-                    DeployObject.group(parseObjects(prismContext, scan, warnings, unreadable), warnings);
+            List<DeployObject> objects = DeployObject.group(
+                    parseObjects(prismContext, scan, warnings, unreadable), warnings, this::mergesPath);
             if (!unreadable.isEmpty()) {
                 // These files say they are midPoint objects and cannot be read. Carrying on would deploy the
                 // rest of the tree and exit 0, so a pipeline goes green with an object missing.
@@ -687,6 +691,36 @@ public class DeployCommand implements Callable<Integer> {
      * so resolving per fragment silently gave it the CLI baseline while its named sibling got the policy:
      * one half of an object merging its assignments and the other half replacing them.
      */
+    /**
+     * Whether {@code path} on this object is already set to merge — asked by grouping before it warns that
+     * two fragments would clobber each other there.
+     *
+     * <p>Resolved the same way the apply does, so every source counts: the {@code --policy} file, a global
+     * {@code --multivalue merge}, and {@code --path} rules. Testing only the policy file would still have
+     * nagged anyone who set merge on the command line.
+     *
+     * <p>It cannot use {@link #strategyFor}, which reads {@code groupOf} — that map is filled from the
+     * result of grouping, so it is empty while grouping runs. The identity is passed in instead, which
+     * grouping has already worked out by the time it asks.
+     */
+    private boolean mergesPath(String typeName, String name, String oid, String path) {
+        if (globalStrategy == null) {
+            return false;   // nothing resolved yet: no strategy to consult, so nothing is merged
+        }
+        StrategyOptions.Resolved resolved = (policy != null)
+                ? policy.resolveFor(typeName, name, oid, globalStrategy)
+                : globalStrategy;
+        ItemPath itemPath;
+        try {
+            itemPath = ItemPath.fromString(path);
+        } catch (RuntimeException e) {
+            // An unreadable path only costs the suppression, so keep the warning rather than fail the run.
+            LOG.trace("could not read '{}' as an item path while checking the merge strategy", path, e);
+            return false;
+        }
+        return resolved.multiValue.isMerge(itemPath);
+    }
+
     private StrategyOptions.Resolved strategyFor(Fragment unit) {
         if (policy == null) {
             return globalStrategy;
