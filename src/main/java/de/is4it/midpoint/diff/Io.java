@@ -30,6 +30,11 @@ final class Io {
         return file != null && "-".equals(file.getPath());
     }
 
+    /** {@code -} as an output path: the same convention as {@link #isStdin}, read the other way. */
+    static boolean isStdout(File file) {
+        return isStdin(file);
+    }
+
     /** Parse an object from {@code file}, or from stdin when {@code file} is {@code -}. */
     static PrismObject<? extends Objectable> parseObject(PrismContext prismContext, File file)
             throws SchemaException, IOException {
@@ -48,7 +53,9 @@ final class Io {
      * leave it readable to every local user of a shared build host.
      */
     static void writePayload(File output, String content) throws IOException {
-        if (output == null) {
+        // null and '-' both mean stdout. Handled here rather than at each call site, the same way parseObject
+        // owns the stdin end of the convention — a caller that forgot the test wrote a file named '-'.
+        if (output == null || isStdout(output)) {
             System.out.println(content);
             return;
         }

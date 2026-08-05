@@ -85,6 +85,22 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     }
 
     /**
+     * The filename midgie would <em>read</em> from {@code dir} — so {@code init --write-properties <dir>}
+     * writes a file that is actually picked up rather than one that sits there doing nothing.
+     *
+     * <p>Only the site directory differs: {@code /etc/midgie/midgie.properties} carries no leading dot,
+     * while the user's file and a tree-local one are both {@code .midgie.properties}. Derived from the same
+     * constants the search path uses, not a convention invented here.
+     */
+    static String propertiesNameFor(File dir) {
+        File siteDir = new File(SYSTEM_FILE).getParentFile();
+        if (dir != null && siteDir != null && sameFile(dir, siteDir)) {
+            return new File(SYSTEM_FILE).getName();
+        }
+        return USER_FILE;
+    }
+
+    /**
      * Options a file may not set. Both authorise something irreversible without a person present: {@code yes}
      * turns off the confirmation that stands between a tree and a live server, and {@code prune} is what
      * deletes. A default that quietly makes every later run non-interactive is exactly the accident this tool

@@ -7,7 +7,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`init --write-*` takes a directory, or nothing, or `-`.** A directory writes the conventional name inside it, no value at all means the working directory, and `-` writes to stdout. For `--write-properties` the name is not a convention but a derivation: `.midgie.properties` normally, `midgie.properties` under `/etc/midgie` — the name midgie would actually *read* from that directory, so `--write-properties .` in a config tree cannot produce a file that is silently never loaded. With `-`, the "Wrote …" note moves to stderr so the payload owns stdout, which makes `midgie init --write-properties - | diff - ~/.midgie.properties` the way to see what a new version added without touching your file.
+
 ### Changed
+
+- **Re-running `init --write-policy` refreshes its suggestions instead of refusing.** The generated rules now sit in a delimited block, and a second run replaces only that block — anything you wrote outside it is untouched, and a container you dropped from the tree loses its rule instead of lingering for ever. The block goes at the *end* of an existing file, because policy ties break to the earlier line, so your own rules beat the generated ones for the same selector. A file with no markers (written by an earlier version) gets the block appended once; a start marker with no end is refused rather than guessed at. `--write-properties` and `--write-cacert` still refuse to overwrite: they generate a whole file, and both are edited after generation.
 
 - **`init --write-properties` knows where it is writing to.** A path named `.midgie.properties` outside `$HOME` is one midgie reads as a *tree-local* file, which may only set an allowlisted set of keys — so a full template written there would have errored the moment a line was uncommented. It now writes a stripped template for those paths, offering only the keys a tree file may carry. The rest are **omitted rather than commented out**: the template's contract, pinned by its test, is that uncommenting every line yields a file midgie accepts, and a commented-out `url` would break exactly that as well as reading as an invitation. The header names what was left out and where it belongs instead. Which template to write is decided from the same constants the config reader uses, not a flag, so it cannot disagree with how the file will actually be read; and the template filters on the same allowlist `ConfigDefaults` validates against, so the two cannot drift. The full template's header now also names the tree-local layer, which nothing in it previously hinted existed.
 
