@@ -359,20 +359,37 @@ final class RollbackPlan {
      * <p>This is a default, not a policy. It is wrong for a Kubernetes Job, whose filesystem dies with the
      * pod that needed the net — such a deployment names a directory on a mounted volume instead.
      */
-    static File defaultBase(String deploymentKey) {
+    static File defaultBase(String deploymentKey, File tree) {
         String xdg = System.getenv("XDG_STATE_HOME");
         File root = (xdg != null && !xdg.isBlank())
                 ? new File(xdg, "midgie")
                 : new File(System.getProperty("user.home"), ".local/state/midgie");
-        return new File(root, sanitizeKey(deploymentKey));
+        return new File(root, sanitizeKey(deploymentKey, tree));
     }
 
-    /** A deployment key is a commit prefix plus a tree path; flatten it into one directory name. */
-    private static String sanitizeKey(String key) {
-        if (key == null || key.isBlank()) {
+    /**
+     * One directory name per deployment. A deployment key is a commit prefix plus a tree path, so it needs
+     * flattening; a tree with no derivable identity (not a repository, a shallow clone) falls back to its
+     * own path instead of a shared bucket, or unrelated trees would rotate each other's nets away.
+     */
+    private static String sanitizeKey(String key, File tree) {
+        if (key != null && !key.isBlank()) {
+            String cleaned = key.replaceAll("[^A-Za-z0-9._-]", "_");
+            if (!cleaned.isBlank()) {
+                return cleaned;
+            }
+        }
+        if (tree == null) {
             return "unidentified";
         }
-        String cleaned = key.replaceAll("[^A-Za-z0-9._-]", "_");
-        return cleaned.isBlank() ? "unidentified" : cleaned;
+        String path;
+        try {
+            path = tree.getCanonicalPath();
+        } catch (IOException e) {
+            path = tree.getAbsolutePath();
+        }
+        // Readable prefix plus a digest, so two same-named trees in different places stay apart.
+        String name = tree.getName().replaceAll("[^A-Za-z0-9._-]", "_");
+        return (name.isBlank() ? "tree" : name) + "-" + Integer.toHexString(path.hashCode());
     }
 }

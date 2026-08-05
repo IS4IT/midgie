@@ -171,7 +171,7 @@ public class RollbackCommand implements Callable<Integer> {
             if (!identity.isAvailable()) {
                 note("note: " + identity.unavailableReason() + ".");
             }
-            base = RollbackPlan.defaultBase(identity.isAvailable() ? identity.key() : null);
+            base = RollbackPlan.defaultBase(identity.isAvailable() ? identity.key() : null, treeDir);
         }
         if (!base.isDirectory()) {
             System.err.println("midgie: no rollback plan at " + base

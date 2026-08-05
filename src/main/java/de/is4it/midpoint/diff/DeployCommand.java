@@ -918,7 +918,8 @@ public class DeployCommand implements Callable<Integer> {
         }
         try {
             File base = (rollbackPlanDir != null) ? rollbackPlanDir
-                    : RollbackPlan.defaultBase(tracking.identity != null ? tracking.identity.key() : null);
+                    : RollbackPlan.defaultBase(tracking.identity != null ? tracking.identity.key() : null,
+                            (paths != null && !paths.isEmpty()) ? paths.get(0) : null);
             String server = (client != null) ? String.valueOf(client.host()) : null;
             String deployment = (tracking.identity != null && tracking.identity.isAvailable())
                     ? tracking.identity.key() : null;

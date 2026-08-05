@@ -23,6 +23,7 @@ import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -133,11 +134,21 @@ class RollbackPlanTest {
     @Test
     void defaultBaseFlattensTheDeploymentKeyIntoOneDirectory() {
         // A key is a commit prefix plus the tree's path within the repository, so it carries slashes.
-        File base = RollbackPlan.defaultBase("abc123def456/config/prod");
+        File base = RollbackPlan.defaultBase("abc123def456/config/prod", new File("/irrelevant"));
         assertEquals("abc123def456_config_prod", base.getName(), base.getPath());
+    }
 
-        assertEquals("unidentified", RollbackPlan.defaultBase(null).getName(),
-                "a tree with no derivable identity still gets a net");
+    @Test
+    void aTreeWithNoIdentityGetsItsOwnDirectoryAnyway() {
+        // Not a shared "unidentified" bucket: rotation keeps a fixed number of runs per directory, so
+        // unrelated trees sharing one would quietly delete each other's nets.
+        String one = RollbackPlan.defaultBase(null, new File("/tmp/alpha/config")).getName();
+        String other = RollbackPlan.defaultBase(null, new File("/tmp/beta/config")).getName();
+
+        assertNotEquals(one, other, "two trees must not share a net directory");
+        assertTrue(one.startsWith("config-"), one);
+        assertEquals("unidentified", RollbackPlan.defaultBase(null, null).getName(),
+                "with nothing at all to key on, one bucket is still better than no net");
     }
 
     // --- fixtures ---
