@@ -21,6 +21,8 @@ import picocli.CommandLine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -133,6 +135,88 @@ class ConfigDefaultsTest {
                 "naming a file is the most deliberate of the three, so it wins");
         assertEquals("/etc/ssl/corp.pem", value(defaults, "diff", "--cacert"),
                 "and it still layers on top rather than replacing what is underneath");
+    }
+
+    // --- the tree-local layer, which travels with somebody else's repository ---
+
+    @Test
+    void aTreeFileMaySetAnAllowlistedKey(@TempDir Path dir) throws Exception {
+        Path site = write(dir, "site.properties", "url = https://mp.example/midpoint");
+        Path user = write(dir, "user.properties");
+        Path tree = write(dir, "tree.properties", "rollback-plan = /mnt/nets", "policy = deploy.policy");
+
+        ConfigDefaults defaults =
+                ConfigDefaults.load(name -> null, site.toFile(), user.toFile(), tree.toFile());
+        defaults.validate(Main.commandLine());
+
+        assertEquals("/mnt/nets", value(defaults, "deploy", "--rollback-plan"),
+                "a deployment is the only thing that knows where its net belongs");
+        assertEquals("deploy.policy", value(defaults, "deploy", "--policy"));
+    }
+
+    @Test
+    void aTreeFileMayNotSetWhereCredentialsGo(@TempDir Path dir) throws Exception {
+        // The reason this layer is allowlisted rather than denylisted: cloning an unfamiliar repository and
+        // running even a read would otherwise authenticate to whatever server its file names.
+        Path tree = write(dir, "tree.properties", "url = https://attacker.example/midpoint");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+        IOException error = assertThrows(IOException.class, () -> defaults.validate(Main.commandLine()));
+
+        assertTrue(error.getMessage().contains(tree.toString()), error.getMessage());
+        assertTrue(error.getMessage().contains("tree-local"), error.getMessage());
+    }
+
+    @Test
+    void aTreeFileMayNotSwitchOffTheSafetyNet(@TempDir Path dir) throws Exception {
+        // A file may say WHERE something goes, never WHETHER a safety gate is there -- the same rule that
+        // keeps 'yes' and 'prune' off every config file.
+        Path tree = write(dir, "tree.properties", "no-rollback-plan = true");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+
+        assertThrows(IOException.class, () -> defaults.validate(Main.commandLine()));
+    }
+
+    @Test
+    void theOperatorsOwnFileOutranksTheTree(@TempDir Path dir) throws Exception {
+        Path user = write(dir, "user.properties", "scope = full");
+        Path tree = write(dir, "tree.properties", "scope = present");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), user.toFile(), tree.toFile());
+        defaults.validate(Main.commandLine());
+
+        assertEquals("full", value(defaults, "diff", "--scope"), "the tree suggests; the operator decides");
+    }
+
+    @Test
+    void theUsersOwnFileIsNeverTreatedAsATreeFile(@TempDir Path dir) throws Exception {
+        // Both are named .midgie.properties, so the upward walk can land on the user's own file. Validating
+        // it against the tree allowlist would reject the account they legitimately keep there.
+        Path user = write(dir, "user.properties", "url = https://mp.example/midpoint");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), user.toFile(), user.toFile());
+        defaults.validate(Main.commandLine());
+
+        assertEquals("https://mp.example/midpoint", value(defaults, "diff", "--url"));
+        assertNull(defaults.treeFileSummary(), "it is the user's file, not a tree file");
+    }
+
+    @Test
+    void theTreeFileAndItsKeysAreReported(@TempDir Path dir) throws Exception {
+        Path tree = write(dir, "tree.properties", "rollback-plan = /mnt/nets");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+
+        String summary = defaults.treeFileSummary();
+        assertNotNull(summary, "a config file that came with the checkout must announce itself");
+        assertTrue(summary.contains(tree.toString()), summary);
+        assertTrue(summary.contains("rollback-plan"), summary);
     }
 
     @Test
