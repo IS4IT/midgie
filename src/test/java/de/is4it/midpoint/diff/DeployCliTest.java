@@ -263,6 +263,60 @@ class DeployCliTest {
         assertTrue(r.err.contains("--url"), r.err);
     }
 
+    // --- plan files are output, never deploy input ---
+
+    @Test
+    void aGeneratedPlanFileIsNeverDeployed(@TempDir Path dir) throws IOException {
+        // The marker travels with the content, so it holds wherever the file ends up: renamed, out of its
+        // plan directory, and in a plainly-named folder that no path rule would skip.
+        write(dir, "roles/real.xml", role("11111111-1111-1111-1111-111111111111", "Real Role", ""));
+        write(dir, "archive/copied-out.xml", PlanStore.markGenerated(
+                role("22222222-2222-2222-2222-222222222222", "Planned Role", "")));
+
+        Result r = run("deploy", dir.toString());
+        assertEquals(0, r.exit, r.err);
+        assertTrue(r.out.contains("Real Role"), r.out);
+        assertFalse(r.out.contains("Planned Role"), "a midgie-generated file must not become an apply unit:\n" + r.out);
+        assertTrue(r.err.contains("midgie-generated"), r.err);
+    }
+
+    @Test
+    void dotDirectoriesAreNotWalked(@TempDir Path dir) throws IOException {
+        write(dir, "roles/real.xml", role("11111111-1111-1111-1111-111111111111", "Real Role", ""));
+        write(dir, ".midgie-plan/001-roles-x.create.xml",
+                role("33333333-3333-3333-3333-333333333333", "Hidden Role", ""));
+
+        Result r = run("deploy", dir.toString());
+        assertEquals(0, r.exit, r.err);
+        assertFalse(r.out.contains("Hidden Role"), "a dot-directory must not be descended into:\n" + r.out);
+    }
+
+    @Test
+    void anExplicitlyNamedDotDirectoryIsStillWalked(@TempDir Path dir) throws IOException {
+        write(dir, ".hidden/role.xml", role("44444444-4444-4444-4444-444444444444", "Named Role", ""));
+
+        Result r = run("deploy", dir.resolve(".hidden").toString());
+        assertEquals(0, r.exit, r.err);
+        assertTrue(r.out.contains("Named Role"), "naming a dot-directory outright must still work:\n" + r.out);
+    }
+
+    @Test
+    void planDirectoryNestedInTheTreeIsExcluded(@TempDir Path dir) throws IOException {
+        // The unmarked case the marker cannot catch: files that were already there when --plan was pointed
+        // inside the tree. Excluded by canonical path for the current run.
+        write(dir, "roles/real.xml", role("11111111-1111-1111-1111-111111111111", "Real Role", ""));
+        write(dir, "plan/001-roles-x.create.xml", role("55555555-5555-5555-5555-555555555555", "Stale Plan Role", ""));
+
+        Result withoutFlag = run("deploy", dir.toString());
+        assertTrue(withoutFlag.out.contains("Stale Plan Role"),
+                "without --plan the directory is an ordinary folder:\n" + withoutFlag.out);
+
+        Result r = run("deploy", dir.toString(), "--plan", dir.resolve("plan").toString(),
+                "--url", DEAD_HOST, "-u", "u", "-p", "p");
+        assertFalse(r.out.contains("Stale Plan Role"),
+                "the --plan directory must not be discovery input:\n" + r.out + r.err);
+    }
+
     // --- fixtures & harness ---
 
     private static String role(String oid, String name, String extra) {

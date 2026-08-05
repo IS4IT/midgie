@@ -268,7 +268,9 @@ public class DeployCommand implements Callable<Integer> {
             // batch (prism replaces the dynamic set on each call). Order matters: the tree/flag schemas go in
             // first so they win the per-namespace dedupe (SchemaSupport.register) over the live read, which
             // also stops prism warning about re-registering a schema that is both in the tree and on the server.
-            Discovery.ScanResult scan = Discovery.scan(prismContext, paths);
+            // A plan directory may legitimately sit inside the tree it is planning; its files are output, not
+            // source, so they are never discovery input.
+            Discovery.ScanResult scan = Discovery.scan(prismContext, paths, planDirectories());
             Map<String, Element> schemaMap = new LinkedHashMap<>();
             for (SchemaFile schema : scan.schemas()) {
                 schemaMap.put(schema.description(), schema.schemaElement());
@@ -870,6 +872,18 @@ public class DeployCommand implements Callable<Integer> {
                 reportUnit(unit, preview ? "error" : "failed", safe(outcome.detail), true);
                 break;
         }
+    }
+
+    /** Plan directories this run writes to or reads from — never discovery input, even when nested in a path. */
+    private List<File> planDirectories() {
+        List<File> dirs = new ArrayList<>();
+        if (planDir != null) {
+            dirs.add(planDir);
+        }
+        if (applyPlanDir != null) {
+            dirs.add(applyPlanDir);
+        }
+        return dirs;
     }
 
     // --- plan (write reviewable files, no server writes) ---
