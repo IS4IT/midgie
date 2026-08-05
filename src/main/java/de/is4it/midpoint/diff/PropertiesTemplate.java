@@ -38,6 +38,19 @@ final class PropertiesTemplate {
 
     /** Render the template for the whole command hierarchy under {@code root}. */
     static String render(CommandSpec root) {
+        return render(root, false);
+    }
+
+    /**
+     * Render the template, optionally for a <b>tree-local</b> file.
+     *
+     * <p>The tree variant offers only the keys {@link ConfigDefaults#TREE_ALLOWED} permits, and it
+     * <em>omits</em> the rest rather than commenting them out. The template's contract — pinned by
+     * {@code InitCommandTest} — is that uncommenting every line yields a file midgie accepts; a commented-out
+     * {@code url} would break exactly that, and would read as an invitation besides. What was left out, and
+     * where it belongs, is said in the header instead.
+     */
+    static String render(CommandSpec root, boolean forTree) {
         Map<String, OptionSpec> options = new TreeMap<>();       // option name -> its spec (first seen)
         Map<String, Set<String>> commands = new LinkedHashMap<>(); // option name -> commands offering it
         List<String> subcommands = new ArrayList<>();
@@ -47,7 +60,7 @@ final class PropertiesTemplate {
             subcommands.add(spec.name());
             for (OptionSpec option : spec.options()) {
                 String key = stripPrefix(option.longestName());
-                if (SKIPPED.contains(key)) {
+                if (SKIPPED.contains(key) || (forTree && !ConfigDefaults.TREE_ALLOWED.contains(key))) {
                     continue;
                 }
                 options.putIfAbsent(key, option);
@@ -56,7 +69,11 @@ final class PropertiesTemplate {
         }
 
         StringBuilder out = new StringBuilder();
-        header(out, root.name());
+        if (forTree) {
+            treeHeader(out, root.name());
+        } else {
+            header(out, root.name());
+        }
 
         // Shared first, with bare keys. "Shared" is more than one command rather than all of them: a bare
         // key only reaches a command that has such an option anyway, so writing 'scope' once beats writing
@@ -96,9 +113,14 @@ final class PropertiesTemplate {
                 .append("# command heading is qualified with that command, so it applies there only.\n")
                 .append("#\n")
                 .append("# Read from, and merged in this order (a later file wins a key it sets):\n")
+                .append("#   .midgie.properties in the deployed tree, or above it\n")
                 .append("#   /etc/midgie/midgie.properties\n")
                 .append("#   $HOME/.midgie.properties\n")
                 .append("#   the file named by $MIDGIE_CONF or -Dmidgie.conf\n")
+                .append("#\n")
+                .append("# The tree-local file is the odd one out: it travels with the repository, so it may\n")
+                .append("# only set a fixed list of keys and it loses to every file above. Write one with\n")
+                .append("# 'midgie init --write-properties <tree>/.midgie.properties' and it lists just those.\n")
                 .append("#\n")
                 .append("# Precedence: an option on the command line wins, then MIDPOINT_URL / MIDPOINT_USER /\n")
                 .append("# MIDPOINT_PASSWORD, then this file, then the built-in default. 'midgie <command> -v'\n")
@@ -106,6 +128,38 @@ final class PropertiesTemplate {
                 .append("#\n")
                 .append("# 'yes' and 'prune' cannot be set here: whether a run writes without asking, or\n")
                 .append("# deletes, is not something a file on disk gets to answer.\n");
+    }
+
+    /**
+     * The header for a tree-local file. It has to answer a question the other one does not: why the keys you
+     * were looking for are not here.
+     */
+    private static void treeHeader(StringBuilder out, String program) {
+        out.append("# ").append(ConfigDefaults.TREE_FILE)
+                .append(" — settings that belong to THIS deployment, written by\n")
+                .append("# '").append(program).append(" init --write-properties ")
+                .append(ConfigDefaults.TREE_FILE).append("'.\n")
+                .append("#\n")
+                .append("# This file travels with the repository, so it is read for anyone who checks the tree\n")
+                .append("# out. That is the whole reason it may set only the keys below: a file that arrives\n")
+                .append("# with somebody else's clone must not be able to decide where your credentials go.\n")
+                .append("# Anything not listed here is an error naming this file, not a setting that is\n")
+                .append("# quietly ignored.\n")
+                .append("#\n")
+                .append("# NOT settable here, and where they belong instead:\n")
+                .append("#   url, user, password, password-env, password-file, insecure, cacert\n")
+                .append("#       — they decide where credentials go: ~/").append(ConfigDefaults.USER_FILE)
+                .append(", $MIDGIE_CONF, or the\n")
+                .append("#         MIDPOINT_URL / MIDPOINT_USER / MIDPOINT_PASSWORD environment variables.\n")
+                .append("#   yes, prune, no-rollback-plan\n")
+                .append("#       — a file may say WHERE something goes, never WHETHER a safety gate applies:\n")
+                .append("#         pass them on the command line.\n")
+                .append("#\n")
+                .append("# This is the lowest-precedence file: /etc/midgie/midgie.properties, your own\n")
+                .append("# ~/").append(ConfigDefaults.USER_FILE)
+                .append(" and $MIDGIE_CONF all override it, as do the environment\n")
+                .append("# and the command line. The tree suggests; the operator decides. Each run prints\n")
+                .append("# this file and the keys it supplied.\n");
     }
 
     private static void setting(StringBuilder out, String key, OptionSpec option) {
