@@ -62,6 +62,22 @@ final class Io {
         }
     }
 
+    /**
+     * Create {@code dir} (and its parents) with owner-only permissions, and tighten it if it already exists.
+     * A no-op on a non-POSIX filesystem.
+     *
+     * <p>Unlike {@link #restrictToOwner}, which creates a <em>file</em>, this is for a directory a run
+     * writes several files into — a rollback plan holds object state and belongs to the operator alone.
+     */
+    static void restrictDirToOwner(java.nio.file.Path dir) throws IOException {
+        Files.createDirectories(dir);
+        if (!dir.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            return;
+        }
+        Files.setPosixFilePermissions(dir,
+                java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+    }
+
     /** Create {@code path} (if absent) with owner-only permissions; a no-op on a non-POSIX filesystem. */
     static void restrictToOwner(java.nio.file.Path path) throws IOException {
         if (Files.exists(path) || !path.getFileSystem().supportedFileAttributeViews().contains("posix")) {

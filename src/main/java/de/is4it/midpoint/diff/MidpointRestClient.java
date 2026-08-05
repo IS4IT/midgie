@@ -195,6 +195,14 @@ public final class MidpointRestClient {
     }
 
     /** {@code GET {type}/{oid}} → the object XML. Throws {@link RestException} (404-aware) on failure. */
+    /**
+     * The REST base this client talks to, with any credentials stripped. Recorded in a rollback plan so a
+     * replay can refuse to run against a different server than the one the plan was written from.
+     */
+    public URI host() {
+        return withoutUserInfo(restBase);
+    }
+
     public String getObject(String restType, String oid) throws IOException {
         return getObject(restType, oid, new String[0]);
     }
