@@ -7,6 +7,7 @@
         <t:modificationType>replace</t:modificationType>
         <t:path>c:description</t:path>
         <t:value>Desired description</t:value>
+        <t:estimatedOldValue>Current description</t:estimatedOldValue>
     </apti:itemDelta>
 </apti:objectModification>
 
