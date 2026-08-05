@@ -19,6 +19,7 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Command-layer tests for {@code rollback}, driving the real CLI. The refusals are the point: a plan that
@@ -44,13 +45,19 @@ class RollbackCommandTest {
     }
 
     @Test
-    void refusesAPlanBelongingToAnotherDeployment(@TempDir Path dir) throws IOException {
+    void refusesAPlanBelongingToAnotherDeployment(@TempDir Path dir) throws Exception {
+        // The check needs a resolvable local identity, so the tree is a repository this test builds rather
+        // than the ambient checkout: CI clones shallow, DeploymentIdentity refuses a shallow clone, and the
+        // run would then refuse for an unrelated reason while the assertion looked satisfied by the exit code.
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Files.writeString(tree.resolve("seed.txt"), "seed\n", StandardCharsets.UTF_8);
+        assumeTrue(initRepository(tree), "git is not usable here");
+
         File run = planWith(dir, "<server>" + DEAD_REST + "</server>"
                         + "<deployment>abc123/other-tree</deployment>",
                 "<object type=\"roles\" oid=\"" + OID + "\" name=\"r\" action=\"patched\" version=\"1\"/>");
 
-        // This repository is a real git tree, so the identity resolves and will not match the recorded one.
-        Result r = run("rollback", ".", "--url", DEAD_HOST, "-u", "u", "-p", "p",
+        Result r = run("rollback", tree.toString(), "--url", DEAD_HOST, "-u", "u", "-p", "p",
                 "--rollback-plan", run.getPath(), "--yes");
 
         assertEquals(2, r.exit, r.out + r.err);
@@ -118,6 +125,33 @@ class RollbackCommandTest {
         Files.writeString(new File(run, RollbackPlan.MANIFEST).toPath(),
                 PlanStore.markGenerated("<rollbackManifest>" + provenance + objects + "</rollbackManifest>"),
                 StandardCharsets.UTF_8);
+    }
+
+    /** Create a repository with one commit, so the deployment identity resolves. */
+    private static boolean initRepository(Path dir) throws Exception {
+        if (exec(dir, "git", "init", "-q", ".") != 0) {
+            return false;
+        }
+        exec(dir, "git", "config", "user.email", "test@example.invalid");
+        exec(dir, "git", "config", "user.name", "midgie test");
+        exec(dir, "git", "add", "-A");
+        return exec(dir, "git", "commit", "-qm", "initial") == 0;
+    }
+
+    /** Bounded, and never orphans the child — the same discipline {@code GitRevision.run} keeps. */
+    private static int exec(Path dir, String... command) throws Exception {
+        Process process = null;
+        try {
+            process = new ProcessBuilder(command).directory(dir.toFile()).redirectErrorStream(true).start();
+            process.getInputStream().readAllBytes();
+            return process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS) ? process.exitValue() : -1;
+        } catch (IOException e) {
+            return -1; // no git on this machine
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
     }
 
     private static String inversePatch() {
