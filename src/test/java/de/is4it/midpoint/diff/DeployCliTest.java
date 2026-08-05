@@ -112,6 +112,60 @@ class DeployCliTest {
     }
 
     @Test
+    void theClobberWarningStopsOnceThatPathIsSetToMerge(@TempDir Path dir) throws IOException {
+        // The warning names a merge rule as the fix, so it has to notice when the fix is in place. It did
+        // not: grouping never saw the policy, so the message went on repeating after the rule was added —
+        // which teaches the operator that midgie's advice does not work.
+        String oid = "11111111-0000-0000-0e00-000000000014";
+        write(dir, "a.xml", role(oid, "Shared",
+                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fa\" type=\"c:RoleType\"/></inducement>"));
+        write(dir, "b.xml", role(oid, "Shared",
+                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fb\" type=\"c:RoleType\"/></inducement>"));
+        write(dir, "midgie.policy", "RoleType/Shared/inducement  multivalue=merge\n");
+
+        Result warned = run("deploy", dir.toString());
+        assertTrue(warned.err.contains("multi-valued 'inducement'"),
+                "without a policy the warning still fires: " + warned.err);
+
+        Result quiet = run("deploy", dir.toString(), "--policy", dir.resolve("midgie.policy").toString(),
+                "--url", DEAD_HOST, "-u", "u", "-p", "p", "--dry-run");
+        assertFalse(quiet.err.contains("multi-valued 'inducement'"),
+                "the rule the message asked for must silence it:\n" + quiet.err);
+    }
+
+    @Test
+    void theClobberWarningAlsoRespectsMergeSetOnTheCommandLine(@TempDir Path dir) throws IOException {
+        // --multivalue and --path are the other ways to set merge; testing only the policy file would have
+        // left anyone using those still being nagged.
+        String oid = "11111111-0000-0000-0e00-000000000015";
+        write(dir, "a.xml", role(oid, "Shared",
+                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fa\" type=\"c:RoleType\"/></inducement>"));
+        write(dir, "b.xml", role(oid, "Shared",
+                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fb\" type=\"c:RoleType\"/></inducement>"));
+
+        Result r = run("deploy", dir.toString(), "--path", "inducement=merge");
+
+        assertFalse(r.err.contains("multi-valued 'inducement'"), r.err);
+    }
+
+    @Test
+    void aPathTheMergeRuleDoesNotCoverIsStillWarnedAbout(@TempDir Path dir) throws IOException {
+        // Suppression is per path, not per object: a rule for one container must not silence another.
+        String oid = "11111111-0000-0000-0e00-000000000016";
+        write(dir, "a.xml", role(oid, "Shared",
+                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fa\" type=\"c:RoleType\"/></inducement>"
+                        + "<subtype>one</subtype>"));
+        write(dir, "b.xml", role(oid, "Shared",
+                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fb\" type=\"c:RoleType\"/></inducement>"
+                        + "<subtype>two</subtype>"));
+
+        Result r = run("deploy", dir.toString(), "--path", "inducement=merge");
+
+        assertFalse(r.err.contains("multi-valued 'inducement'"), "covered: " + r.err);
+        assertTrue(r.err.contains("multi-valued 'subtype'"), "not covered, so still warned: " + r.err);
+    }
+
+    @Test
     void differentTypesUnderOneOidAreAnError(@TempDir Path dir) throws IOException {
         String oid = "11111111-0000-0000-0e00-000000000002";
         write(dir, "a.xml", role(oid, "Foo", ""));

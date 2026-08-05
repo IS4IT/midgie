@@ -33,6 +33,8 @@ import com.evolveum.midpoint.util.exception.SchemaException;
  */
 final class DeployObject {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(DeployObject.class);
+
     private final String identityKey;
     private final List<Fragment> fragments;
     private final String typeName;
@@ -53,7 +55,32 @@ final class DeployObject {
     }
 
     /** Group fragments by identity into logical objects, running the per-group consistency check. */
+    /**
+     * Whether a merge is <em>already configured</em> for {@code path} on the object being grouped — from the
+     * {@code --policy} file, {@code --multivalue merge}, or a {@code --path} rule.
+     *
+     * <p>Grouping needs to ask, because the cross-fragment clobber warning below names a merge rule as the
+     * fix. Without this it went on saying so after the rule had been added, which is worse than saying
+     * nothing: the operator does what the message asks, sees no change, and stops trusting the message.
+     *
+     * <p>A small interface rather than a {@link Policy} parameter, so grouping does not have to know how a
+     * strategy is resolved — only whether one applies.
+     */
+    @FunctionalInterface
+    interface MergeCheck {
+
+        boolean merges(String typeName, String name, String oid, String path);
+
+        /** Nothing is merged — for the callers that group without a strategy in hand (tests, discovery). */
+        MergeCheck NONE = (typeName, name, oid, path) -> false;
+    }
+
     static List<DeployObject> group(List<Fragment> fragments, List<String> warnings) throws SchemaException {
+        return group(fragments, warnings, MergeCheck.NONE);
+    }
+
+    static List<DeployObject> group(List<Fragment> fragments, List<String> warnings, MergeCheck merges)
+            throws SchemaException {
         // One object is routinely described by a fragment carrying its OID and another carrying only its
         // name. Keying purely on "OID else type/name" files those under different keys, making them two
         // objects: the contradiction check and the clobber warning never run between them, nothing that
@@ -73,12 +100,13 @@ final class DeployObject {
         }
         List<DeployObject> objects = new ArrayList<>();
         for (Map.Entry<String, List<Fragment>> entry : byIdentity.entrySet()) {
-            objects.add(build(entry.getKey(), entry.getValue(), warnings));
+            objects.add(build(entry.getKey(), entry.getValue(), warnings, merges));
         }
         return objects;
     }
 
-    private static DeployObject build(String key, List<Fragment> group, List<String> warnings) throws SchemaException {
+    private static DeployObject build(String key, List<Fragment> group, List<String> warnings,
+            MergeCheck merges) throws SchemaException {
         group.sort(Comparator.comparing(fragment -> fragment.sourceFile().getPath()));
         Fragment first = group.get(0);
 
@@ -125,13 +153,21 @@ final class DeployObject {
             collectMultiValued(fragment.object().getValue(), "", multi);
             for (String path : multi) {
                 File previous = multiSeenIn.putIfAbsent(path, fragment.sourceFile());
-                if (previous != null && multiWarned.add(path)) {
-                    warnings.add("object " + first.identityLabel() + ": " + previous + " and "
-                            + fragment.sourceFile() + " both set the multi-valued '" + path + "' — fragments "
-                            + "apply file-by-file, so under the default (replace) a later PATCH overwrites the "
-                            + "earlier one (last-one-wins). Put them in one file, or set '" + path
-                            + " multivalue=merge' in --policy.");
+                if (previous == null || !multiWarned.add(path)) {
+                    continue;
                 }
+                // The clobber only happens under replace. A path already set to merge is the fix this very
+                // message recommends, so repeating it there would tell the operator their change did nothing.
+                if (merges.merges(first.typeName(), groupName, groupOid, path)) {
+                    LOG.debug("{}: '{}' is declared by {} and {} but is set to merge, so they combine",
+                            first.identityLabel(), path, previous, fragment.sourceFile());
+                    continue;
+                }
+                warnings.add("object " + first.identityLabel() + ": " + previous + " and "
+                        + fragment.sourceFile() + " both set the multi-valued '" + path + "' — fragments "
+                        + "apply file-by-file, so under the default (replace) a later PATCH overwrites the "
+                        + "earlier one (last-one-wins). Put them in one file, or set '" + path
+                        + " multivalue=merge' in --policy.");
             }
 
             outbound.addAll(ReferenceCollector.outboundOids(fragment.object()));
