@@ -59,6 +59,21 @@ final class PlanStore {
      */
     private static final String INCOMPLETE_MARKER = ".midgie-plan-incomplete";
 
+    /**
+     * Stamped into every plan file so {@code deploy} can recognise its own output and refuse to treat it as
+     * a source object. A {@code .create.xml} is a whole object with a valid root element, so a plan
+     * directory that ends up inside a deployed tree is otherwise discovered and <em>redeployed</em>.
+     *
+     * <p>The marker travels with the content, which is what makes it worth having on top of the path-based
+     * exclusions: it survives the file being renamed, moved out of its directory, committed, or shipped
+     * through CI as an artifact. It is a guard against accident, not a security boundary — anyone can strip
+     * a comment — and that is the right level for the mistake it prevents.
+     */
+    static final String GENERATED_MARKER = "midgie-generated";
+
+    private static final String GENERATED_COMMENT = "<!-- " + GENERATED_MARKER
+            + ": plan file, do not deploy -->";
+
     /** True if {@code dir} already holds plan files (so a fresh plan is never mixed into a stale one). */
     static boolean hasPlanFiles(File dir) {
         String[] names = dir.list();
@@ -129,8 +144,27 @@ final class PlanStore {
         // umask would leave the plan readable to every local user of a shared host or CI runner.
         java.nio.file.Path target = new File(dir, fileName).toPath();
         Io.restrictToOwner(target);
-        Files.writeString(target, body + System.lineSeparator(), StandardCharsets.UTF_8);
+        Files.writeString(target, markGenerated(body) + System.lineSeparator(), StandardCharsets.UTF_8);
         LOG.trace("plan file written: {}", fileName);
+    }
+
+    /**
+     * Prefix {@code body} with the generated-file marker.
+     *
+     * <p>An XML declaration has to stay the very first thing in the document, so the comment goes after it
+     * when there is one. Getting this wrong would produce plan files that are not well-formed, which
+     * {@code --apply-plan} would only discover at replay time.
+     */
+    static String markGenerated(String body) {
+        String trimmed = body.stripLeading();
+        if (trimmed.startsWith("<?xml")) {
+            int end = trimmed.indexOf("?>");
+            if (end >= 0) {
+                return trimmed.substring(0, end + 2) + System.lineSeparator() + GENERATED_COMMENT
+                        + System.lineSeparator() + trimmed.substring(end + 2).stripLeading();
+            }
+        }
+        return GENERATED_COMMENT + System.lineSeparator() + trimmed;
     }
 
     /** Read a plan directory into apply-ordered entries (sorted by filename). */

@@ -113,6 +113,17 @@ public class DeployCommand implements Callable<Integer> {
             description = "Replay a plan directory written by --plan (POST creates, PATCH patches, in order). Needs --url.")
     File applyPlanDir;
 
+    @Option(names = "--rollback-plan", paramLabel = "DIR",
+            description = "Where to leave the rollback plan this run writes (default: a per-deployment "
+                    + "directory under $XDG_STATE_HOME/midgie). Each run gets its own timestamped "
+                    + "subdirectory; the newest few are kept.")
+    File rollbackPlanDir;
+
+    @Option(names = "--no-rollback-plan",
+            description = "Do not write a rollback plan for this run. The net is otherwise always written, "
+                    + "which is the point of it.")
+    boolean noRollbackPlan;
+
     @Option(names = "--policy", paramLabel = "FILE",
             description = "Per-object/-item diff-strategy policy file ('<Type/Name/item glob> key=value' lines); "
                     + "most-specific selector wins.")
@@ -164,6 +175,9 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Which logical object each fragment belongs to, so per-object policy applies to every fragment of it. */
     private final Map<Fragment, DeployObject> groupOf = new java.util.IdentityHashMap<>();
+
+    /** The safety net being accumulated for this run; null when no writing pass will happen. */
+    private RollbackPlan rollback;
 
     private void markNotFullyApplied(String reason) {
         if (notFullyApplied == null) {
@@ -268,7 +282,9 @@ public class DeployCommand implements Callable<Integer> {
             // batch (prism replaces the dynamic set on each call). Order matters: the tree/flag schemas go in
             // first so they win the per-namespace dedupe (SchemaSupport.register) over the live read, which
             // also stops prism warning about re-registering a schema that is both in the tree and on the server.
-            Discovery.ScanResult scan = Discovery.scan(prismContext, paths);
+            // A plan directory may legitimately sit inside the tree it is planning; its files are output, not
+            // source, so they are never discovery input.
+            Discovery.ScanResult scan = Discovery.scan(prismContext, paths, planDirectories());
             Map<String, Element> schemaMap = new LinkedHashMap<>();
             for (SchemaFile schema : scan.schemas()) {
                 schemaMap.put(schema.description(), schema.schemaElement());
@@ -333,6 +349,11 @@ public class DeployCommand implements Callable<Integer> {
                 note("warning: --prune has nothing to compare against, so nothing will be removed.");
             }
 
+            // Only a run that actually writes needs a net; --dry-run and --plan touch nothing.
+            if (planDir == null && !dryRun && !noRollbackPlan) {
+                rollback = new RollbackPlan(prismContext, client);
+            }
+
             Integer exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
 
             // After the pass, not before it: a rule is only marked as having matched when it is offered to
@@ -365,6 +386,9 @@ public class DeployCommand implements Callable<Integer> {
                     }
                 }
             }
+            // After the prune, so the values it removed are in the net too.
+            writeRollbackPlan(client, tracking);
+
             if (exit == 0 && planDir == null && !dryRun) {
                 if (notFullyApplied == null && !detectionBroken) {
                     recordRevision(prismContext, client, tracking);
@@ -573,6 +597,11 @@ public class DeployCommand implements Callable<Integer> {
                 }
                 client.patchObject(restType, oid, DeltaOutput.toModificationXml(prismContext, delta),
                         DeltaOutput.carriesSmartReference(delta));
+                if (rollback != null) {
+                    // A prune delta is built solely from values that were in last-applied, so its inverse
+                    // puts back exactly what was removed and nothing else.
+                    rollback.recordPruned(restType, oid, entry.getKey(), delta);
+                }
                 status("  pruned       " + entry.getKey() + "  " + group.size() + " value(s)");
             } catch (Exception e) {
                 warn("could not remove " + group.size() + " value(s) from " + entry.getKey()
@@ -818,7 +847,10 @@ public class DeployCommand implements Callable<Integer> {
                     }
                 }
                 if (!preview && (action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH)) {
-                    reconciler.execute(outcome);
+                    String affectedOid = reconciler.execute(outcome);
+                    if (rollback != null) {
+                        rollback.recordApplied(action, outcome, affectedOid, unit.identityLabel());
+                    }
                 }
                 record(tally, unit, action, outcome, preview, afterCreate);
             } catch (Exception e) {
@@ -870,6 +902,48 @@ public class DeployCommand implements Callable<Integer> {
                 reportUnit(unit, preview ? "error" : "failed", safe(outcome.detail), true);
                 break;
         }
+    }
+
+    /**
+     * Leave the run's rollback plan on disk, and prune the older ones.
+     *
+     * <p>Never fails the deploy. The apply has already happened by the time this runs, so turning a
+     * successful deploy into a non-zero exit because a directory was not writable would be the wrong trade
+     * — but it is reported loudly, because an operator who believes there is a net and has none is worse
+     * off than one who knows there is not.
+     */
+    private void writeRollbackPlan(MidpointRestClient client, Tracking tracking) {
+        if (rollback == null || rollback.isEmpty()) {
+            return;
+        }
+        try {
+            File base = (rollbackPlanDir != null) ? rollbackPlanDir
+                    : RollbackPlan.defaultBase(tracking.identity != null ? tracking.identity.key() : null,
+                            (paths != null && !paths.isEmpty()) ? paths.get(0) : null);
+            String server = (client != null) ? String.valueOf(client.host()) : null;
+            String deployment = (tracking.identity != null && tracking.identity.isAvailable())
+                    ? tracking.identity.key() : null;
+            File dir = rollback.write(base, server, deployment, tracking.currentRevision);
+            RollbackPlan.rotate(base, RollbackPlan.DEFAULT_KEEP);
+            status("Rollback plan: " + dir + " (" + rollback.undoableCount() + " object(s) undoable). "
+                    + "Replay with: midgie rollback --url <url>");
+        } catch (Exception e) {
+            warn("could not write the rollback plan: " + safe(e.getMessage())
+                    + " — this run cannot be rolled back automatically.");
+            LOG.trace("writing the rollback plan failed", e);
+        }
+    }
+
+    /** Plan directories this run writes to or reads from — never discovery input, even when nested in a path. */
+    private List<File> planDirectories() {
+        List<File> dirs = new ArrayList<>();
+        if (planDir != null) {
+            dirs.add(planDir);
+        }
+        if (applyPlanDir != null) {
+            dirs.add(applyPlanDir);
+        }
+        return dirs;
     }
 
     // --- plan (write reviewable files, no server writes) ---

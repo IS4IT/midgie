@@ -23,7 +23,8 @@ import picocli.CommandLine.Command;
         mixinStandardHelpOptions = true,
         versionProvider = VersionProvider.class,
         description = "Schema-aware diff of midPoint objects into an itemDelta (ObjectModificationType).",
-        subcommands = { DiffCommand.class, ApplyCommand.class, DeployCommand.class, InitCommand.class }
+        subcommands = { DiffCommand.class, ApplyCommand.class, DeployCommand.class, RollbackCommand.class,
+                InitCommand.class }
 )
 public class Main implements java.util.concurrent.Callable<Integer> {
 
@@ -94,6 +95,12 @@ public class Main implements java.util.concurrent.Callable<Integer> {
                 defaults.validate(commandLine);
                 commandLine.setDefaultValueProvider(defaults);
                 LOG.debug("defaults from {}", defaults.sources());
+                String fromTree = defaults.treeFileSummary();
+                if (fromTree != null) {
+                    // Named outright, not logged at debug: a config file that arrived with the checkout is
+                    // the one nobody remembers is there.
+                    System.err.println("midgie: config from the tree: " + fromTree);
+                }
             }
         } catch (Exception e) {
             commandLine.setExecutionStrategy(parseResult -> {

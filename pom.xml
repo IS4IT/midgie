@@ -144,6 +144,12 @@
                         <MIDPOINT_URL/>
                         <MIDPOINT_USER/>
                         <MIDPOINT_PASSWORD/>
+                        <!-- Keep rollback plans out of the developer's home directory. Every deploy that
+                             writes leaves one, and the trees these tests deploy are temp directories with
+                             no git identity, so they landed in ~/.local/state/midgie and accumulated
+                             there. Redirecting the base is enough: RollbackPlan.defaultBase honours
+                             XDG_STATE_HOME, so no test has to remember to pass the flag itself. -->
+                        <XDG_STATE_HOME>${project.build.directory}/state</XDG_STATE_HOME>
                     </environmentVariables>
                     <systemPropertyVariables>
                         <!-- docker/.env stays the single source of truth for the rig's port. Hard-coding it

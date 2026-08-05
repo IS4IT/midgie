@@ -28,6 +28,8 @@ import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectFactory;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.AssignmentType;
+import com.evolveum.midpoint.xml.ns._public.common.common_3.RoleType;
+import com.evolveum.midpoint.xml.ns._public.common.common_3.UserType;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -247,6 +249,95 @@ class DiffCommandTest {
         ((ObjectDelta) result.delta()).applyTo(reconciled);
         assertTrue(desired.equivalent(reconciled),
                 "applying the delta to the live object must reproduce the desired object");
+    }
+
+    @Test
+    void replaceDeltaCarriesTheOldValueItOverwrites(@TempDir Path dir) throws Exception {
+        // prism builds an add/delete pair for a single-valued property and PrismPropertyImpl.fixupDelta
+        // rewrites it as a bare replace, discarding the old value. DiffEngine puts it back, which is what
+        // makes a saved plan reviewable and createReverseDelta correct.
+        File desired = write(dir, "desired.xml", role("Desired description"));
+        File live = write(dir, "live.xml", role("Current description"));
+
+        ItemDelta<?, ?> mod = single(engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll()));
+
+        assertNotNull(mod.getEstimatedOldValues(), "a replace must record what it overwrites");
+        assertEquals(1, mod.getEstimatedOldValues().size());
+        assertEquals("Current description", mod.getEstimatedOldValues().iterator().next().getRealValue());
+    }
+
+    @Test
+    void reverseOfAReplaceRestoresTheOriginalValue(@TempDir Path dir) throws Exception {
+        // The rollback invariant for the case that needs the recorded old value: apply the delta, then apply
+        // its reverse, and the object is back where it started. Without estimatedOldValues prism's
+        // createReverseDelta yields an EMPTY replace here, which clears <description> instead of restoring it.
+        PrismObject<? extends Objectable> desired =
+                prismContext.parseObject(write(dir, "desired.xml", role("Desired description")));
+        PrismObject<? extends Objectable> live =
+                prismContext.parseObject(write(dir, "live.xml", role("Current description")));
+
+        ObjectDelta<? extends Objectable> delta = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll()).delta();
+
+        @SuppressWarnings("rawtypes")
+        PrismObject object = live.clone();
+        ((ObjectDelta) delta).applyTo(object);
+        assertEquals("Desired description", roleDescription(object), "the delta must reach the desired state");
+
+        ((ObjectDelta) delta.createReverseDelta()).applyTo(object);
+        assertTrue(live.equivalent(object), "the reverse delta must restore the original live object");
+    }
+
+    @Test
+    void reverseOfAReplaceRestoresAccruedMultiValuedValues(@TempDir Path dir) throws Exception {
+        // The motivating case: a path left on multivalue=replace while desired declares only some of the
+        // live values, so the unlisted ones are deleted. Those deletes carry the accrued values themselves
+        // (fixupDelta is overridden for single-valued properties alone), so the reverse restores them.
+        PrismObject<? extends Objectable> desired = prismContext.parseObject(write(dir, "desired.xml",
+                user(assignment(null, "aaaaaaaa-0000-0000-0000-000000000001"))));
+        PrismObject<? extends Objectable> live = prismContext.parseObject(write(dir, "live.xml",
+                user(assignment("1", "aaaaaaaa-0000-0000-0000-000000000001"),
+                        assignment("2", "bbbbbbbb-0000-0000-0000-000000000002"))));
+
+        ObjectDelta<? extends Objectable> delta = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll()).delta();
+        assertTrue(delta.getModifications().stream().anyMatch(m -> m.getValuesToDelete() != null),
+                "replace must delete the accrued assignment — otherwise this test proves nothing");
+
+        @SuppressWarnings("rawtypes")
+        PrismObject object = live.clone();
+        ((ObjectDelta) delta).applyTo(object);
+        assertEquals(1, assignmentCount(object), "the accrued assignment must be gone after the apply");
+
+        ((ObjectDelta) delta.createReverseDelta()).applyTo(object);
+        assertEquals(2, assignmentCount(object), "the reverse delta must bring the accrued assignment back");
+        assertTrue(live.equivalent(object), "the reverse delta must restore the original live object");
+    }
+
+    @Test
+    void protectedValuesAreNeverRecordedAsOldValues(@TempDir Path dir) throws Exception {
+        // A password delta is dropped outright, so the only way ciphertext could reach a file on disk is via
+        // the old value of some other delta. Diff a user whose password AND fullName both differ: the
+        // fullName replace must carry its own old value, and nothing anywhere may carry the password.
+        File desired = write(dir, "desired.xml", userWithPasswordAndFullName("s3cret", "Desired Name"));
+        File live = write(dir, "live.xml", userWithPasswordAndFullName("other", "Current Name"));
+
+        DiffEngine.DiffResult result = engine().diff(
+                desired, live, EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll());
+
+        assertEquals(1, result.protectedSkippedPaths().size(), "the password path must be reported as skipped");
+        ItemDelta<?, ?> mod = single(result);
+        assertEquals("fullName", mod.getPath().firstName().getLocalPart());
+        assertNotNull(mod.getEstimatedOldValues(), "the ordinary replace still records its old value");
+        for (ItemDelta<?, ?> each : result.delta().getModifications()) {
+            for (Object old : (each.getEstimatedOldValues() != null) ? each.getEstimatedOldValues() : List.of()) {
+                assertFalse(String.valueOf(old).contains("other"),
+                        "a protected value must never be recorded as an old value");
+            }
+        }
     }
 
     @Test
@@ -758,6 +849,29 @@ class DiffCommandTest {
                 + "    </password>\n"
                 + "  </credentials>\n"
                 + "</user>";
+    }
+
+    private static String userWithPasswordAndFullName(String clearValue, String fullName) {
+        return "<user xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"22222222-2222-2222-2222-222222222222\">\n"
+                + "  <name>jack</name>\n"
+                + "  <fullName>" + fullName + "</fullName>\n"
+                + "  <credentials>\n"
+                + "    <password>\n"
+                + "      <value>\n"
+                + "        <clearValue>" + clearValue + "</clearValue>\n"
+                + "      </value>\n"
+                + "    </password>\n"
+                + "  </credentials>\n"
+                + "</user>";
+    }
+
+    private static String roleDescription(PrismObject<?> object) {
+        return ((RoleType) object.asObjectable()).getDescription();
+    }
+
+    private static int assignmentCount(PrismObject<?> object) {
+        return ((UserType) object.asObjectable()).getAssignment().size();
     }
 
     private static String role(String description, String extra) {

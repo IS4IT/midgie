@@ -5,6 +5,21 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-08-05
+
+### Added
+
+- **`midgie rollback` — undo the last deploy.** Every `deploy` that writes now leaves a **rollback plan** behind: for each object it touched, the delta that puts it back. Nothing is recomputed at rollback time. This is the answer to the ordinary disaster — a missing line in the policy file leaves a multi-valued container on `replace`, the wholesale replace wipes accrued associations or part of the `SystemConfiguration`, and the run reports success. Those deletes carry the wiped values themselves, so the inverse restores them exactly. The command refuses rather than guesses: **provenance** (the plan records which server and which deployment it came from, and a mismatch is an error with no override, so a staging plan cannot reach production because somebody answered yes) and **staleness** (it records each object's repository version after the write, and an object that has moved since was changed by someone else, so replaying would revert their change too — `--force` proceeds anyway). Objects the deploy *created* are named in the plan but never removed: the inverse of an add is an object delete, and one created an hour ago may already carry links and shadows. Plans go to `$XDG_STATE_HOME/midgie/<deployment>/<timestamp>/`, newest five kept; `--rollback-plan DIR` moves them, `--no-rollback-plan` suppresses them. There is deliberately no `--auto-rollback`: midPoint has no cross-object transaction, so unwinding a partly-applied tree can land you in a third state that is neither old nor new, and the failure that would trigger it is often the one that prevents it.
+- **A tree-local `.midgie.properties`.** Some settings belong to the deployment rather than the machine or the person — where its rollback plans go, which policy file it uses. midgie reads the nearest one at or above the working directory, stopping at the repository root, at the **lowest** precedence of the file layers: the tree suggests, your own files override. It is **allowlisted** rather than denylisted, because it travels with somebody else's repository and cloning an unfamiliar repo should not let its file decide where your credentials go — `url`, `user`, `password*`, `insecure` and `cacert` are absent from the list, and so is `no-rollback-plan`, on the rule that already keeps `yes` and `prune` off every config file: a file may say *where* something goes, never *whether* a safety gate applies. The file and the keys it supplied are printed at the start of the run.
+
+### Changed
+
+- **Every `replace` item delta now carries the value it overwrites.** prism computes the old value and discards it: `ItemImpl.diffInternal` builds a clean add/delete pair, and `PrismPropertyImpl.fixupDelta` — overridden for single-valued *properties* alone — calls `delta.clear()` and rewrites it as a bare replace without copying the old value into `estimatedOldValues`. So the delta said where to go but not where it came from. It is now filled from the live object and travels as `ItemDeltaType`'s `estimatedOldValue`, which `DeltaConvertor` serializes and parses back on its own. Two things follow: a saved plan is reviewable (a reader sees what is being overwritten, not just the new value), and `ObjectDelta.createReverseDelta` becomes correct — it reverses a replace by substituting those old values and, finding none, fell back to an *empty* replace that would clear the item rather than restore it. midPoint treats the field as informational; its own delta visualizer reads it, the repository write path does not. Protected values are never recorded — ciphertext re-encrypts on every fetch and has no business in a file on disk.
+
+### Fixed
+
+- **`deploy` no longer treats its own plan files as source objects.** A `.create.xml` is a whole object with a valid root element, so a plan directory inside a deployed tree was discovered on the next run and **redeployed** — `midgie deploy /config --plan /config/plan` self-poisoned, and pointing `deploy` at a plan directory created every object in it. Three layers now prevent that: `PlanStore` stamps every plan file with a marker that `Discovery` skips (it travels with the content, so it survives a rename, a move out of its directory, a commit, or a CI artifact — which also keeps discovery content-based rather than path-based); the `--plan`/`--apply-plan`/`--rollback-plan` directories are excluded by canonical path; and the walk no longer descends into dot-directories, `.git` included. A path named explicitly on the command line is still walked even if it is one.
+
 ## [0.7.1] - 2026-08-03
 
 ### Fixed
@@ -242,7 +257,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/IS4IT/midgie/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/IS4IT/midgie/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/IS4IT/midgie/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/IS4IT/midgie/compare/v0.6.0...v0.6.1

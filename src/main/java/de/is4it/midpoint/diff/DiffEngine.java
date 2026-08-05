@@ -203,6 +203,10 @@ public final class DiffEngine {
         // credential API, not a blind PATCH of stale ciphertext.
         List<String> protectedSkipped = stripProtectedValues(delta);
 
+        // Record what each replace is about to overwrite. Run after the strips, so nothing is recorded for a
+        // delta that is no longer there.
+        recordOldValues(delta, live);
+
         // Merge promises accrued (live-only) values survive. Under an id/natural-key-considering strategy,
         // prism can pair a live-only value with a desired value and edit it in place (a deep delta merge
         // cannot express as a union), which silently overwrites the accrued value. Report those paths so
@@ -401,6 +405,65 @@ public final class DiffEngine {
             }
         }
         return false;
+    }
+
+    /**
+     * Record, on every <b>replace</b> item delta, the live values it is about to overwrite.
+     *
+     * <p>prism computes the old value and then throws it away. {@code ItemImpl.diffInternal} builds a clean
+     * add/delete pair, and {@code PrismPropertyImpl.fixupDelta} — overridden for single-valued
+     * <em>properties</em> alone — calls {@code delta.clear()} and rewrites it as a bare replace, without
+     * copying the old value into {@code estimatedOldValues}. So the delta says where to go but not where it
+     * came from. Multi-valued items and references keep their delete side and need nothing here.
+     *
+     * <p>Two things depend on putting it back. A saved plan becomes reviewable — a reader sees what is being
+     * overwritten, not just the new value — and {@code ObjectDelta.createReverseDelta()} becomes correct: it
+     * reverses a replace by substituting {@code estimatedOldValues}, and with none present it falls back to
+     * an <em>empty</em> replace, so an undo would silently clear the item instead of restoring it.
+     *
+     * <p>The value is carried by {@code ItemDeltaType}'s {@code estimatedOldValue} element, which
+     * {@code DeltaConvertor} serializes and parses back on its own, so the plan files round-trip unchanged.
+     * It is informational to midPoint: the repository write path does not read it (midPoint's own delta
+     * visualizer does, which is what renders "old &rarr; new" in the GUI).
+     *
+     * <p>A protected value is never recorded. The ciphertext re-encrypts on every fetch and has no business
+     * in a file on disk; {@link #stripProtectedValues} has already dropped whole protected deltas, and this
+     * guards the case where the delta's own definition does not say protected but the live item's does.
+     */
+    private static void recordOldValues(ObjectDelta<?> delta, PrismObject<?> live) {
+        if (live == null) {
+            return;
+        }
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            if (mod.getValuesToReplace() == null || mod.getEstimatedOldValues() != null) {
+                continue;
+            }
+            // The delta came out of live.diff(desired), so any container-id segment in the path is a
+            // live-side id and resolves against the live object directly.
+            Item<?, ?> liveItem = live.findItem(mod.getPath());
+            if (liveItem == null || liveItem.hasNoValues() || isProtectedItem(liveItem)) {
+                continue;
+            }
+            List<PrismValue> oldValues = new ArrayList<>();
+            for (PrismValue value : liveItem.getValues()) {
+                oldValues.add(value.clone());
+            }
+            setEstimatedOldValues(mod, oldValues);
+        }
+    }
+
+    /** {@link ItemDelta#setEstimatedOldValues} is typed on the delta's value type, which is a wildcard here. */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private static void setEstimatedOldValues(ItemDelta<?, ?> mod, List<PrismValue> values) {
+        ((ItemDelta) mod).setEstimatedOldValues(values);
+    }
+
+    private static boolean isProtectedItem(Item<?, ?> item) {
+        ItemDefinition<?> definition = item.getDefinition();
+        if (definition != null && ProtectedStringType.COMPLEX_TYPE.equals(definition.getTypeName())) {
+            return true;
+        }
+        return hasProtectedValue(item.getValues());
     }
 
     /**

@@ -148,7 +148,7 @@ helm upgrade midgie charts/midgie -n <namespace> -f charts/midgie/values-openshi
 
 ## Commands
 
-`midgie` has four subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
+`midgie` has five subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`rollback`** puts back what the last `deploy` changed; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
 
 Every `init` step is opt-in, because each one writes something: `init` on its own prints its help and exits 2 rather than picking a step for you.
 
@@ -189,6 +189,29 @@ bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator
 bin/midgie deploy config/ --url … --create-if-absent --plan out/   # write the changes to out/ for review
 bin/midgie deploy --apply-plan out/ --url … --yes                  # replay a reviewed plan
 ```
+
+#### The rollback plan (always on)
+
+Every `deploy` that writes leaves a **rollback plan** behind: for each object it touched, the delta that puts it back. Nothing is recomputed at rollback time — the net holds the inverse of each change as it was actually applied.
+
+```bash
+bin/midgie deploy config/ --url … --yes         # ... Rollback plan: ~/.local/state/midgie/<deployment>/20260805-091216
+bin/midgie rollback --url … --dry-run           # what would be restored
+bin/midgie rollback --url … --yes               # restore it
+```
+
+This is the answer to the ordinary disaster: a missing line in the policy file leaves a multi-valued container on `replace`, the wholesale replace wipes accrued associations or part of the `SystemConfiguration`, and the run reports success. Those deletes carry the wiped values themselves, so the inverse restores them exactly.
+
+`rollback` refuses rather than guesses:
+
+- **Provenance.** The plan records which server and which deployment it came from. A mismatch is an error with no override — a plan written against staging must not reach production because somebody answered yes.
+- **Staleness.** The plan records each object's repository version after the write. If an object has moved since, someone else changed it and replaying would revert their change too; `--force` proceeds anyway.
+
+Objects the deploy **created** are named in the plan but never removed: the inverse of an add is an object delete, and an object created an hour ago may already carry links and shadows. Delete those by hand.
+
+Plans go to `$XDG_STATE_HOME/midgie/<deployment>/<timestamp>/` by default, keeping the newest five runs. `--rollback-plan DIR` chooses somewhere else — necessary in a Kubernetes Job, whose filesystem dies with the pod that needed the net, so point it at a mounted volume. `--no-rollback-plan` suppresses it.
+
+> There is no `--auto-rollback`. midPoint has no cross-object transaction, so unwinding a partly-applied tree can land you in a third state that is neither old nor new — and the failure that would trigger it is often the one that prevents it. The plan sitting on disk is what makes a considered rollback cheap.
 
 #### Detecting what you removed (opt-in)
 
@@ -391,7 +414,7 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 | `--dry-run` | *(apply, deploy)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
 | `-y, --yes` | *(apply, deploy)* Apply without the interactive confirmation prompt (required non-interactively). |
 
-`deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--policy <file>`, and `--confirm-each-apply` — described in the `deploy` section above.
+`deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--policy <file>`, `--rollback-plan <dir>` / `--no-rollback-plan`, and `--confirm-each-apply` — described in the `deploy` section above.
 
 ## Config file — `midgie.properties`
 
@@ -438,6 +461,12 @@ config: url    <- /home/you/.midgie.properties
 ```
 
 Two things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. And **`yes` and `prune` are refused**: they decide whether a run writes without asking and whether it deletes, and a file on disk is not where a person confirms that — pass them on the command line.
+
+### A `.midgie.properties` in the tree
+
+Some settings belong to the *deployment* rather than to the machine or the person — where its rollback plans go, which policy file it uses. midgie reads the nearest `.midgie.properties` at or above the working directory, stopping at the repository root, and it sits at the **lowest** precedence of the file layers: the tree suggests, your own files override. The file and the keys it supplied are printed at the start of the run, because a config that arrived with a checkout is the one nobody remembers is there.
+
+Because it travels with somebody else's repository, this layer is **allowlisted** rather than denylisted — cloning an unfamiliar repo and running even a read would otherwise authenticate to whatever server its file names. It may set `rollback-plan`, `policy`, `scope`, `multivalue`, `equivalence`, `path`, `app`, `schema`, `schema-dir`, `match-by-name`, `create-if-absent`, `retry`, `smart-refs`, `allow-inplace-merge` and `no-live-schema`. Anything else is an error naming the file — `url`, `user`, `password*`, `insecure` and `cacert` decide where credentials go, and `no-rollback-plan` would let a tree switch off its own safety net. A file may say *where* something goes, never *whether* a safety gate applies.
 
 A CA certificate is the case worth spelling out. With `cacert` in the file, TLS verifies properly for every command with nothing extra typed, so `--insecure` stops being the path of least resistance.
 

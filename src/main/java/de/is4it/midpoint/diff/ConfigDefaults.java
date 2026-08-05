@@ -69,6 +69,9 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     static final String USER_FILE = ".midgie.properties";
     static final String SYSTEM_FILE = "/etc/midgie/midgie.properties";
 
+    /** The tree-local file, searched for upward from the working directory. */
+    static final String TREE_FILE = ".midgie.properties";
+
     /**
      * Options a file may not set. Both authorise something irreversible without a person present: {@code yes}
      * turns off the confirmation that stands between a tree and a live server, and {@code prune} is what
@@ -76,6 +79,26 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      * refuses elsewhere.
      */
     private static final Set<String> REFUSED = Set.of("yes", "prune");
+
+    /**
+     * The only options a <b>tree-local</b> file may set.
+     *
+     * <p>An allowlist, not an extension of {@link #REFUSED}, and the difference matters. The site and user
+     * files belong to the operator, so naming the few dangerous keys is enough. A tree file arrives with
+     * somebody else's repository: cloning it and running even {@code deploy --dry-run} would authenticate to
+     * whatever server that file names, so a denylist that fails <em>open</em> for every option added later is
+     * the wrong shape. These keys describe how a deployment wants to be reconciled and where its safety net
+     * belongs; {@code url}, {@code user}, {@code password*}, {@code insecure} and {@code cacert} decide where
+     * credentials go and are deliberately absent.
+     *
+     * <p>{@code no-rollback-plan} is absent too, on the rule the class already applies to {@code yes} and
+     * {@code prune}: a file may say <em>where</em> something goes, never <em>whether</em> a safety gate is
+     * there at all. A tree may relocate its net; it may not switch it off.
+     */
+    private static final Set<String> TREE_ALLOWED = Set.of(
+            "rollback-plan", "policy", "scope", "multivalue", "equivalence", "path", "app",
+            "schema", "schema-dir", "match-by-name", "create-if-absent", "retry", "smart-refs",
+            "allow-inplace-merge", "no-live-schema");
 
     /** Keys whose environment variable, when set, outranks the file. */
     private static final Map<String, String> ENV_OVERRIDES =
@@ -86,14 +109,16 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     private final Map<String, File> origin;
     private final CommandLine.PropertiesDefaultProvider delegate;
     private final UnaryOperator<String> env;
+    private final File treeFile;
 
     private ConfigDefaults(List<File> sources, Properties properties, Map<String, File> origin,
-            UnaryOperator<String> env) {
+            UnaryOperator<String> env, File treeFile) {
         this.sources = sources;
         this.properties = properties;
         this.origin = origin;
         this.delegate = new CommandLine.PropertiesDefaultProvider(properties);
         this.env = env;
+        this.treeFile = treeFile;
     }
 
     /** Load and merge the configured files, or {@code null} when there are none. */
@@ -102,7 +127,38 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     }
 
     static ConfigDefaults load(UnaryOperator<String> env) throws IOException {
-        return load(env, new File(SYSTEM_FILE), new File(System.getProperty("user.home", ""), USER_FILE));
+        return load(env, new File(SYSTEM_FILE), new File(System.getProperty("user.home", ""), USER_FILE),
+                findTreeFile(new File(System.getProperty("user.dir", "."))));
+    }
+
+    static ConfigDefaults load(UnaryOperator<String> env, File siteFile, File userFile) throws IOException {
+        return load(env, siteFile, userFile, null);
+    }
+
+    /**
+     * The nearest {@code .midgie.properties} at or above {@code start}, or {@code null}.
+     *
+     * <p>Upward from the working directory rather than from the deployed path, because the config has to be
+     * in hand before the command line is parsed and the path is not known yet. That makes it the same
+     * convention {@code .editorconfig} and {@code .gitignore} use, and it is predictable: the file that
+     * applies is the one belonging to the checkout you are standing in.
+     *
+     * <p>The walk stops at a repository root, so it cannot wander out of one checkout and into a parent
+     * directory that happens to hold an unrelated file.
+     */
+    private static File findTreeFile(File start) {
+        File dir = start.getAbsoluteFile();
+        while (dir != null) {
+            File candidate = new File(dir, TREE_FILE);
+            if (candidate.isFile()) {
+                return candidate;
+            }
+            if (new File(dir, ".git").exists()) {
+                return null; // the repository root, and it has no tree file
+            }
+            dir = dir.getParentFile();
+        }
+        return null;
     }
 
     /**
@@ -114,8 +170,17 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      *
      * <p>{@code siteFile} and {@code userFile} are parameters so a test can point them somewhere writable.
      */
-    static ConfigDefaults load(UnaryOperator<String> env, File siteFile, File userFile) throws IOException {
+    static ConfigDefaults load(UnaryOperator<String> env, File siteFile, File userFile, File treeFile)
+            throws IOException {
+        // The tree file shares a name with the user's. If the upward walk landed on the user's own file, it
+        // is not a tree file at all, and validating it against the allowlist would reject the account the
+        // operator legitimately keeps there.
+        if (treeFile != null && userFile != null && sameFile(treeFile, userFile)) {
+            treeFile = null;
+        }
         List<File> layers = new ArrayList<>();
+        // Lowest precedence of the file layers: the tree suggests, the operator's own files override.
+        addIfPresent(layers, treeFile);
         addIfPresent(layers, siteFile);
         addIfPresent(layers, userFile);
         File explicit = explicitPath(env);
@@ -154,7 +219,7 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
         for (Map.Entry<String, File> entry : new TreeMap<>(origin).entrySet()) {
             LOG.trace("config: {} <- {}", entry.getKey(), entry.getValue());
         }
-        return new ConfigDefaults(List.copyOf(layers), merged, origin, env);
+        return new ConfigDefaults(List.copyOf(layers), merged, origin, env, treeFile);
     }
 
     /** Add a readable file, skipping one already in the list — an explicit path may name the user's file. */
@@ -221,7 +286,34 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
                         + "option names without the dashes (url, cacert, scope), optionally qualified with "
                         + "the command (midgie.deploy.scope).");
             }
+            if (treeFile != null && sameFile(treeFile, origin.get(key)) && !TREE_ALLOWED.contains(option)) {
+                throw new IOException(origin.get(key) + " sets '" + key + "', which a tree-local config file "
+                        + "may not set: it travels with the repository, and this key decides where "
+                        + "credentials go or whether a safety gate applies. Allowed here: "
+                        + String.join(", ", new TreeSet<>(TREE_ALLOWED)) + ". Put the rest in "
+                        + "~/" + USER_FILE + " or pass it on the command line.");
+            }
         }
+    }
+
+    /**
+     * The tree-local file and the keys it supplied, or {@code null} when there is none.
+     *
+     * <p>Worth printing at the top of a run rather than logging at debug: a config file that came with a
+     * checkout is the one an operator is least likely to know about, and for a key like {@code rollback-plan}
+     * it is also what tells them where to look after a bad deploy.
+     */
+    String treeFileSummary() {
+        if (treeFile == null) {
+            return null;
+        }
+        Set<String> keys = new TreeSet<>();
+        for (Map.Entry<String, File> entry : origin.entrySet()) {
+            if (sameFile(treeFile, entry.getValue())) {
+                keys.add(entry.getKey());
+            }
+        }
+        return keys.isEmpty() ? null : treeFile + " supplied " + String.join(", ", keys);
     }
 
     /** Every option name, bare and qualified with its command, across the whole command hierarchy. */
