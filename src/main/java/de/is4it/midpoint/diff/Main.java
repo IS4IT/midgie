@@ -23,7 +23,8 @@ import picocli.CommandLine.Command;
         mixinStandardHelpOptions = true,
         versionProvider = VersionProvider.class,
         description = "Schema-aware diff of midPoint objects into an itemDelta (ObjectModificationType).",
-        subcommands = { DiffCommand.class, ApplyCommand.class, DeployCommand.class, InitCommand.class }
+        subcommands = { DiffCommand.class, ApplyCommand.class, DeployCommand.class, RollbackCommand.class,
+                InitCommand.class }
 )
 public class Main implements java.util.concurrent.Callable<Integer> {
 

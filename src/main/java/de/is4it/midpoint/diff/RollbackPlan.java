@@ -25,6 +25,9 @@ import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.util.DOMUtil;
 
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+
 /**
  * The safety net a {@code deploy} leaves behind: for every object it wrote, the delta that puts it back.
  *
@@ -56,6 +59,76 @@ final class RollbackPlan {
 
     private static final DateTimeFormatter STAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
+
+    /**
+     * What a written net says about itself: where it came from and what state it expects to find.
+     *
+     * <p>Read back by {@code midgie rollback} before anything is replayed. Provenance is what stops a net
+     * from one server landing on another; the per-object versions are what tell "nobody has touched this
+     * since my write" from "someone else has".
+     */
+    static final class Manifest {
+        final String server;
+        final String deployment;
+        final String revision;
+        final List<Entry> objects;
+
+        /** One object the run touched, as recorded. */
+        static final class Entry {
+            final String restType;
+            final String oid;
+            final String name;
+            final String version; // null when the version could not be read at write time
+            final boolean created;
+
+            Entry(String restType, String oid, String name, String version, boolean created) {
+                this.restType = restType;
+                this.oid = oid;
+                this.name = name;
+                this.version = version;
+                this.created = created;
+            }
+        }
+
+        private Manifest(String server, String deployment, String revision, List<Entry> objects) {
+            this.server = server;
+            this.deployment = deployment;
+            this.revision = revision;
+            this.objects = List.copyOf(objects);
+        }
+
+        static Manifest read(File dir) throws IOException {
+            File file = new File(dir, MANIFEST);
+            if (!file.isFile()) {
+                throw new IOException("not a rollback plan (no " + MANIFEST + "): " + dir);
+            }
+            Element root;
+            try {
+                root = DOMUtil.parseFile(file).getDocumentElement();
+            } catch (Exception e) {
+                throw new IOException("cannot read " + file + ": " + e.getMessage(), e);
+            }
+            List<Entry> objects = new ArrayList<>();
+            NodeList nodes = root.getElementsByTagName("object");
+            for (int i = 0; i < nodes.getLength(); i++) {
+                Element element = (Element) nodes.item(i);
+                String version = element.getAttribute("version");
+                objects.add(new Entry(element.getAttribute("type"), element.getAttribute("oid"),
+                        element.getAttribute("name"), version.isBlank() ? null : version,
+                        "created".equals(element.getAttribute("action"))));
+            }
+            return new Manifest(text(root, "server"), text(root, "deployment"), text(root, "revision"), objects);
+        }
+
+        private static String text(Element root, String name) {
+            NodeList nodes = root.getElementsByTagName(name);
+            if (nodes.getLength() == 0) {
+                return null;
+            }
+            String value = nodes.item(0).getTextContent();
+            return (value == null || value.isBlank()) ? null : value.trim();
+        }
+    }
 
     /** One object the run wrote to, in apply order. */
     private static final class Item {
