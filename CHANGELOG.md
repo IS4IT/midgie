@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`init --write-properties` knows where it is writing to.** A path named `.midgie.properties` outside `$HOME` is one midgie reads as a *tree-local* file, which may only set an allowlisted set of keys — so a full template written there would have errored the moment a line was uncommented. It now writes a stripped template for those paths, offering only the keys a tree file may carry. The rest are **omitted rather than commented out**: the template's contract, pinned by its test, is that uncommenting every line yields a file midgie accepts, and a commented-out `url` would break exactly that as well as reading as an invitation. The header names what was left out and where it belongs instead. Which template to write is decided from the same constants the config reader uses, not a flag, so it cannot disagree with how the file will actually be read; and the template filters on the same allowlist `ConfigDefaults` validates against, so the two cannot drift. The full template's header now also names the tree-local layer, which nothing in it previously hinted existed.
+
 ## [0.8.0] - 2026-08-05
 
 ### Added
@@ -258,6 +264,7 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
 [Unreleased]: https://github.com/IS4IT/midgie/compare/v0.8.0...HEAD
+
 [0.8.0]: https://github.com/IS4IT/midgie/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/IS4IT/midgie/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/IS4IT/midgie/compare/v0.6.1...v0.7.0

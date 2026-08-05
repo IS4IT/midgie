@@ -159,16 +159,67 @@ class InitCommandTest {
 
         // Uncomment everything and hand it back: what midgie writes, midgie must read.
         Path uncommented = dir.resolve("uncommented.properties");
-        Files.writeString(uncommented, written.lines()
-                .filter(line -> line.matches("#[a-z][^ ]* =.*"))
-                .map(line -> line.substring(1))
-                .collect(java.util.stream.Collectors.joining("\n")), StandardCharsets.UTF_8);
+        Files.writeString(uncommented, uncomment(written), StandardCharsets.UTF_8);
         System.setProperty(ConfigDefaults.PATH_PROPERTY, uncommented.toString());
         try {
             ConfigDefaults.load(name -> null).validate(Main.commandLine());
         } finally {
             System.clearProperty(ConfigDefaults.PATH_PROPERTY);
         }
+    }
+
+    @Test
+    void writingIntoATreeProducesTheAllowlistedTemplate(@TempDir Path dir) throws Exception {
+        // Which template to write is decided by how midgie would READ the path, not by a flag: a file named
+        // .midgie.properties outside $HOME is a tree file. Offering it keys a tree file may not set would
+        // produce a template that errors the moment a line is uncommented.
+        Path tree = Files.createDirectories(dir.resolve("config"));
+        Path target = tree.resolve(".midgie.properties");
+
+        Result result = run("init", "--write-properties", target.toString());
+        assertEquals(0, result.exit, result.err);
+
+        String written = Files.readString(target, StandardCharsets.UTF_8);
+        assertTrue(written.contains("#rollback-plan ="), "the key a deployment most needs: " + written);
+        assertTrue(written.contains("#scope = present"), written);
+        assertTrue(written.contains("#midgie.deploy.policy ="), written);
+
+        // The keys that decide where credentials go are omitted, not commented out -- a commented '#url ='
+        // would break the uncomment-everything contract and read as an invitation besides.
+        for (String forbidden : new String[] {"#url =", "#user =", "#password =", "#insecure =", "#cacert =",
+                "#no-rollback-plan ="}) {
+            assertFalse(written.contains(forbidden), forbidden + " must not be offered here:\n" + written);
+        }
+        // But the header still says they exist and where they belong, so nobody concludes they are gone.
+        assertTrue(written.contains("NOT settable here"), written);
+        assertTrue(written.contains("MIDPOINT_PASSWORD"), written);
+
+        // Uncomment everything and load it AS a tree file: what midgie writes, midgie must read -- and this
+        // is the guard that the template's filter and the allowlist it validates against stay one list.
+        Path uncommented = tree.resolve(".midgie.properties.all");
+        Files.writeString(uncommented, uncomment(written), StandardCharsets.UTF_8);
+        ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                dir.resolve("absent-user").toFile(), uncommented.toFile()).validate(Main.commandLine());
+    }
+
+    @Test
+    void aPlainlyNamedFileInATreeStillGetsTheFullTemplate(@TempDir Path dir) throws Exception {
+        // midgie only reads '.midgie.properties' as a tree file, so a differently-named one in the same
+        // folder is an ordinary config file and must not be stripped.
+        Path target = Files.createDirectories(dir.resolve("config")).resolve("midgie.properties");
+
+        Result result = run("init", "--write-properties", target.toString());
+
+        assertEquals(0, result.exit, result.err);
+        assertTrue(Files.readString(target, StandardCharsets.UTF_8).contains("#url ="),
+                "only the tree-local name triggers the stripped template");
+    }
+
+    private static String uncomment(String template) {
+        return template.lines()
+                .filter(line -> line.matches("#[a-z][^ ]* =.*"))
+                .map(line -> line.substring(1))
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 
     @Test

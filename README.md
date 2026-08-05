@@ -466,6 +466,15 @@ Two things the file will not do. **A key that is not an option is an error**, na
 
 Some settings belong to the *deployment* rather than to the machine or the person — where its rollback plans go, which policy file it uses. midgie reads the nearest `.midgie.properties` at or above the working directory, stopping at the repository root, and it sits at the **lowest** precedence of the file layers: the tree suggests, your own files override. The file and the keys it supplied are printed at the start of the run, because a config that arrived with a checkout is the one nobody remembers is there.
 
+`init --write-properties` writes the right template for wherever it lands — a path named `.midgie.properties` outside `$HOME` gets the stripped, tree-local one, anything else gets the full one:
+
+```bash
+bin/midgie init --write-properties config/.midgie.properties   # just the keys a tree may set
+bin/midgie init --write-properties ~/.midgie.properties        # everything
+```
+
+The disallowed keys are **omitted rather than commented out** — uncommenting a line in a midgie template must always yield a file midgie accepts, and a commented-out `url` would break that and read as an invitation. The header names them and says where they belong instead.
+
 Because it travels with somebody else's repository, this layer is **allowlisted** rather than denylisted — cloning an unfamiliar repo and running even a read would otherwise authenticate to whatever server its file names. It may set `rollback-plan`, `policy`, `scope`, `multivalue`, `equivalence`, `path`, `app`, `schema`, `schema-dir`, `match-by-name`, `create-if-absent`, `retry`, `smart-refs`, `allow-inplace-merge` and `no-live-schema`. Anything else is an error naming the file — `url`, `user`, `password*`, `insecure` and `cacert` decide where credentials go, and `no-rollback-plan` would let a tree switch off its own safety net. A file may say *where* something goes, never *whether* a safety gate applies.
 
 A CA certificate is the case worth spelling out. With `cacert` in the file, TLS verifies properly for every command with nothing extra typed, so `--insecure` stops being the path of least resistance.

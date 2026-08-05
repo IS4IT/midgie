@@ -73,6 +73,18 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     static final String TREE_FILE = ".midgie.properties";
 
     /**
+     * Whether {@code target} is a path midgie would read as a <em>tree-local</em> file rather than as the
+     * user's own — the same judgement {@link #load} makes, since the two share a name and differ only in
+     * where they sit. Used by {@code init --write-properties} to decide which template to write.
+     */
+    static boolean isTreeFilePath(File target) {
+        if (target == null || !TREE_FILE.equals(target.getName())) {
+            return false;
+        }
+        return !sameFile(target, new File(System.getProperty("user.home", ""), USER_FILE));
+    }
+
+    /**
      * Options a file may not set. Both authorise something irreversible without a person present: {@code yes}
      * turns off the confirmation that stands between a tree and a live server, and {@code prune} is what
      * deletes. A default that quietly makes every later run non-interactive is exactly the accident this tool
@@ -94,8 +106,12 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      * <p>{@code no-rollback-plan} is absent too, on the rule the class already applies to {@code yes} and
      * {@code prune}: a file may say <em>where</em> something goes, never <em>whether</em> a safety gate is
      * there at all. A tree may relocate its net; it may not switch it off.
+     *
+     * <p>Package-visible so {@link PropertiesTemplate} filters on the same list this validates against. Two
+     * copies would drift, and the drift would be silent in the worse direction: a template offering a key
+     * that is then refused at load.
      */
-    private static final Set<String> TREE_ALLOWED = Set.of(
+    static final Set<String> TREE_ALLOWED = Set.of(
             "rollback-plan", "policy", "scope", "multivalue", "equivalence", "path", "app",
             "schema", "schema-dir", "match-by-name", "create-if-absent", "retry", "smart-refs",
             "allow-inplace-merge", "no-live-schema");

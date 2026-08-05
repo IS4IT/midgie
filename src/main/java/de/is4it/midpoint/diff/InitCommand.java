@@ -151,9 +151,17 @@ public class InitCommand implements Callable<Integer> {
             // Needs nothing but the command model, so it works offline — you write the file that holds the
             // URL before you have anywhere to point it.
             if (writeProperties != null) {
-                Io.writePayload(writeProperties, PropertiesTemplate.render(spec.root()).stripTrailing());
-                status("Wrote " + writeProperties + " — uncomment what this machine should not have to repeat, "
-                        + "then move it to ~/.midgie.properties or point $MIDGIE_CONF at it.");
+                // Which template depends on how midgie would READ this path, not on a flag: a file named
+                // .midgie.properties outside $HOME is a tree file, and offering it the keys a tree file may
+                // not set would produce a template that errors on load.
+                boolean forTree = ConfigDefaults.isTreeFilePath(writeProperties);
+                Io.writePayload(writeProperties,
+                        PropertiesTemplate.render(spec.root(), forTree).stripTrailing());
+                status(forTree
+                        ? "Wrote " + writeProperties + " — a tree-local file, so it offers only the keys one "
+                                + "may set; the header says what was left out and where those belong."
+                        : "Wrote " + writeProperties + " — uncomment what this machine should not have to "
+                                + "repeat, then move it to ~/.midgie.properties or point $MIDGIE_CONF at it.");
             }
             // Needs the host, but no account: you cannot authenticate to a server you do not trust yet.
             if (writeCacert != null) {
