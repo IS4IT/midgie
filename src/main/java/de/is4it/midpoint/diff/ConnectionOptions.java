@@ -260,6 +260,11 @@ public final class ConnectionOptions {
     /**
      * A secret from a file, with the trailing newline an editor leaves behind trimmed off.
      *
+     * <p>The failure goes through {@link Io}, so both passwords get the wording the account password gained
+     * on its own: the exception's own message is the bare path, which the flag has already named, so a plain
+     * append read "cannot read --password-file /etc/mp.pw: /etc/mp.pw". The case worth having is a mounted
+     * Secret readable only to another UID, which is reported as the denial it is.
+     *
      * @throws IllegalArgumentException if the file is empty or unreadable
      */
     private static String fromFile(String flag, File file) {
@@ -270,7 +275,7 @@ public final class ConnectionOptions {
             }
             return secret;
         } catch (IOException e) {
-            throw new IllegalArgumentException("cannot read " + flag + " " + file + ": " + e.getMessage());
+            throw new IllegalArgumentException(Io.cannotReadMessage(flag + " " + file, file, e));
         }
     }
 

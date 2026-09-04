@@ -228,6 +228,21 @@ class DeployCliTest {
         Result r = run("deploy", dir.toString());
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("no midPoint objects"), r.err);
+        // Naming the path and the fact that nothing at all was in it is what separates this from a tree of
+        // the wrong sort of files — and an empty path is what an unmounted container volume looks like.
+        assertTrue(r.err.contains(dir.toString()), "names the path it walked: " + r.err);
+        assertTrue(r.err.contains("no files at all"), r.err);
+    }
+
+    @Test
+    void aTreeWithNoObjectFilesSaysHowMuchItWalked(@TempDir Path dir) throws IOException {
+        write(dir, "README.md", "not xml");
+        write(dir, "midgie.policy", "# rules");
+
+        Result r = run("deploy", dir.toString());
+
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("walked 2 file(s)"), "distinguishes this from an empty path: " + r.err);
     }
 
     // --- apply-mode flag guards (offline, no writes) ---

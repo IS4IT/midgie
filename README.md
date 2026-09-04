@@ -51,11 +51,15 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). git can clone over HTTPS and SSH (`curl`, `openssh-client`, `less`), so the tree can be fetched in the container itself rather than by an init container, and `vi` is there to edit a file in place. It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
 
 ```bash
-docker run --rm -v "$PWD:/work" is4it/midgie:0.7.1 diff a.xml b.xml
+docker run --rm -u "$(id -u):0" --mount type=bind,source="$PWD",target=/work is4it/midgie:0.7.1 diff a.xml b.xml
 
 # In a Job, command: is the entrypoint and args: the subcommand line.
 #   args: ["deploy", "/work", "--url", "https://mp/midpoint", "--yes"]
 ```
+
+Two things in that line are not decoration. **`-u "$(id -u):0"`**: the image runs as UID 1001 in group 0, and a bind mount ignores that entirely — `/work` keeps the *host* directory's ownership and mode, so on a Linux host a tree that is not world-readable is unreadable to the container (`cannot read /work: permission denied — midgie runs as uid 1001 …`). Run as your own UID to get past it, and keep the group at `0` rather than `$(id -g)`: `HOME` and `/work` are group-owned by 0 with `g=u`, which is what makes them writable for a UID the image has never heard of — and `deploy` needs a writable `HOME` for its [rollback plan](#the-rollback-plan-always-on). On an SELinux host (Fedora, RHEL — not SLES or Ubuntu) the label denies the mount before the UID ever matters, and the fix there is `-v "$PWD:/work:z"`: relabelling is a `-v` suffix with no `--mount` equivalent, so that one case is worth giving up the flag below for. In Kubernetes none of this applies — `runAsUser` and `fsGroup` do the same job, and the [Helm chart](#helm-chart) sets both.
+
+**`--mount` rather than `-v`**: when the source path does not exist, or `$PWD` was not expanded because the command was pasted in single quotes, `-v` does not fail — it invents an empty directory (or a named volume) and mounts *that*. The run then reports `no midPoint objects found under /work — it holds no files at all`, which is a truthful answer to a question you did not mean to ask. `--mount` refuses instead. A host home directory on NFS/autofs can produce the same empty mount for a different reason (the daemon's mount namespace may not carry the automount); `docker run --entrypoint ls <image> -la /work` settles which of the two you have.
 
 For a shell — to run midgie by hand against a checkout in the pod — the container needs something long-running, since the entrypoint would otherwise print help and exit:
 

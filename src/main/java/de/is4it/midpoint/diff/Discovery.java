@@ -53,11 +53,13 @@ final class Discovery {
         private final List<SchemaFile> schemas;
         private final List<File> objectFiles;
         private final List<String> warnings;
+        private final int walkedFiles;
 
-        ScanResult(List<SchemaFile> schemas, List<File> objectFiles, List<String> warnings) {
+        ScanResult(List<SchemaFile> schemas, List<File> objectFiles, List<String> warnings, int walkedFiles) {
             this.schemas = schemas;
             this.objectFiles = objectFiles;
             this.warnings = warnings;
+            this.walkedFiles = walkedFiles;
         }
 
         List<SchemaFile> schemas() {
@@ -70,6 +72,14 @@ final class Discovery {
 
         List<String> warnings() {
             return warnings;
+        }
+
+        /**
+         * Every regular file the walk saw, whatever its name — the count that tells a tree holding nothing
+         * deployable apart from a path holding nothing at all, which is what an unmounted volume looks like.
+         */
+        int walkedFiles() {
+            return walkedFiles;
         }
     }
 
@@ -91,14 +101,15 @@ final class Discovery {
         List<File> objectFiles = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         List<File> generated = new ArrayList<>();
-        for (File file : collectFiles(paths, excludedDirs, warnings)) {
+        int[] walked = { 0 };
+        for (File file : collectFiles(paths, excludedDirs, warnings, walked)) {
             classify(prismContext, file, schemas, objectFiles, warnings, generated);
         }
         if (!generated.isEmpty()) {
             warnings.add("skipped " + generated.size() + " midgie-generated plan file(s) (" + generated.get(0)
                     + (generated.size() > 1 ? ", …" : "") + ") — a plan is midgie's output, not deploy input.");
         }
-        return new ScanResult(schemas, objectFiles, warnings);
+        return new ScanResult(schemas, objectFiles, warnings, walked[0]);
     }
 
     /**
@@ -165,8 +176,8 @@ final class Discovery {
      * plan directory named by convention — never deployable configuration. A path given explicitly on the
      * command line is still walked even if it is one, so naming a dot-directory outright still works.
      */
-    private static List<File> collectFiles(List<File> paths, List<File> excludedDirs, List<String> warnings)
-            throws IOException {
+    private static List<File> collectFiles(List<File> paths, List<File> excludedDirs, List<String> warnings,
+            int[] walked) throws IOException {
         Map<String, File> byCanonicalPath = new LinkedHashMap<>();
         List<String> excluded = new ArrayList<>();
         for (File dir : excludedDirs) {
@@ -179,8 +190,11 @@ final class Discovery {
                 throw new FileNotFoundException("path does not exist: " + path);
             }
             if (path.isDirectory()) {
-                skippedByExclusion += walkDirectory(path, excluded, byCanonicalPath);
-            } else if (!isConsidered(path)) {
+                skippedByExclusion += walkDirectory(path, excluded, byCanonicalPath, walked);
+                continue;
+            }
+            walked[0]++;
+            if (!isConsidered(path)) {
                 warnings.add("skipped " + path + " — not a .xml or .xsd file");
             } else if (isUnder(canonical(path), excluded)) {
                 skippedByExclusion++;
@@ -197,9 +211,13 @@ final class Discovery {
         return files;
     }
 
-    /** @return how many considered files were dropped because they sit under an excluded directory */
-    private static int walkDirectory(File root, List<String> excluded, Map<String, File> byCanonicalPath)
-            throws IOException {
+    /**
+     * Walk {@code root}, collecting the files worth classifying and counting every regular file seen.
+     *
+     * @return how many considered files were dropped because they sit under an excluded directory
+     */
+    private static int walkDirectory(File root, List<String> excluded, Map<String, File> byCanonicalPath,
+            int[] walked) throws IOException {
         Path rootPath = root.toPath();
         int[] skipped = { 0 };
         Files.walkFileTree(rootPath, new SimpleFileVisitor<Path>() {
@@ -218,7 +236,11 @@ final class Discovery {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                if (!attrs.isRegularFile() || !isConsidered(file.toFile())) {
+                if (!attrs.isRegularFile()) {
+                    return FileVisitResult.CONTINUE;
+                }
+                walked[0]++;
+                if (!isConsidered(file.toFile())) {
                     return FileVisitResult.CONTINUE;
                 }
                 String path = canonical(file.toFile());
@@ -228,6 +250,16 @@ final class Discovery {
                     byCanonicalPath.putIfAbsent(path, file.toFile());
                 }
                 return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFileFailed(Path file, IOException e) throws IOException {
+                // Both the root and any subdirectory that cannot be opened arrive here, so this is the one
+                // place that turns the file system's bare-path message into something diagnosable. It still
+                // fails the run: a subtree midgie cannot read is not a subtree it may quietly skip, or
+                // deploy would apply a partial tree and exit 0, and --prune would read the objects it never
+                // saw as removals.
+                throw Io.cannotRead(file.toFile(), e);
             }
         });
         return skipped[0];
