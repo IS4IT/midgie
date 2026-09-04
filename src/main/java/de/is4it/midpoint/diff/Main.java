@@ -5,6 +5,8 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -149,6 +151,10 @@ public class Main implements java.util.concurrent.Callable<Integer> {
         // on first use of java.net.http, so leaving the decision to whichever client is constructed first
         // makes --insecure depend on call order rather than on the flag.
         MidpointRestClient.latchHostnameVerification(insecureRequested(args));
+        // The same once-per-process reading applies to proxy authentication over a CONNECT tunnel, which the
+        // JDK disables by default. Latched only for a run that configured credentials, so the default keeps
+        // protecting everyone else.
+        MidpointRestClient.latchProxyTunnelAuth(proxyAuthRequested(args));
         System.exit(commandLine(args).execute(args));
     }
 
@@ -170,6 +176,57 @@ public class Main implements java.util.concurrent.Callable<Integer> {
             }
         }
         return configuredInsecure();
+    }
+
+    /**
+     * Whether this run has proxy credentials, from any of the three places they can come from: the options,
+     * the config file, or a {@code user:password@} in one of the proxy environment variables — the form the
+     * rest of the toolchain uses, so a container is quite likely to carry it and nothing else.
+     *
+     * <p>Read off the argument list for the same reason {@link #insecureRequested} is: the property behind it
+     * is fixed on first use of {@code java.net.http}, which is long before a command has parsed anything.
+     */
+    static boolean proxyAuthRequested(String[] args) {
+        return proxyAuthOnCommandLine(args) || proxyAuthInEnvironment(System::getenv) || configuredProxyUser();
+    }
+
+    private static boolean proxyAuthOnCommandLine(String[] args) {
+        for (String arg : args) {
+            if ("--".equals(arg)) {
+                break;
+            }
+            if ("--proxy-user".equals(arg) || arg.startsWith("--proxy-user=")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Credentials in {@code https_proxy}/{@code http_proxy}: userinfo before the host, as curl writes it. */
+    static boolean proxyAuthInEnvironment(java.util.function.UnaryOperator<String> env) {
+        for (String variable : List.of("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY")) {
+            String value = env.apply(variable);
+            if (value == null || value.isBlank()) {
+                continue;
+            }
+            int at = value.lastIndexOf('@');
+            int slashes = value.indexOf("//");
+            if (at > 0 && (slashes < 0 || at > slashes)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** {@code proxy-user} in the config file. A broken file is not diagnosed here; the run will say so. */
+    private static boolean configuredProxyUser() {
+        try {
+            ConfigDefaults defaults = ConfigDefaults.load();
+            return defaults != null && defaults.isSet("proxy-user");
+        } catch (Exception e) {
+            LOG.debug("could not read the config file while latching proxy authentication: {}", e.getMessage());
+            return false;
+        }
     }
 
     /** {@code insecure=true} in the config file. A broken file is not diagnosed here; the run will say so. */

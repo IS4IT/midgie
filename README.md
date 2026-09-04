@@ -119,6 +119,7 @@ Everything is in [`charts/midgie/values.yaml`](charts/midgie/values.yaml), with 
 | `midpoint.url` / `.user` | unset | become `MIDPOINT_URL` / `MIDPOINT_USER`, so commands in the pod need no `--url` |
 | `midpoint.existingSecret` / `.passwordKey` | unset, `password` | `MIDPOINT_PASSWORD` from a Secret you control. `midpoint.password` also works but lands in the release values — fine for a lab, not for a real server |
 | `ssh.*` | off | mounts a key Secret into `$HOME/.ssh`, each entry under the name it has in the Secret, and sets `GIT_SSH_COMMAND` to point ssh at it — ssh auto-loads only its own default filenames, so a `deploy-key` would otherwise be mounted and never offered. `ssh.acceptNewHostKeys` adds trust-on-first-use for when you have no `known_hosts` |
+| `extraEnv` | `[]` | plain `name`/`value` pairs on the container. `HTTPS_PROXY`/`NO_PROXY` belong here (git and midgie both read them — see [Behind a proxy](#behind-a-proxy)), as does `JAVA_OPTS` for heap or `-D` settings |
 
 The SSH Secret is yours to create — no private key goes through values:
 
@@ -402,8 +403,29 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 | `--oid OID` | *(diff, apply)* Object to fetch/patch. Defaults to the OID in the desired object. |
 | `--cacert FILE` | Verify the server's TLS certificate against this CA cert (PEM). |
 | `--insecure` | Trust any TLS certificate and skip hostname verification (self-signed dev servers). |
+| `--proxy URL` | Forward proxy, `http://proxy.corp:3128` or `proxy.corp:3128` (or `https_proxy`/`http_proxy`). |
+| `--no-proxy HOSTS` | Comma-separated hosts that bypass it (or `no_proxy`). See below — it *replaces* the loopback default. |
+| `--proxy-user USER` | User for a proxy that demands Basic authentication. |
+| `--proxy-password`, `--proxy-password-env VAR`, `--proxy-password-file FILE` | Its password, same ladder and same preference as the account password. |
 | `--timeout SECONDS` | Per-request timeout (default 30). |
 | `--retries N` | Retry idempotent reads on `502`/`503`/`504`/connection-refused/timeout, `N` times with backoff (writes are never auto-retried). |
+
+#### Behind a proxy
+
+```bash
+midgie deploy config/ --url https://mp.example/midpoint \
+  --proxy http://proxy.corp:3128 --proxy-user alice --proxy-password-file /run/secrets/proxy-pw
+```
+
+**Where the setting comes from**: `--proxy`, then `https_proxy`/`HTTPS_PROXY` for an https server or `http_proxy`/`HTTP_PROXY` for a plain one (either spelling; lowercase wins if both are set, as curl reads them), then the [config file](#config-file--midgieproperties). The two schemes are **separate settings and neither falls back to the other** — `http_proxy` alone leaves an `https://` server direct, exactly as it does for curl and git, so midgie and the tree's clone always agree on what gets proxied. The variables matter because the JVM reads none of them on its own — but the `git` inside the [container image](#container-image) does, so a pod given only `HTTPS_PROXY` used to clone its tree happily and then fail to reach midPoint. midgie now reads them itself, and the two halves behave the same.
+
+**Set nothing and nothing changes**: with no proxy configured midgie leaves the JDK's own proxy selector alone, so `JAVA_OPTS="-Dhttps.proxyHost=… -Dhttps.proxyPort=…"` still works as it always did. That route cannot carry credentials, though — `java.net.http` never reads `http.proxyUser` — so an authenticating proxy needs `--proxy`.
+
+**The bypass list replaces the default, it does not extend it.** With no list, `localhost`, `127.*` and `::1` go direct, which is the JDK's own default and keeps a local rig working. Give one and that exemption is gone unless you repeat it — `--no-proxy ''` deliberately sends even loopback through the proxy. Entries are curl's: `*` bypasses everything, `.corp.example` matches subdomains only, a bare `corp.example` matches the domain and everything under it, and a `:port` on an entry is accepted and ignored.
+
+**Credentials.** `--proxy-user` with one of `--proxy-password-env` / `--proxy-password-file`, or the interactive prompt; `--proxy-password` exists and is discouraged for the reason `--password` is. A `user:pass@` inside `https_proxy` is honoured — it is how the rest of the toolchain writes it and an environment variable is not on show in `ps` — but the same thing inside `--proxy` is stripped with a warning, exactly as it is for `--url`. Reaching an **https** server through a proxy means a `CONNECT` tunnel, and the JDK refuses to authenticate one unless told otherwise; midgie clears that restriction at startup, but only for a run that actually configured credentials.
+
+**Limits worth knowing.** HTTP proxies only: `socks5://` and an `https://` proxy (TLS to the proxy itself) are refused with a message saying so, because `java.net.http` supports neither. A proxy that **intercepts** TLS is not a proxy problem but a trust one — it presents its own certificate, so point `--cacert` at its CA, and `init --write-cacert` fetches exactly that chain through the tunnel.
 
 ### Schema (extension items)
 
@@ -505,6 +527,10 @@ A CA certificate is the case worth spelling out. With `cacert` in the file, TLS 
 | `MIDPOINT_PASSWORD` | password (after the `--password*` flags, before the prompt) |
 | `MIDGIE_CONF` | path to the [config file](#config-file--midgieproperties) (also `-Dmidgie.conf`) |
 | `MIDGIE_JAR` | JAR path used by the `bin/midgie` launcher |
+| `https_proxy` / `HTTPS_PROXY` | `--proxy`, for an `https://` server. A `user:pass@` in it is used. See [Behind a proxy](#behind-a-proxy) |
+| `http_proxy` / `HTTP_PROXY` | the same, for a plain-`http://` server |
+| `no_proxy` / `NO_PROXY` | `--no-proxy` |
+| `JAVA_OPTS` | extra JVM options for the `bin/midgie` launcher — where `-D` settings go, including the JDK's own proxy properties |
 | `JDK_JAVA_OPTIONS` | set to `--sun-misc-unsafe-memory-access=allow` when running the JAR directly on JDK 23+ |
 
 ## Safety guards

@@ -105,6 +105,40 @@ class ConfigDefaultsTest {
     }
 
     @Test
+    void anyOfTheProxyVariablesStandsTheFileDown(@TempDir Path dir) throws Exception {
+        // The proxy is spelled four ways — scheme-dependent, and in either case of letters — so unlike
+        // MIDPOINT_URL there is no single variable to check. Any of them being set is what counts.
+        Path file = dir.resolve("midgie.properties");
+        Files.writeString(file, "proxy = http://from-the-file:3128\n", StandardCharsets.UTF_8);
+        System.setProperty(ConfigDefaults.PATH_PROPERTY, file.toString());
+
+        CommandLine.Model.OptionSpec proxy = Main.commandLine().getSubcommands().get("diff")
+                .getCommandSpec().findOption("--proxy");
+
+        for (String variable : new String[] {"https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"}) {
+            ConfigDefaults defaults = ConfigDefaults.load(
+                    name -> variable.equals(name) ? "http://from-the-environment:3128" : null);
+            assertEquals(null, defaults.defaultValue(proxy), variable + " must outrank the file");
+        }
+        assertEquals("http://from-the-file:3128", ConfigDefaults.load(name -> null).defaultValue(proxy),
+                "and the file applies when none of them is set");
+    }
+
+    @Test
+    void aTreeFileMayNotNameAProxy(@TempDir Path dir) throws Exception {
+        // A proxy decides where the Basic header travels, so a file arriving with somebody else's clone is
+        // the last place it may be set — the same rule that keeps url, user and cacert off that list.
+        Path tree = write(dir, "tree.properties", "proxy = http://attacker.example:3128");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+        IOException error = assertThrows(IOException.class, () -> defaults.validate(Main.commandLine()));
+
+        assertTrue(error.getMessage().contains("proxy"), error.getMessage());
+        assertTrue(error.getMessage().contains(tree.toString()), error.getMessage());
+    }
+
+    @Test
     void filesOnTheSearchPathAreMergedPerKey(@TempDir Path dir) throws Exception {
         // The point of merging: a site file holds what is true of the machine, a user file adds only what
         // differs, and neither has to repeat the other. First-match-wins made the user file shadow the site
@@ -288,6 +322,34 @@ class ConfigDefaultsTest {
 
         useConfig(dir, "insecure = false");
         assertFalse(Main.insecureRequested(new String[] {"diff", "a.xml", "b.xml"}), "and false stays false");
+    }
+
+    @Test
+    void proxyCredentialsAreVisibleBeforeAnyCommandRuns(@TempDir Path dir) throws Exception {
+        // Same reason as the insecure latch above: the property that allows Basic on a CONNECT tunnel is read
+        // once, on first use of java.net.http, so every place credentials can come from has to be seen here.
+        assertTrue(Main.proxyAuthRequested(new String[] {"diff", "a.xml", "--proxy-user", "alice"}));
+        assertTrue(Main.proxyAuthRequested(new String[] {"diff", "a.xml", "--proxy-user=alice"}),
+                "picocli takes either spelling, so the scan has to as well");
+
+        useConfig(dir, "proxy-user = alice");
+        assertTrue(Main.proxyAuthRequested(new String[] {"diff", "a.xml", "b.xml"}),
+                "the file's proxy-user must reach the latch");
+
+        useConfig(dir, "url = https://mp.example/midpoint");
+        assertFalse(Main.proxyAuthRequested(new String[] {"diff", "a.xml", "b.xml"}),
+                "a run with no proxy credentials leaves the JDK default alone");
+    }
+
+    @Test
+    void credentialsInsideAProxyVariableCountAsRequestingAuth() {
+        // https_proxy=http://user:pass@host is how the rest of the toolchain writes it, so a container may
+        // well carry that and nothing else.
+        assertTrue(Main.proxyAuthInEnvironment(
+                name -> "https_proxy".equals(name) ? "http://alice:s3cret@proxy.corp:3128" : null));
+        assertFalse(Main.proxyAuthInEnvironment(
+                name -> "https_proxy".equals(name) ? "http://proxy.corp:3128" : null));
+        assertFalse(Main.proxyAuthInEnvironment(name -> null));
     }
 
     @Test

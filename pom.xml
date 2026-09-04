@@ -144,6 +144,14 @@
                         <MIDPOINT_URL/>
                         <MIDPOINT_USER/>
                         <MIDPOINT_PASSWORD/>
+                        <!-- Same reasoning for the proxy: ProxyConfig reads these, so a developer behind a
+                             corporate proxy would have the stub-server tests routed through it. -->
+                        <https_proxy/>
+                        <HTTPS_PROXY/>
+                        <http_proxy/>
+                        <HTTP_PROXY/>
+                        <no_proxy/>
+                        <NO_PROXY/>
                         <!-- Keep rollback plans out of the developer's home directory. Every deploy that
                              writes leaves one, and the trees these tests deploy are temp directories with
                              no git identity, so they landed in ~/.local/state/midgie and accumulated
@@ -157,6 +165,12 @@
                              skip, and `mvn verify` stay green with the whole REST surface untested while
                              the rig was up and healthy. -->
                         <midgie.it.url>http://localhost:${MP_PORT}/midpoint</midgie.it.url>
+                        <!-- Allow Basic on a CONNECT tunnel, which the JDK disables by default. At runtime
+                             MidpointRestClient.latchProxyTunnelAuth sets this before java.net.http loads;
+                             here it has to come from the command line, because surefire shares one JVM
+                             across test classes and the property is read once, on first use of the HTTP
+                             client — long before the tunnelling test gets to run. -->
+                        <jdk.http.auth.tunneling.disabledSchemes/>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

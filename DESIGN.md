@@ -173,15 +173,9 @@ the midPoint source tree.
   and `init` with no step prints its help and exits 2 rather than picking one — every step writes something,
   to a server or to the working copy.
 
-Connection details default from `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD`. To keep the
-password off the command line (it leaks into `ps` and shell history), resolve it — in order — from
-`--password`, `--password-env <VAR>`, `--password-file <FILE>`, `MIDPOINT_PASSWORD`, or an interactive
-prompt. REST failures carry an actionable hint (401 auth, 403 authz, connection refused). `--timeout`
-sets the per-request timeout; `--retries <n>` retries idempotent reads (including the `POST {type}/search` every object lookup uses) on 502/503/504 / connection-refused
-/ timeout with exponential backoff (rides out a server that is still starting). For https, `--cacert <FILE>`
-verifies the server against a CA certificate; `--insecure` trusts any cert and skips hostname verification.
-The `docker/tls/` rig (an nginx TLS proxy in front of midPoint + a client container) exercises these
-end-to-end.
+Connection details default from `MIDPOINT_URL` / `MIDPOINT_USER` / `MIDPOINT_PASSWORD`. To keep the password off the command line (it leaks into `ps` and shell history), resolve it — in order — from `--password`, `--password-env <VAR>`, `--password-file <FILE>`, `MIDPOINT_PASSWORD`, or an interactive prompt. REST failures carry an actionable hint (401 auth, 403 authz, 407 proxy, connection refused). `--timeout` sets the per-request timeout; `--retries <n>` retries idempotent reads (including the `POST {type}/search` every object lookup uses) on 502/503/504 / connection-refused / timeout with exponential backoff (rides out a server that is still starting). For https, `--cacert <FILE>` verifies the server against a CA certificate; `--insecure` trusts any cert and skips hostname verification. The `docker/tls/` rig (an nginx TLS proxy in front of midPoint + a client container) exercises these end-to-end.
+
+A **forward proxy** is `--proxy <URL>` with `--no-proxy <HOSTS>`, or `https_proxy`/`http_proxy`/`no_proxy` — the JVM reads none of those variables itself, but the `git` in the container image does, so a pod configured the usual way would otherwise clone its tree and then fail to reach the server. Authentication is Basic, from `--proxy-user` plus the same password ladder, or from a `user:pass@` in the environment's URL (accepted there, stripped from `--proxy` for the reason it is stripped from `--url`). Two things are decided once per process, before any client exists, because the JDK reads both properties on first use of `java.net.http`: hostname verification (`--insecure`) and whether Basic is allowed on a `CONNECT` tunnel — the latter only for a run that configured credentials, so the JDK's default protection stays put otherwise. Configure nothing and no selector is installed at all, leaving `-Dhttps.proxyHost` to work as before. It stays inside `MidpointRestClient` and `ServerCertificates`; the engine remains REST-free, and `ServerCertificates` is the one place that speaks `CONNECT` by hand, because it inspects a handshake rather than making a request.
 
 ## Strategy flags
 

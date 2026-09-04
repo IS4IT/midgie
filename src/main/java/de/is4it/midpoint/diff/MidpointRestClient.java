@@ -7,6 +7,7 @@ package de.is4it.midpoint.diff;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.Authenticator;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -99,10 +100,54 @@ public final class MidpointRestClient {
         LOG.debug("hostname verification {} for this process", disabled ? "disabled" : "enabled");
     }
 
-    /** Timeout / retry / TLS knobs for the client (fluent setters; sensible defaults). */
+    /**
+     * Whether Basic authentication to a proxy has been enabled for this process, or {@code null} while
+     * undecided.
+     *
+     * <p>The same shape as {@link #hostnameVerificationDisabled}, and for the same reason. Since 8u111 the JDK
+     * refuses Basic on a {@code CONNECT} tunnel unless {@code jdk.http.auth.tunneling.disabledSchemes} says
+     * otherwise, and {@code java.net.http} reads that property once, into a {@code static final}, on first
+     * use. Left to whichever client is built first, an authenticating proxy would work or not by accident of
+     * call order — and the failure is opaque: the credentials are simply never sent, and the run ends in the
+     * proxy's 407 or, once the JDK has retried, "too many authentication attempts".
+     */
+    private static Boolean proxyTunnelAuthEnabled;
+
+    /**
+     * Allow Basic on a {@code CONNECT} tunnel for this process. Called from {@code Main} before any client
+     * exists, and only for a run that configured proxy credentials — the JDK default is a defence against
+     * handing a password to a proxy that asked for it unprompted, and it stays in place for everyone else.
+     */
+    static synchronized void latchProxyTunnelAuth(boolean enabled) {
+        if (proxyTunnelAuthEnabled != null) {
+            return;
+        }
+        proxyTunnelAuthEnabled = enabled;
+        if (enabled) {
+            // Empty, not "none": the property is a list of schemes to disable, and an empty list disables none.
+            System.setProperty("jdk.http.auth.tunneling.disabledSchemes", "");
+        }
+        LOG.debug("proxy authentication over a CONNECT tunnel {} for this process",
+                enabled ? "enabled" : "left at the JDK default");
+    }
+
+    /**
+     * Whether Basic is still barred from {@code CONNECT} tunnels.
+     *
+     * <p>Read from the property rather than from {@link #proxyTunnelAuthEnabled}, so that a value set any
+     * other way — {@code JAVA_OPTS}, a wrapper script, the test harness — counts as much as midgie's own
+     * latch. Unset means the JDK's own default from {@code net.properties}, which disables Basic.
+     */
+    private static boolean basicDisabledOnTunnels() {
+        String disabled = System.getProperty("jdk.http.auth.tunneling.disabledSchemes");
+        return disabled == null || disabled.toLowerCase(java.util.Locale.ROOT).contains("basic");
+    }
+
+    /** Timeout / retry / TLS / proxy knobs for the client (fluent setters; sensible defaults). */
     public static final class Config {
         private boolean insecure;
         private File caCert;
+        private ProxyConfig proxy;
         private Duration connectTimeout = Duration.ofSeconds(10);
         private Duration requestTimeout = Duration.ofSeconds(30);
         private int maxRetries;
@@ -115,6 +160,15 @@ public final class MidpointRestClient {
 
         public Config caCert(File value) {
             this.caCert = value;
+            return this;
+        }
+
+        /**
+         * The forward proxy, or {@code null} to leave the JDK's default {@link java.net.ProxySelector} in
+         * place — which is what keeps a {@code -Dhttps.proxyHost} passed through {@code JAVA_OPTS} working.
+         */
+        public Config proxy(ProxyConfig value) {
+            this.proxy = value;
             return this;
         }
 
@@ -142,6 +196,7 @@ public final class MidpointRestClient {
     private final URI restBase;
     private final String authHeader;
     private final HttpClient httpClient;
+    private final ProxyConfig proxy;
     private final Duration requestTimeout;
     private final int maxRetries;
     private final Duration retryBaseDelay;
@@ -166,6 +221,7 @@ public final class MidpointRestClient {
         this.requestTimeout = config.requestTimeout;
         this.maxRetries = config.maxRetries;
         this.retryBaseDelay = config.retryBaseDelay;
+        this.proxy = config.proxy;
 
         HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(config.connectTimeout);
         if (config.insecure) {
@@ -187,11 +243,26 @@ public final class MidpointRestClient {
         } else if (config.caCert != null) {
             builder.sslContext(caCertSslContext(config.caCert));
         }
+        if (config.proxy != null) {
+            builder.proxy(config.proxy.selector());
+            Authenticator authenticator = config.proxy.authenticator();
+            if (authenticator != null) {
+                builder.authenticator(authenticator);
+                if (basicDisabledOnTunnels()) {
+                    // Only https targets tunnel, so this is a warning rather than a refusal: a plain-http
+                    // server behind the same proxy authenticates fine either way.
+                    System.err.println("midgie: warning: proxy credentials cannot be sent over a CONNECT "
+                            + "tunnel in this process — jdk.http.auth.tunneling.disabledSchemes still "
+                            + "disables Basic, so an https server behind the proxy will be refused with 407.");
+                }
+            }
+        }
         this.httpClient = builder.build();
-        LOG.debug("REST client ready: base={}, requestTimeout={}s, maxRetries={}, tls={}",
+        LOG.debug("REST client ready: base={}, requestTimeout={}s, maxRetries={}, tls={}, proxy={}",
                 restBase, requestTimeout.toSeconds(), maxRetries,
                 config.insecure ? "insecure (trust-all)"
-                        : (config.caCert != null ? "cacert " + config.caCert : "default"));
+                        : (config.caCert != null ? "cacert " + config.caCert : "default"),
+                (config.proxy != null) ? config.proxy.describe() : "none");
     }
 
     /** {@code GET {type}/{oid}} → the object XML. Throws {@link RestException} (404-aware) on failure. */
@@ -399,6 +470,19 @@ public final class MidpointRestClient {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException(what + " was interrupted", e);
+            } catch (IOException e) {
+                if (e instanceof RestException || e instanceof TransportException) {
+                    throw e;   // raised above, and already carrying its own explanation
+                }
+                // Credentials a proxy rejects never come back as a status. The JDK re-sends the CONNECT until
+                // it gives up, and what surfaces is "too many authentication attempts" (JDK 17) or an internal
+                // exchange failure (JDK 26) — neither of which mentions the proxy at all.
+                if (proxy != null && proxy.hasCredentials() && isProxyAuthFailure(e)) {
+                    LOG.debug("{}  proxy authentication failed: {}", what, e.toString());
+                    throw new TransportException(what + " — the proxy at " + proxy.address()
+                            + " rejected the credentials for user '" + proxy.user() + "'.", e);
+                }
+                throw e;
             }
         }
     }
@@ -500,7 +584,7 @@ public final class MidpointRestClient {
     }
 
     /** Actionable hint for the common HTTP failures. */
-    private static String statusHint(int status) {
+    private String statusHint(int status) {
         switch (status) {
             case 401:
                 return " — authentication failed (check the user/password)";
@@ -508,9 +592,35 @@ public final class MidpointRestClient {
                 return " — not authorized (the user lacks permission for this operation)";
             case 404:
                 return " — not found";
+            case 407:
+                // 407 is the proxy talking, not midPoint, and the account credentials are not what it wants.
+                return (proxy != null && proxy.hasCredentials())
+                        ? " — the proxy at " + proxy.address() + " rejected the credentials for user '"
+                                + proxy.user() + "'"
+                        : " — the proxy demands authentication; pass --proxy-user with "
+                                + "--proxy-password-env/--proxy-password-file";
             default:
                 return status >= 500 ? " — server error" : "";
         }
+    }
+
+    /**
+     * Whether this transport failure is the JDK giving up on proxy authentication.
+     *
+     * <p>Matched on the message because the JDK offers nothing else: no dedicated exception type, no status.
+     * The two texts differ between JDK versions, so both are recognised, and a miss only costs the nicer
+     * message — the original exception is rethrown either way.
+     */
+    private static boolean isProxyAuthFailure(IOException e) {
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (message != null && (message.contains("too many authentication attempts")
+                    || message.contains("Proxy-Authorization")
+                    || message.contains("exchImpl"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private URI objectUri(String restType, String oid) {

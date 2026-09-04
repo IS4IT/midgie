@@ -6,8 +6,11 @@
 package de.is4it.midpoint.diff;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateEncodingException;
@@ -48,17 +51,36 @@ final class ServerCertificates {
 
     /** The chain {@code url}'s host presents, leaf first, as the server sent it. */
     static List<X509Certificate> fetch(URI url, Duration timeout) throws IOException {
+        return fetch(url, timeout, null);
+    }
+
+    /**
+     * The chain {@code url}'s host presents, leaf first, reached through {@code proxy} when one applies.
+     *
+     * <p>This is the one place midgie speaks the proxy protocol itself: {@code java.net.http} handles it
+     * everywhere else, but the handshake has to be inspected here, so the tunnel has to be opened by hand
+     * with {@code CONNECT} before TLS starts. Note what that yields through an intercepting proxy — the
+     * chain captured is the proxy's own, signed by the CA it re-signs with, which is precisely the CA that
+     * {@code --cacert} then needs. Fetching it is the right answer, not a mistake to guard against.
+     */
+    static List<X509Certificate> fetch(URI url, Duration timeout, ProxyConfig proxy) throws IOException {
         if (!"https".equalsIgnoreCase(url.getScheme())) {
             throw new IOException("--write-cacert needs an https:// URL; " + url + " has no TLS to inspect.");
         }
         String host = url.getHost();
         int port = (url.getPort() > 0) ? url.getPort() : 443;
+        boolean tunnelled = proxy != null && !proxy.bypasses(host);
 
         Capture capture = new Capture();
         SSLSocketFactorySource factory = new SSLSocketFactorySource(capture);
-        LOG.debug("fetching the certificate chain from {}:{}", host, port);
-        try (SSLSocket socket = factory.create()) {
-            socket.connect(new InetSocketAddress(host, port), (int) timeout.toMillis());
+        LOG.debug("fetching the certificate chain from {}:{}{}", host, port,
+                tunnelled ? " through " + proxy.address() : "");
+        try (SSLSocket socket = tunnelled
+                ? factory.overTunnel(ProxyTunnel.open(proxy, host, port, timeout), host, port)
+                : factory.create()) {
+            if (!tunnelled) {
+                socket.connect(new InetSocketAddress(host, port), (int) timeout.toMillis());
+            }
             socket.setSoTimeout((int) timeout.toMillis());
             SSLParameters parameters = socket.getSSLParameters();
             // Without SNI a virtual host answers with the wrong certificate — the one thing that would make
@@ -161,13 +183,135 @@ final class ServerCertificates {
     private record SSLSocketFactorySource(Capture capture) {
 
         SSLSocket create() throws IOException {
+            return (SSLSocket) factory().createSocket();
+        }
+
+        /** TLS layered over an already-connected tunnel; {@code autoClose} shuts the plain socket with it. */
+        SSLSocket overTunnel(Socket tunnel, String host, int port) throws IOException {
+            return (SSLSocket) factory().createSocket(tunnel, host, port, true);
+        }
+
+        private javax.net.ssl.SSLSocketFactory factory() throws IOException {
             try {
                 SSLContext context = SSLContext.getInstance("TLS");
                 context.init(null, new TrustManager[] {capture}, null);
-                return (SSLSocket) context.getSocketFactory().createSocket();
+                return context.getSocketFactory();
             } catch (NoSuchAlgorithmException | KeyManagementException e) {
                 throw new IOException("cannot set up a TLS client: " + e.getMessage(), e);
             }
+        }
+    }
+
+    /**
+     * A {@code CONNECT} tunnel to the target, opened by hand.
+     *
+     * <p>Deliberately minimal: the request goes out, the status line decides, and the remaining headers are
+     * drained so the socket is positioned exactly at the start of the tunnelled stream when TLS takes over.
+     * Anything richer — redirects, other authentication schemes, keep-alive — belongs to the HTTP client that
+     * handles every other connection midgie makes.
+     */
+    private static final class ProxyTunnel {
+
+        private ProxyTunnel() {
+        }
+
+        static Socket open(ProxyConfig proxy, String host, int port, Duration timeout) throws IOException {
+            String target = host + ":" + port;
+            Socket socket = new Socket();
+            try {
+                socket.connect(new InetSocketAddress(proxy.address().getHostString(),
+                        proxy.address().getPort()), (int) timeout.toMillis());
+                socket.setSoTimeout((int) timeout.toMillis());
+
+                StringBuilder request = new StringBuilder()
+                        .append("CONNECT ").append(target).append(" HTTP/1.1\r\n")
+                        .append("Host: ").append(target).append("\r\n");
+                if (proxy.hasCredentials()) {
+                    String credentials = proxy.user() + ":" + proxy.password();
+                    request.append("Proxy-Authorization: Basic ")
+                            .append(Base64.getEncoder().encodeToString(
+                                    credentials.getBytes(StandardCharsets.UTF_8)))
+                            .append("\r\n");
+                }
+                request.append("Proxy-Connection: keep-alive\r\n\r\n");
+                socket.getOutputStream().write(request.toString().getBytes(StandardCharsets.US_ASCII));
+                socket.getOutputStream().flush();
+
+                readResponse(socket, proxy, target);
+                LOG.debug("CONNECT {} through {} established", target, proxy.address());
+                return socket;
+            } catch (IOException e) {
+                socket.close();
+                throw e;
+            }
+        }
+
+        /**
+         * Read the status line and drain the headers.
+         *
+         * <p>Byte at a time, and not through a {@code BufferedReader}: a buffered reader would swallow the
+         * first bytes of the TLS handshake into its own buffer, where the socket the caller goes on to use
+         * can never see them again.
+         */
+        private static void readResponse(Socket socket, ProxyConfig proxy, String target) throws IOException {
+            String statusLine = readLine(socket);
+            if (statusLine == null) {
+                throw new IOException("the proxy at " + proxy.address() + " closed the connection without "
+                        + "answering CONNECT " + target + ".");
+            }
+            // Bounded: the read timeout limits how long any one line may take, not how many may arrive, so a
+            // proxy that never stopped sending headers would otherwise loop here for ever.
+            for (int header = 0; header < 100; header++) {
+                String line = readLine(socket);
+                if (line == null || line.isEmpty()) {
+                    break;
+                }
+                if (header == 99) {
+                    throw new IOException("the proxy at " + proxy.address() + " sent an implausible number "
+                            + "of headers answering CONNECT " + target + ".");
+                }
+            }
+            String[] parts = statusLine.split(" ", 3);
+            int status = (parts.length > 1) ? parseStatus(parts[1]) : -1;
+            if (status == 407) {
+                throw new IOException("the proxy at " + proxy.address() + " demands authentication"
+                        + (proxy.hasCredentials()
+                                ? " and rejected the credentials for user '" + proxy.user() + "'."
+                                : "; pass --proxy-user with --proxy-password-env/--proxy-password-file."));
+            }
+            if (status != 200) {
+                throw new IOException("the proxy at " + proxy.address() + " refused CONNECT " + target
+                        + ": " + statusLine.strip());
+            }
+        }
+
+        private static int parseStatus(String token) {
+            try {
+                return Integer.parseInt(token.strip());
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+
+        /** One CRLF-terminated line, or null at end of stream. */
+        private static String readLine(Socket socket) throws IOException {
+            InputStream in = socket.getInputStream();
+            StringBuilder line = new StringBuilder();
+            int read;
+            while ((read = in.read()) != -1) {
+                if (read == '\n') {
+                    int end = line.length();
+                    if (end > 0 && line.charAt(end - 1) == '\r') {
+                        line.setLength(end - 1);
+                    }
+                    return line.toString();
+                }
+                line.append((char) read);
+                if (line.length() > 8192) {
+                    throw new IOException("the proxy sent an implausibly long response line.");
+                }
+            }
+            return line.length() > 0 ? line.toString() : null;
         }
     }
 }

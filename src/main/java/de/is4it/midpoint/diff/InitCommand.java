@@ -285,7 +285,14 @@ public class InitCommand implements Callable<Integer> {
                     + "certificate from.");
             return EXIT_ERROR;
         }
-        List<X509Certificate> chain = ServerCertificates.fetch(url, connectionOptions.timeout());
+        ProxyConfig proxy;
+        try {
+            proxy = connectionOptions.proxy();
+        } catch (IllegalArgumentException e) {
+            System.err.println("midgie: " + e.getMessage());
+            return EXIT_ERROR;
+        }
+        List<X509Certificate> chain = ServerCertificates.fetch(url, connectionOptions.timeout(), proxy);
         List<X509Certificate> anchors = ServerCertificates.anchors(chain);
 
         status(url.getHost() + " presented " + chain.size() + " certificate(s):");

@@ -59,8 +59,16 @@ ssh:
   # — convenient, and no worse than what most CI does, but it is trust-on-first-use, not verification.
   acceptNewHostKeys: false
 
-# -- Extra environment variables, e.g. JAVA_OPTS or a proxy.
+# -- Extra environment variables. The proxy ones are read by both git (cloning the tree) and midgie
+# (reaching midPoint), so one setting covers the pod; credentials may be written into the URL, and NO_PROXY
+# replaces the built-in loopback exemption rather than adding to it. For a proxy that needs authentication
+# without putting the password in the deployment, set --proxy-user and --proxy-password-file on the command
+# instead and mount the password as a Secret.
 extraEnv: []
+# - name: HTTPS_PROXY
+#   value: "http://proxy.corp:3128"
+# - name: NO_PROXY
+#   value: ".corp.example,localhost,127.0.0.1"
 # - name: JAVA_OPTS
 #   value: "-Xmx768m"
 

@@ -6,25 +6,15 @@
 package de.is4it.midpoint.diff;
 
 import java.io.ByteArrayInputStream;
-import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.KeyFactory;
-import java.security.KeyStore;
-import java.security.PrivateKey;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.List;
 
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-
-import com.sun.net.httpserver.HttpsConfigurator;
 import com.sun.net.httpserver.HttpsServer;
 
 import org.junit.jupiter.api.AfterEach;
@@ -46,28 +36,18 @@ class ServerCertificatesTest {
     /** Committed, so the parts that need only a certificate run anywhere. */
     private static final Path TEST_CA = Path.of("src/test/resources/tls/test-ca.crt");
 
-    /**
-     * The rig's own key material, which {@code docker/tls/gen-certs.sh} generates and {@code .gitignore}
-     * keeps out of the repository. The handshake tests therefore skip where it is absent — CI, a fresh
-     * clone — in the same way the live integration tests skip without a rig, rather than failing for the
-     * absence of something no commit contains.
-     */
-    private static final Path SERVER_CERT = Path.of("docker/tls/server.crt");
-    private static final Path SERVER_KEY = Path.of("docker/tls/server.key");
+    /** The rig's own certificate — see {@link RigTls} for why the handshake tests skip without it. */
+    private static final Path SERVER_CERT = RigTls.SERVER_CERT;
 
     private HttpsServer server;
     private URI url;
 
     @BeforeEach
     void startServer() throws Exception {
-        if (!Files.exists(SERVER_KEY) || !Files.exists(SERVER_CERT)) {
-            return;   // only the two handshake tests need it; the rest work off the committed certificate
+        if (!RigTls.available()) {
+            return;   // only the handshake tests need it; the rest work off the committed certificate
         }
-        SSLContext context = SSLContext.getInstance("TLS");
-        context.init(keyManagers(), null, null);
-
-        server = HttpsServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.setHttpsConfigurator(new HttpsConfigurator(context));
+        server = RigTls.server();
         server.createContext("/midpoint", exchange -> {
             exchange.sendResponseHeaders(204, -1);
             exchange.close();
@@ -139,6 +119,62 @@ class ServerCertificatesTest {
     }
 
     @Test
+    void theChainIsFetchedThroughACONNECTTunnel() throws Exception {
+        assumeTrue(server != null,
+                "no rig certificates at docker/tls — run docker/tls/gen-certs.sh to exercise the handshake");
+        try (StubProxy proxy = StubProxy.open()) {
+            List<X509Certificate> chain =
+                    ServerCertificates.fetch(url, Duration.ofSeconds(10), through(proxy));
+
+            assertEquals(certificate(SERVER_CERT), chain.get(0),
+                    "the handshake has to complete through the tunnel, not just open it");
+            assertTrue(proxy.requests().get(0).startsWith("CONNECT 127.0.0.1:"),
+                    "the tunnel is opened with CONNECT host:port — " + proxy.requests().get(0));
+        }
+    }
+
+    @Test
+    void aTunnelIsAuthenticatedWhenTheProxyDemandsIt() throws Exception {
+        assumeTrue(server != null,
+                "no rig certificates at docker/tls — run docker/tls/gen-certs.sh to exercise the handshake");
+        try (StubProxy proxy = StubProxy.requiringAuth("alice", "s3cret")) {
+            ProxyConfig authenticated = through(proxy).withCredentials("alice", "s3cret");
+
+            assertEquals(certificate(SERVER_CERT),
+                    ServerCertificates.fetch(url, Duration.ofSeconds(10), authenticated).get(0));
+            // Unlike the HTTP client, this handshake sends the credentials up front rather than waiting to be
+            // asked: there is one exchange to get wrong, and a 407 would cost a second connection for nothing.
+            assertEquals(1, proxy.countAuthenticated());
+        }
+    }
+
+    @Test
+    void aTunnelThatIsRefusedNamesTheProxyAndTheFlag() throws Exception {
+        assumeTrue(server != null,
+                "no rig certificates at docker/tls — run docker/tls/gen-certs.sh to exercise the handshake");
+        try (StubProxy proxy = StubProxy.requiringAuth("alice", "s3cret")) {
+            Exception error = assertThrows(Exception.class,
+                    () -> ServerCertificates.fetch(url, Duration.ofSeconds(10), through(proxy)));
+
+            assertTrue(error.getMessage().contains("--proxy-user"), error.getMessage());
+        }
+    }
+
+    @Test
+    void aBypassedHostIsNotTunnelled() throws Exception {
+        assumeTrue(server != null,
+                "no rig certificates at docker/tls — run docker/tls/gen-certs.sh to exercise the handshake");
+        try (StubProxy proxy = StubProxy.open()) {
+            ProxyConfig bypassing =
+                    ProxyConfig.resolve(proxy.uri().toString(), null, url, name -> null);   // loopback default
+
+            assertEquals(certificate(SERVER_CERT),
+                    ServerCertificates.fetch(url, Duration.ofSeconds(10), bypassing).get(0));
+            assertTrue(proxy.requests().isEmpty(), "a bypassed host is reached directly");
+        }
+    }
+
+    @Test
     void aPlainHttpUrlIsRefused() {
         Exception error = assertThrows(Exception.class,
                 () -> ServerCertificates.fetch(URI.create("http://127.0.0.1:1/midpoint"), Duration.ofSeconds(1)));
@@ -147,26 +183,15 @@ class ServerCertificatesTest {
 
     // --- fixtures ---
 
+    /** The stub proxy, with the loopback exemption cleared so the rig's own address is actually tunnelled. */
+    private ProxyConfig through(StubProxy proxy) {
+        return ProxyConfig.resolve(proxy.uri().toString(), "", url, name -> null);
+    }
+
     private static X509Certificate certificate(Path pem) throws Exception {
         try (var in = Files.newInputStream(pem)) {
             return (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(in);
         }
     }
 
-    /** The rig's PEM certificate and PKCS#8 key, as the key material for the stub server. */
-    private static javax.net.ssl.KeyManager[] keyManagers() throws Exception {
-        String pem = Files.readString(SERVER_KEY, StandardCharsets.UTF_8)
-                .replaceAll("-----(BEGIN|END) PRIVATE KEY-----", "")
-                .replaceAll("\\s", "");
-        PrivateKey key = KeyFactory.getInstance("RSA")
-                .generatePrivate(new PKCS8EncodedKeySpec(Base64.getDecoder().decode(pem)));
-
-        KeyStore store = KeyStore.getInstance("PKCS12");
-        store.load(null, null);
-        store.setKeyEntry("server", key, new char[0], new java.security.cert.Certificate[] {certificate(SERVER_CERT)});
-
-        KeyManagerFactory factory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        factory.init(store, new char[0]);
-        return factory.getKeyManagers();
-    }
 }

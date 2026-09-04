@@ -116,8 +116,10 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      * somebody else's repository: cloning it and running even {@code deploy --dry-run} would authenticate to
      * whatever server that file names, so a denylist that fails <em>open</em> for every option added later is
      * the wrong shape. These keys describe how a deployment wants to be reconciled and where its safety net
-     * belongs; {@code url}, {@code user}, {@code password*}, {@code insecure} and {@code cacert} decide where
-     * credentials go and are deliberately absent.
+     * belongs; {@code url}, {@code user}, {@code password*}, {@code insecure}, {@code cacert} and
+     * {@code proxy*} decide where credentials go and are deliberately absent — a proxy most of all, since a
+     * cloned repository naming one would route somebody else's Basic header through a machine of its
+     * choosing.
      *
      * <p>{@code no-rollback-plan} is absent too, on the rule the class already applies to {@code yes} and
      * {@code prune}: a file may say <em>where</em> something goes, never <em>whether</em> a safety gate is
@@ -132,9 +134,24 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
             "schema", "schema-dir", "match-by-name", "create-if-absent", "retry", "smart-refs",
             "allow-inplace-merge", "no-live-schema");
 
-    /** Keys whose environment variable, when set, outranks the file. */
-    private static final Map<String, String> ENV_OVERRIDES =
-            Map.of("url", "MIDPOINT_URL", "user", "MIDPOINT_USER", "password", "MIDPOINT_PASSWORD");
+    /**
+     * Keys whose environment variable, when set, outranks the file.
+     *
+     * <p>A list rather than one name because the proxy is spelled four ways: scheme-dependent
+     * ({@code https_proxy} for an https server, {@code http_proxy} for a plain one) and in either case,
+     * conventionally, in either case of letters. Any of them being set is enough to stand the file down —
+     * which of them actually applies is {@link ProxyConfig}'s decision, made once the target URL is known,
+     * and defaults are resolved before there is a URL to look at. So an environment that sets only the
+     * variable for the <em>other</em> scheme suppresses a {@code proxy} in the file without replacing it, and
+     * that run goes direct. Deliberate: a process launched with proxy variables has been told how this
+     * machine reaches the network, and a file describing a different machine should not overrule it.
+     */
+    private static final Map<String, List<String>> ENV_OVERRIDES = Map.of(
+            "url", List.of("MIDPOINT_URL"),
+            "user", List.of("MIDPOINT_USER"),
+            "password", List.of("MIDPOINT_PASSWORD"),
+            "proxy", List.of("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"),
+            "no-proxy", List.of("no_proxy", "NO_PROXY"));
 
     private final List<File> sources;
     private final Properties properties;
@@ -382,8 +399,7 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
             if (REFUSED.contains(key)) {
                 return null;   // validate() already refused the file; belt and braces
             }
-            String variable = ENV_OVERRIDES.get(key);
-            if (variable != null) {
+            for (String variable : ENV_OVERRIDES.getOrDefault(key, List.of())) {
                 String value = env.apply(variable);
                 if (value != null && !value.isBlank()) {
                     // The environment describes the process this run was launched into; the file describes a
@@ -400,6 +416,17 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      * Whether a boolean option is set to true anywhere in the file, bare or qualified. Needed for
      * {@code insecure}, whose effect is latched before any command runs (see {@link Main#main}).
      */
+    /** Whether the file gives this option any value at all — for the settings that are not simple switches. */
+    boolean isSet(String option) {
+        for (String key : properties.stringPropertyNames()) {
+            if ((key.equals(option) || key.endsWith("." + option))
+                    && !properties.getProperty(key).isBlank()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     boolean isEnabled(String option) {
         for (String key : properties.stringPropertyNames()) {
             if ((key.equals(option) || key.endsWith("." + option))

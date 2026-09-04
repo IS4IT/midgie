@@ -5,6 +5,16 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Proxy support for every live mode, with optional authentication.** `--proxy http://proxy.corp:3128` and `--no-proxy` route the REST connection through a forward proxy, and `--proxy-user` with `--proxy-password-env`/`--proxy-password-file` authenticate to one that asks. Until now a proxy worked only by accident: the client never set one, so the JDK's default selector applied and a `-Dhttps.proxyHost` in `JAVA_OPTS` happened to be honoured — while `HTTPS_PROXY`, which every other tool in a container reads, did nothing at all. That was worse than no support, because the `git` in the image *does* read it: a pod given the standard variable cloned its tree and then failed to reach midPoint, in a way that looked like a midgie bug. The variables are now read directly (`https_proxy`/`http_proxy` chosen by the server's scheme, `no_proxy` for exemptions, lowercase preferred as curl reads them), so both halves of the pod behave alike, and they outrank the config file for the same reason `MIDPOINT_URL` does. **Configure nothing and nothing changes**: with no proxy set midgie installs no selector, leaving the JVM properties exactly as they were.
+
+  Authentication needed two things the JDK does not give by default. Credentials go through the account password's own ladder — never as a bare argument — and a `user:pass@` inside `https_proxy` is honoured, since that is how the ecosystem writes it and a variable is not on show in `ps`; the same credentials inside `--proxy` are stripped with a warning, as they already are for `--url`. And reaching an https server means a `CONNECT` tunnel, on which the JDK has refused Basic since 8u111. That setting is read once, on first use of `java.net.http`, so it is decided at startup next to the existing hostname-verification latch — and only for a run that configured credentials, leaving the default protection in place for everyone else. A rejected password is reported as such, naming the proxy: the JDK surfaces it as "too many authentication attempts", which mentions neither.
+
+  `init --write-cacert` tunnels too, which matters more than it sounds: behind a proxy you could not fetch the CA that would let you stop using `--insecure`. It is the one place midgie speaks the proxy protocol by hand — it inspects a handshake rather than making a request, so `java.net.http` cannot do it — and through an intercepting proxy what it captures is that proxy's own chain, which is precisely the CA `--cacert` then needs. SOCKS and TLS-to-the-proxy are refused with a message saying why rather than failing later as something else, `java.net.http` supporting neither. A tree-local `.midgie.properties` may not set any of this, on the existing rule: a file arriving with somebody else's clone must not decide where your credentials travel.
+
 ## [0.8.2] - 2026-08-05
 
 ### Fixed

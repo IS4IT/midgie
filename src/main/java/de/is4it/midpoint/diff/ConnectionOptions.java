@@ -26,6 +26,9 @@ import picocli.CommandLine.Option;
  * command line (which leaks into {@code ps} and shell history), in this order: {@code --password} (kept,
  * but discouraged) → {@code --password-env VAR} → {@code --password-file FILE} → {@code MIDPOINT_PASSWORD}
  * → interactive prompt.
+ *
+ * <p>The proxy flags walk the same ladder for {@code --proxy-password}, and {@link #proxy()} resolves the
+ * proxy itself — see {@link ProxyConfig} for where it may come from and what happens when none is set.
  */
 public final class ConnectionOptions {
 
@@ -63,6 +66,35 @@ public final class ConnectionOptions {
     @Option(names = "--cacert", paramLabel = "FILE",
             description = "Verify the server's TLS certificate against this CA certificate (PEM).")
     File caCert;
+
+    @Option(names = "--proxy", paramLabel = "URL",
+            description = "Forward proxy for the REST connection, e.g. http://proxy.corp:3128 or "
+                    + "proxy.corp:3128 (or the https_proxy/http_proxy env var, picked by the scheme of the "
+                    + "server URL). Without this, the JVM's own -Dhttps.proxyHost settings still apply.")
+    String proxyOption;
+
+    @Option(names = "--no-proxy", paramLabel = "HOSTS",
+            description = "Comma-separated hosts that bypass the proxy (or the no_proxy env var). A leading "
+                    + "dot matches subdomains only; '*' bypasses everything. Replaces the built-in loopback "
+                    + "exemption rather than adding to it, so '' sends even localhost through the proxy.")
+    String noProxyOption;
+
+    @Option(names = "--proxy-user", paramLabel = "USER",
+            description = "User for a proxy that demands authentication (Basic).")
+    String proxyUserOption;
+
+    @Option(names = "--proxy-password", paramLabel = "PASSWORD",
+            description = "Proxy password. INSECURE: visible in ps/shell history — prefer "
+                    + "--proxy-password-env, --proxy-password-file, or the interactive prompt.")
+    String proxyPasswordOption;
+
+    @Option(names = "--proxy-password-env", paramLabel = "VAR",
+            description = "Read the proxy password from environment variable VAR.")
+    String proxyPasswordEnv;
+
+    @Option(names = "--proxy-password-file", paramLabel = "FILE",
+            description = "Read the proxy password from FILE (trailing newline trimmed).")
+    File proxyPasswordFile;
 
     @Option(names = "--timeout", paramLabel = "SECONDS", defaultValue = "30",
             description = "Per-request timeout in seconds (default 30).")
@@ -138,15 +170,59 @@ public final class ConnectionOptions {
         if (password == null) {
             return null; // resolvePassword() already explained why
         }
+        ProxyConfig proxy;
+        try {
+            proxy = proxy();
+        } catch (IllegalArgumentException e) {
+            System.err.println("midgie: " + e.getMessage());
+            return null;
+        }
         warnIfCleartextOverTheNetwork();
-        LOG.debug("live mode: url={}, user={}, insecure={}, cacert={}, timeout={}s, retries={}",
-                url(), user, insecure, caCert, timeoutSeconds, retries);
+        LOG.debug("live mode: url={}, user={}, insecure={}, cacert={}, proxy={}, timeout={}s, retries={}",
+                url(), user, insecure, caCert, (proxy != null) ? proxy.describe() : "none",
+                timeoutSeconds, retries);
         MidpointRestClient.Config config = new MidpointRestClient.Config()
                 .insecure(insecure)
                 .caCert(caCert)
+                .proxy(proxy)
                 .requestTimeout(timeout())
                 .maxRetries(retries);
         return new MidpointRestClient(url(), user, password, config);
+    }
+
+    /**
+     * The proxy for the resolved URL: the flags, else the environment, else none.
+     *
+     * <p>Also used by {@code init --write-cacert}, which has to tunnel its own TLS handshake and so needs the
+     * same answer this gives the REST client.
+     *
+     * @return the proxy, or {@code null} for a direct connection
+     * @throws IllegalArgumentException if the proxy or its credentials are unusable; the message is meant to
+     *         be printed as it stands, so there is one failure channel here rather than the print-and-return-
+     *         null the account password uses
+     */
+    ProxyConfig proxy() {
+        ProxyConfig proxy = ProxyConfig.resolve(proxyOption, noProxyOption, url(), System::getenv);
+        boolean passwordGiven = proxyPasswordOption != null || proxyPasswordEnv != null
+                || proxyPasswordFile != null;
+        if (proxy == null) {
+            if (proxyUserOption != null || passwordGiven) {
+                throw new IllegalArgumentException("--proxy-user/--proxy-password need a proxy to "
+                        + "authenticate to: pass --proxy, or set https_proxy/http_proxy. A proxy given as "
+                        + "-Dhttps.proxyHost cannot carry credentials — java.net.http never reads them.");
+            }
+            return null;
+        }
+        if (passwordGiven && proxyUserOption == null && proxy.user() == null) {
+            throw new IllegalArgumentException("a proxy password was given without a user; add --proxy-user.");
+        }
+        // An option always outranks the credentials an https_proxy URL happened to carry; a user with no
+        // password anywhere still has to produce one, which is what the ladder (and the prompt) is for.
+        String proxyUser = (proxyUserOption != null) ? proxyUserOption : proxy.user();
+        if (proxyUser == null || (proxyUserOption == null && proxy.hasCredentials())) {
+            return proxy;
+        }
+        return proxy.withCredentials(proxyUser, resolveProxyPassword(proxyUser, proxy));
     }
 
     /**
@@ -168,6 +244,72 @@ public final class ConnectionOptions {
         }
     }
 
+    /**
+     * A secret from a named environment variable.
+     *
+     * @throws IllegalArgumentException if the variable is not set; the caller decides how to report it
+     */
+    private static String fromEnvironment(String flag, String variable) {
+        String value = System.getenv(variable);
+        if (value == null) {
+            throw new IllegalArgumentException(flag + " " + variable + " is not set in the environment.");
+        }
+        return value;
+    }
+
+    /**
+     * A secret from a file, with the trailing newline an editor leaves behind trimmed off.
+     *
+     * @throws IllegalArgumentException if the file is empty or unreadable
+     */
+    private static String fromFile(String flag, File file) {
+        try {
+            String secret = Files.readString(file.toPath(), StandardCharsets.UTF_8).stripTrailing();
+            if (secret.isEmpty()) {
+                throw new IllegalArgumentException(flag + " " + file + " is empty.");
+            }
+            return secret;
+        } catch (IOException e) {
+            throw new IllegalArgumentException("cannot read " + flag + " " + file + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * The proxy password, walking the same ladder as the account password minus the {@code MIDPOINT_*} rung —
+     * the environment's way of carrying this one is the userinfo in {@code https_proxy}, which
+     * {@link ProxyConfig} has already read by the time this runs.
+     *
+     * @throws IllegalArgumentException when no source produced one; the message is printable as it stands
+     */
+    private String resolveProxyPassword(String proxyUser, ProxyConfig proxy) {
+        if (proxyPasswordOption != null) {
+            LOG.debug("proxy password source: --proxy-password");
+            return proxyPasswordOption;
+        }
+        if (proxyPasswordEnv != null) {
+            LOG.debug("proxy password source: --proxy-password-env {}", proxyPasswordEnv);
+            return fromEnvironment("--proxy-password-env", proxyPasswordEnv);
+        }
+        if (proxyPasswordFile != null) {
+            LOG.debug("proxy password source: --proxy-password-file {}", proxyPasswordFile);
+            return fromFile("--proxy-password-file", proxyPasswordFile);
+        }
+        if (proxyUserOption == null && proxy.password() != null) {
+            LOG.debug("proxy password source: the proxy URL from the environment");
+            return proxy.password();
+        }
+        Console console = System.console();
+        if (console != null) {
+            char[] entered = console.readPassword("Proxy password for %s at %s: ", proxyUser, proxy.address());
+            if (entered != null && entered.length > 0) {
+                LOG.debug("proxy password source: interactive prompt");
+                return new String(entered);
+            }
+        }
+        throw new IllegalArgumentException("no proxy password provided. Use --proxy-password-env, "
+                + "--proxy-password-file, credentials in the https_proxy URL, or run interactively.");
+    }
+
     /** Resolve the password from the most-explicit source available, or {@code null} (with an error). */
     String resolvePassword() {
         if (passwordOption != null) {
@@ -175,25 +317,22 @@ public final class ConnectionOptions {
             return passwordOption;
         }
         if (passwordEnv != null) {
-            String value = System.getenv(passwordEnv);
-            if (value == null) {
-                System.err.println("midgie: --password-env " + passwordEnv + " is not set in the environment.");
+            try {
+                String value = fromEnvironment("--password-env", passwordEnv);
+                LOG.debug("password source: --password-env {}", passwordEnv);
+                return value;
+            } catch (IllegalArgumentException e) {
+                System.err.println("midgie: " + e.getMessage());
                 return null;
             }
-            LOG.debug("password source: --password-env {}", passwordEnv);
-            return value;
         }
         if (passwordFile != null) {
             try {
-                String password = Files.readString(passwordFile.toPath(), StandardCharsets.UTF_8).stripTrailing();
-                if (password.isEmpty()) {
-                    System.err.println("midgie: --password-file " + passwordFile + " is empty.");
-                    return null;
-                }
+                String password = fromFile("--password-file", passwordFile);
                 LOG.debug("password source: --password-file {}", passwordFile);
                 return password;
-            } catch (IOException e) {
-                System.err.println("midgie: cannot read --password-file " + passwordFile + ": " + e.getMessage());
+            } catch (IllegalArgumentException e) {
+                System.err.println("midgie: " + e.getMessage());
                 return null;
             }
         }
