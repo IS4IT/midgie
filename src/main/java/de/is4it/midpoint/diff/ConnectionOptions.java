@@ -193,7 +193,10 @@ public final class ConnectionOptions {
                 LOG.debug("password source: --password-file {}", passwordFile);
                 return password;
             } catch (IOException e) {
-                System.err.println("midgie: cannot read --password-file " + passwordFile + ": " + e.getMessage());
+                // The exception's own message is the bare path, which this line already names — so without
+                // Io's wording it read "cannot read --password-file /etc/mp.pw: /etc/mp.pw".
+                System.err.println("midgie: "
+                        + Io.cannotReadMessage("--password-file " + passwordFile, passwordFile, e));
                 return null;
             }
         }

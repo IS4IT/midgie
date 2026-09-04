@@ -85,17 +85,25 @@ final class Io {
      * inside a container the UID is the image's, and the path's owner comes from the host.
      */
     static IOException cannotRead(File path, IOException cause) {
-        return describe("read", path, cause);
+        return new IOException(cannotReadMessage(path.toString(), path, cause), cause);
     }
 
     /** As {@link #cannotRead}, for a write. */
     static IOException cannotWrite(File path, IOException cause) {
-        return describe("write", path, cause);
+        return new IOException(describe("write", path.toString(), path, cause), cause);
     }
 
-    private static IOException describe(String verb, File path, IOException cause) {
+    /**
+     * The message {@link #cannotRead} would carry, for a call site that reports rather than throws, with
+     * {@code subject} naming the path the way that call site already does — a flag and its value, say.
+     */
+    static String cannotReadMessage(String subject, File path, IOException cause) {
+        return describe("read", subject, path, cause);
+    }
+
+    private static String describe(String verb, String subject, File path, IOException cause) {
         boolean denied = denied(path, cause);
-        StringBuilder message = new StringBuilder("cannot ").append(verb).append(' ').append(path)
+        StringBuilder message = new StringBuilder("cannot ").append(verb).append(' ').append(subject)
                 .append(": ").append(denied ? "permission denied" : reason(path, cause));
         if (denied) {
             String mismatch = mismatch(path);
@@ -108,7 +116,7 @@ final class Io {
                         + " -u \"$(id -u):0\", or set securityContext.runAsUser and fsGroup in Kubernetes.");
             }
         }
-        return new IOException(message.toString(), cause);
+        return message.toString();
     }
 
     /**

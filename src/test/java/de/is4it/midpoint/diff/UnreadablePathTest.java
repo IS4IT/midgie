@@ -9,6 +9,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
@@ -78,6 +79,19 @@ class UnreadablePathTest {
             assertTrue(e.getMessage().startsWith("cannot read " + file), e.getMessage());
             assertTrue(e.getMessage().contains("permission denied"), e.getMessage());
         });
+    }
+
+    @Test
+    void aCallSiteCanNameThePathItsOwnWay(@TempDir Path dir) {
+        File missing = dir.resolve("pw").toFile();
+
+        String message = Io.cannotReadMessage("--password-file " + missing, missing,
+                new NoSuchFileException(missing.toString()));
+
+        // What --password-file reports. The flag and its value are the subject the operator typed, and the
+        // exception carries only the path, so repeating it said the same thing twice and explained nothing.
+        assertTrue(message.startsWith("cannot read --password-file " + missing + ": "), message);
+        assertTrue(message.endsWith("no such file or directory"), message);
     }
 
     @Test
