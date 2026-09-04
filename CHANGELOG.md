@@ -5,6 +5,13 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A path midgie cannot read now says who midgie is and who owns the path.** `deploy` against a bind-mounted tree failed with `midgie: /work` and nothing else — the file system throws these carrying the bare path as their entire message, and midgie prints an exception's message verbatim. It now reports `cannot read /work: permission denied — midgie runs as uid 1001 gid 0, and it is owned by uid 31655 gid 100, mode 0750`, which is the whole diagnosis in one line: neither half is visible from where the operator stands, because inside a container the UID belongs to the image while the path's ownership comes from the host. In a container the message adds the fix. The same wording now covers a single object file for `diff` and `apply`, including the `java.io` spelling of a denial — prism's reader raises `FileNotFoundException` with the C library's wording appended to the path, so whether it is a denial is settled by asking the file system rather than by matching that text. An unreadable *subdirectory* names itself rather than the root that was given, and still fails the run: a subtree midgie cannot read is not one it may quietly skip, or `deploy` would apply a partial tree and exit 0, and `--prune` would read the objects it never saw as removals.
+- **"No midPoint objects found" names the path, and says whether anything was there at all.** The message named neither, so two very different causes looked identical: a tree of the wrong sort of files, and a path with nothing in it. It now reports `no midPoint objects found under /work — it holds no files at all` or `— walked 12 file(s), none of them a deployable midPoint object`. The first is what an unmounted volume looks like — `docker -v` invents an empty directory when the bind source is missing or `$PWD` did not expand, and mounts that instead of failing — so in a container the message says how to check. The README's `docker run` line now carries `-u "$(id -u):0"` and uses `--mount type=bind`, which refuses a missing source outright, with the SELinux and Kubernetes equivalents alongside it.
+
 ## [0.8.2] - 2026-08-05
 
 ### Fixed

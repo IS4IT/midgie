@@ -320,7 +320,7 @@ public class DeployCommand implements Callable<Integer> {
                     objects.size(), deployableSchemas.size(), localSchemas.size());
 
             if (deployableSchemas.isEmpty() && objects.isEmpty()) {
-                System.err.println("midgie: no midPoint objects found under the given path(s).");
+                System.err.println("midgie: " + nothingFound(scan));
                 return EXIT_ERROR;
             }
 
@@ -966,6 +966,30 @@ public class DeployCommand implements Callable<Integer> {
                     + " — this run cannot be rolled back automatically.");
             LOG.trace("writing the rollback plan failed", e);
         }
+    }
+
+    /**
+     * Why the scan came back empty, in terms the operator can check.
+     *
+     * <p>"No midPoint objects found under the given path(s)" named neither the path nor what was there,
+     * which made the two very different causes look identical: a tree of the wrong sort of files, and a
+     * path with nothing in it at all. The second is what an unmounted volume looks like — {@code docker -v}
+     * creates an empty directory when the bind source is missing or {@code $PWD} did not expand, and mounts
+     * that instead of failing — so in a container the empty case is worth naming outright.
+     */
+    private String nothingFound(Discovery.ScanResult scan) {
+        String where = (paths == null || paths.isEmpty()) ? "the given path(s)"
+                : paths.stream().map(File::toString).collect(Collectors.joining(", "));
+        if (scan.walkedFiles() > 0) {
+            return "no midPoint objects found under " + where + " — walked " + scan.walkedFiles()
+                    + " file(s), none of them a deployable midPoint object.";
+        }
+        String message = "no midPoint objects found under " + where + " — it holds no files at all.";
+        if (Io.inContainer() && paths != null && !paths.isEmpty()) {
+            message += " An empty path inside a container usually means the mount did not land: check it"
+                    + " with 'docker run --entrypoint ls <image> -la " + paths.get(0) + "'.";
+        }
+        return message;
     }
 
     /** Plan directories this run writes to or reads from — never discovery input, even when nested in a path. */
