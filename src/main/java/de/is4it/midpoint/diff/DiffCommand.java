@@ -133,13 +133,6 @@ public class DiffCommand implements Callable<Integer> {
         }
 
         LOG.debug("diff mode: {}", live ? "live (--url)" : "offline (CURRENT file)");
-        MidpointRestClient client = null;
-        if (live) {
-            client = connectionOptions.newClient();
-            if (client == null) {
-                return EXIT_ERROR;
-            }
-        }
 
         try {
             // Before the schema read, which in live mode is a round trip: a path that does not exist or is
@@ -147,6 +140,16 @@ public class DiffCommand implements Callable<Integer> {
             // currentFile is null in live mode, where the check is a no-op.
             Io.checkInputFile(desiredFile);
             Io.checkInputFile(currentFile);
+
+            // And before the client, because building it resolves the password — possibly by prompting, or
+            // by pulling it out of a password safe. Neither is worth doing for a run that cannot proceed.
+            MidpointRestClient client = null;
+            if (live) {
+                client = connectionOptions.newClient();
+                if (client == null) {
+                    return EXIT_ERROR;
+                }
+            }
 
             PrismContext prismContext = schemaOptions.buildContext(live ? client : null);
             if (live && !quiet) {

@@ -263,17 +263,9 @@ public class DeployCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
 
-        MidpointRestClient client = null;
-        if (live) {
-            client = connectionOptions.newClient();
-            if (client == null) {
-                return EXIT_ERROR;
-            }
-        }
-
         try {
             if (applyPlanDir != null) {
-                return runApplyPlan(client);
+                return runApplyPlan();
             }
 
             PrismContext prismContext = SchemaOptions.newBaseContext();
@@ -309,6 +301,17 @@ public class DeployCommand implements Callable<Integer> {
                 schemaMap.put(schema.description(), schema.schemaElement());
             }
             schemaMap.putAll(schemaOptions.collectSchemas(prismContext, null));
+
+            // Last moment, and not a moment earlier: building the client resolves the password, which may
+            // mean an interactive prompt or a trip to a password safe. Being asked for a passphrase and then
+            // told the tree is empty is a poor trade, so everything local has already had its say.
+            MidpointRestClient client = null;
+            if (live) {
+                client = connectionOptions.newClient();
+                if (client == null) {
+                    return EXIT_ERROR;
+                }
+            }
 
             if (live && !quiet) {
                 // After the tree, before any parsing: this warns that the bundled schema may misparse the
@@ -1118,7 +1121,7 @@ public class DeployCommand implements Callable<Integer> {
 
     // --- apply-plan (replay saved files verbatim) ---
 
-    private Integer runApplyPlan(MidpointRestClient client) throws Exception {
+    private Integer runApplyPlan() throws Exception {
         List<PlanStore.Entry> entries = PlanStore.read(applyPlanDir);
         if (entries.isEmpty()) {
             System.err.println("midgie: no plan files (*.create.xml / *.patch.xml) in " + applyPlanDir + ".");
@@ -1144,6 +1147,12 @@ public class DeployCommand implements Callable<Integer> {
             if (stop != null) {
                 return stop;
             }
+        }
+        // Only now is a server needed, so only now is the password resolved: a dry run never asks for one,
+        // and neither does a run the operator declines at the prompt above.
+        MidpointRestClient client = connectionOptions.newClient();
+        if (client == null) {
+            return EXIT_ERROR;
         }
         List<PlanStore.Entry> failed = applyEntries(client, entries, confirmEachApply);
         if (retry && !failed.isEmpty()) {

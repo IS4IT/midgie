@@ -119,15 +119,17 @@ public class ApplyCommand implements Callable<Integer> {
             System.err.println("midgie: apply needs a running server — pass --url (or set MIDPOINT_URL).");
             return EXIT_ERROR;
         }
-        MidpointRestClient client = connectionOptions.newClient();
-        if (client == null) {
-            return EXIT_ERROR;
-        }
-
         try {
             // Before the schema read, which is a round trip: a path that does not exist or is not XML is
             // knowable here, and waiting made a local mistake arrive as a connection error.
             Io.checkInputFile(desiredFile);
+
+            // And before the client, because building it resolves the password — possibly by prompting, or
+            // by pulling it out of a password safe. Neither is worth doing for a run that cannot proceed.
+            MidpointRestClient client = connectionOptions.newClient();
+            if (client == null) {
+                return EXIT_ERROR;
+            }
 
             PrismContext prismContext = schemaOptions.buildContext(client);
             if (!quiet) {
