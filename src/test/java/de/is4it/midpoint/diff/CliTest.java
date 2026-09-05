@@ -115,6 +115,38 @@ class CliTest {
         assertTrue(r.err.contains("--pasword"), "but the offending option is still named: " + r.err);
     }
 
+    // --- local inputs are checked before the server is contacted ---
+
+    @Test
+    void aMissingDesiredFileIsReportedInsteadOfAConnectionError() {
+        // The dead host is the point: reading the input used to wait on the schema round trip, so a typo'd
+        // path came back as whatever the network said. What failed here is knowable without a socket.
+        Result r = run("diff", "/no/such/desired.xml", "--url", DEAD_HOST, "-u", "u", "-p", "p");
+
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("/no/such/desired.xml"), r.err);
+        assertTrue(r.err.contains("no such file or directory"), r.err);
+    }
+
+    @Test
+    void aMalformedDesiredFileIsReportedInsteadOfAConnectionError(@TempDir Path dir) throws IOException {
+        Path broken = dir.resolve("broken.xml");
+        Files.writeString(broken, "<role><name>Unclosed</name>", StandardCharsets.UTF_8);
+
+        Result r = run("diff", broken.toString(), "--url", DEAD_HOST, "-u", "u", "-p", "p");
+
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("not well-formed XML"), r.err);
+    }
+
+    @Test
+    void applyChecksItsInputBeforeTheServerToo() {
+        Result r = run("apply", "/no/such/desired.xml", "--url", DEAD_HOST, "-u", "u", "-p", "p");
+
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("no such file or directory"), r.err);
+    }
+
     // --- happy paths ---
 
     @Test

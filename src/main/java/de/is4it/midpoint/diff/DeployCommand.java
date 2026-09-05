@@ -278,22 +278,46 @@ public class DeployCommand implements Callable<Integer> {
 
             PrismContext prismContext = SchemaOptions.newBaseContext();
             policy = (policyFile != null) ? Policy.load(policyFile) : null; // load early: fail fast on a bad policy
-            if (live && !quiet) {
-                VersionSupport.warnIfMismatch(prismContext, client);
+
+            // Everything the local filesystem can settle is settled before the first round trip. Reading the
+            // tree costs milliseconds and the server costs seconds, so a typo'd path, an unreadable mount or
+            // an empty directory should not be paid for twice over the network first — and against a host
+            // that is down, a local mistake would otherwise surface as a connection error.
+            // A plan directory may legitimately sit inside the tree it is planning; its files are output, not
+            // source, so they are never discovery input.
+            Discovery.ScanResult scan = Discovery.scan(prismContext, paths, planDirectories());
+            List<SchemaFile> deployableSchemas = scan.schemas().stream()
+                    .filter(SchemaFile::deployable).collect(Collectors.toList());
+            List<SchemaFile> localSchemas = scan.schemas().stream()
+                    .filter(schema -> !schema.deployable()).collect(Collectors.toList());
+            if (scan.objectFiles().isEmpty() && deployableSchemas.isEmpty()) {
+                // Nothing to deploy, and no amount of schema from the server can change that: grouping has
+                // no files to make objects out of. The same question is asked again after parsing, for the
+                // tree that holds candidate files which all turn out not to be midPoint objects.
+                System.err.println("midgie: " + nothingFound(scan));
+                return EXIT_ERROR;
             }
 
             // Collect every extension schema — the tree, CLI flags, and the live server — and register in one
             // batch (prism replaces the dynamic set on each call). Order matters: the tree/flag schemas go in
             // first so they win the per-namespace dedupe (SchemaSupport.register) over the live read, which
-            // also stops prism warning about re-registering a schema that is both in the tree and on the server.
-            // A plan directory may legitimately sit inside the tree it is planning; its files are output, not
-            // source, so they are never discovery input.
-            Discovery.ScanResult scan = Discovery.scan(prismContext, paths, planDirectories());
+            // also stops prism warning about re-registering a schema that is both in the tree and on the
+            // server. The live half is fetched separately so that the local half — which is also where
+            // --schema-dir and --schema are validated — happens on this side of the round trip.
             Map<String, Element> schemaMap = new LinkedHashMap<>();
             for (SchemaFile schema : scan.schemas()) {
                 schemaMap.put(schema.description(), schema.schemaElement());
             }
-            schemaMap.putAll(schemaOptions.collectSchemas(prismContext, client));
+            schemaMap.putAll(schemaOptions.collectSchemas(prismContext, null));
+
+            if (live && !quiet) {
+                // After the tree, before any parsing: this warns that the bundled schema may misparse the
+                // objects, so it has to precede the parse it is about, not the walk that found the files.
+                VersionSupport.warnIfMismatch(prismContext, client);
+            }
+            if (live) {
+                schemaMap.putAll(schemaOptions.collectLiveSchemas(prismContext, client));
+            }
             LOG.debug("scan: {} schema file(s), {} candidate object file(s), {} warning(s); "
                     + "collected {} extension schema(s)", scan.schemas().size(), scan.objectFiles().size(),
                     scan.warnings().size(), schemaMap.size());
@@ -312,10 +336,6 @@ public class DeployCommand implements Callable<Integer> {
                 return EXIT_ERROR;
             }
 
-            List<SchemaFile> deployableSchemas = scan.schemas().stream()
-                    .filter(SchemaFile::deployable).collect(Collectors.toList());
-            List<SchemaFile> localSchemas = scan.schemas().stream()
-                    .filter(schema -> !schema.deployable()).collect(Collectors.toList());
             LOG.debug("grouped into {} object(s); {} deployable schema(s), {} local-only schema(s)",
                     objects.size(), deployableSchemas.size(), localSchemas.size());
 

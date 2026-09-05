@@ -235,6 +235,42 @@ class DeployCliTest {
     }
 
     @Test
+    void anEmptyTreeIsSettledBeforeTheServerIsContacted(@TempDir Path dir) {
+        // The tree costs milliseconds and the server costs seconds, so the question "is there anything to
+        // deploy" is answered first. The version check is the first round trip and says so when it fails,
+        // which makes its silence the proof that no socket was opened.
+        Result r = run("deploy", dir.toString(), "--url", DEAD_HOST, "-u", "u", "-p", "p");
+
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("no midPoint objects"), r.err);
+        assertFalse(r.err.contains("could not read the server version"),
+                "the server must not have been contacted at all: " + r.err);
+    }
+
+    @Test
+    void aMissingPathIsReportedInsteadOfAConnectionError() {
+        Result r = run("deploy", "/no/such/tree", "--url", DEAD_HOST, "-u", "u", "-p", "p");
+
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("path does not exist"), r.err);
+        assertFalse(r.err.contains("could not read the server version"), r.err);
+    }
+
+    @Test
+    void aBadSchemaDirIsReportedInsteadOfAConnectionError(@TempDir Path dir) throws IOException {
+        // --schema-dir is validated on the local side of the round trip along with everything else that a
+        // filesystem can answer.
+        write(dir, "notadir", "");
+
+        Result r = run("deploy", TREE, "--schema-dir", dir.resolve("notadir").toString(),
+                "--url", DEAD_HOST, "-u", "u", "-p", "p");
+
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--schema-dir is not a directory"), r.err);
+        assertFalse(r.err.contains("could not read the server version"), r.err);
+    }
+
+    @Test
     void aTreeWithNoObjectFilesSaysHowMuchItWalked(@TempDir Path dir) throws IOException {
         write(dir, "README.md", "not xml");
         write(dir, "midgie.policy", "# rules");

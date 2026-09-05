@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Live runs read the local inputs before they contact the server.** `deploy` asked the server for its version and then for its extension schema — two round trips — and only walked the tree in between, so a typo'd path, an unreadable bind mount or an empty directory was paid for over the network before midgie said what was wrong. Against a host that is down or firewalled it cost two connect timeouts, and the local mistake arrived dressed as a connection error. The walk, the "is there anything to deploy at all" question, and the `--schema-dir` / `--schema` validation now all happen first, and the socket is opened only once they pass: an empty tree against an unreachable host went from 13s to 3s and reports the tree instead of the network. `diff --url` and `apply` do the same with their one file, checking that DESIRED can be opened and is well-formed XML before the schema read — which is as much as can be checked without the server, since parsing an object properly needs the extension schema first. Two things deliberately stay where they were: credentials are still validated before anything else (that check never touched the network), and the version-mismatch warning still prints before any object is parsed, because the misparse it warns about is the parsing, not the walk. A run that succeeds does the same work in a different order, with byte-identical output.
+
 ## [0.9.0] - 2026-09-04
 
 ### Added

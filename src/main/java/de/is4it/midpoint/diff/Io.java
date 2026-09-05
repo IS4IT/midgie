@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.util.DOMUtil;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
 /** Small I/O helpers: read an object from a file or stdin ({@code -}), and write a payload to a file or stdout. */
@@ -50,6 +51,34 @@ final class Io {
             return prismContext.parseObject(file);
         } catch (IOException e) {
             throw cannotRead(file, e);
+        }
+    }
+
+    /**
+     * Fail now if {@code file} cannot be read or is not well-formed XML.
+     *
+     * <p>For a live run this is the cheap half of the work done before the expensive half: parsing an object
+     * properly needs the extension schema, which needs the server, so a typo'd path or an unreadable mount
+     * was only discovered after two round trips — and against a host that is down, surfaced as a connection
+     * error instead of the local mistake it was. Opening the file rather than asking whether it is readable
+     * is what produces a real denial to report; {@code deploy} gets the same two checks per file from
+     * {@link Discovery}, which already DOM-parses everything it walks.
+     *
+     * <p>A no-op for stdin, which cannot be checked without consuming the one read it has.
+     */
+    static void checkInputFile(File file) throws IOException {
+        if (file == null || isStdin(file)) {
+            return;
+        }
+        try (java.io.InputStream ignored = Files.newInputStream(file.toPath())) {
+            LOG.trace("input file is readable: {}", file);
+        } catch (IOException e) {
+            throw cannotRead(file, e);
+        }
+        try {
+            DOMUtil.parseFile(file);
+        } catch (Exception e) {
+            throw new IOException("cannot read " + file + ": not well-formed XML (" + e.getMessage() + ")", e);
         }
     }
 

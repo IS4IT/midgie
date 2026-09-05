@@ -112,6 +112,22 @@ public final class SchemaOptions {
         return schemas;
     }
 
+    /**
+     * Just the server's half of {@link #collectSchemas}, for a caller that wants the local half to happen
+     * before it opens a socket — {@code deploy} reads its tree and decides there is something to deploy
+     * first, so a local mistake is not paid for with a round trip. Empty when {@code --no-live-schema} is
+     * set, which is the same answer {@link #collectSchemas} would give.
+     */
+    Map<String, Element> collectLiveSchemas(PrismContext prismContext, MidpointRestClient client)
+            throws SchemaException {
+        Map<String, Element> schemas = new LinkedHashMap<>();
+        if (client != null && !noLiveSchema) {
+            collectLiveSchemas(prismContext, client, schemas);
+        }
+        LOG.debug("collected {} live extension schema(s) (liveSchema={})", schemas.size(), !noLiveSchema);
+        return schemas;
+    }
+
     private static void addFromDirectory(PrismContext prismContext, File dir, Map<String, Element> schemas)
             throws SchemaException {
         if (!dir.isDirectory()) {

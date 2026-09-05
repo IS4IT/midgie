@@ -125,6 +125,10 @@ public class ApplyCommand implements Callable<Integer> {
         }
 
         try {
+            // Before the schema read, which is a round trip: a path that does not exist or is not XML is
+            // knowable here, and waiting made a local mistake arrive as a connection error.
+            Io.checkInputFile(desiredFile);
+
             PrismContext prismContext = schemaOptions.buildContext(client);
             if (!quiet) {
                 VersionSupport.warnIfMismatch(prismContext, client);

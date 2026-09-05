@@ -142,6 +142,12 @@ public class DiffCommand implements Callable<Integer> {
         }
 
         try {
+            // Before the schema read, which in live mode is a round trip: a path that does not exist or is
+            // not XML is knowable here, and waiting made a local mistake arrive as a connection error.
+            // currentFile is null in live mode, where the check is a no-op.
+            Io.checkInputFile(desiredFile);
+            Io.checkInputFile(currentFile);
+
             PrismContext prismContext = schemaOptions.buildContext(live ? client : null);
             if (live && !quiet) {
                 VersionSupport.warnIfMismatch(prismContext, client);
