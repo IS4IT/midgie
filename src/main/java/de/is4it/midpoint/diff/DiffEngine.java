@@ -578,27 +578,17 @@ public final class DiffEngine {
         return true;
     }
 
-    /** The desired container value matching {@code valueId} — by container id, else by natural key. */
+    /**
+     * The desired container value matching {@code valueId} — by container id, else by natural key.
+     *
+     * <p>The same pairing {@link FragmentUnion} uses to decide whether two files describe one entry, which is
+     * why it lives in {@link NaturalKeys}: "is this the same entry of the list?" has to be answered
+     * identically wherever it is asked, or a value combined on the way in would be flagged as accrued on the
+     * way out.
+     */
     private static PrismContainerValue<?> matchingDesiredValue(PrismContainer<?> desiredContainer,
             PrismContainerValue<?> liveValue, Long valueId) {
-        for (PrismContainerValue<?> value : desiredContainer.getValues()) {
-            if (valueId.equals(value.getId())) {
-                return value;
-            }
-        }
-        NaturalKeyDefinition naturalKey = naturalKeyOf(desiredContainer);
-        if (liveValue == null || naturalKey == null || !carriesKey(naturalKey, liveValue)) {
-            return null;
-        }
-        for (PrismContainerValue<?> value : desiredContainer.getValues()) {
-            // Both sides must actually carry the key, else the comparison is vacuous: a container whose
-            // natural key is absent from both values (e.g. an assignment with no <identifier>) would
-            // "match" everything and silently disable the accrued-value guard.
-            if (carriesKey(naturalKey, value) && naturalKey.valuesMatch(liveValue, value)) {
-                return value;
-            }
-        }
-        return null;
+        return NaturalKeys.match(desiredContainer, liveValue, valueId);
     }
 
     /** Whether {@code value} actually carries the natural key's constituent item(s) — a discriminating key. */

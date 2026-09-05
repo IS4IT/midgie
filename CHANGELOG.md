@@ -5,6 +5,18 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`deploy` reconciles one object, not one file.** Several files describing one object are now combined into a single desired object and applied in one request. Until now each file was its own apply unit, which cannot compose a list: two files each contributing a `panel` to `SystemConfiguration` produced two PATCHes, and the second replaced what the first had written. midgie warned about that ("last-one-wins") and named `multivalue=merge` as the fix — but merge buys composition at the price of removals, because a value you delete from a file then yields an *empty* delta, so it is neither applied nor reported as drift, and only `--prune` can still find it. Combining first removes the trade entirely: the desired object holds both panels, plain `replace` writes both, and a deleted entry is still a deletion. The clobber warning is gone with the hazard it warned about, and a tree that added `multivalue=merge` only to make its own fragments compose no longer needs it.
+
+  Entries of a multi-valued container are paired by container id, else by the schema's `a:naturalKey` — the same rule the diff already uses to decide whether a value is accrued — so two files that each declare `objectDetailsPage[type=UserType]` produce *one* page carrying both their panels rather than two competing pages. Values that can be paired by neither are appended, with identical ones collapsed, so the same entry written into two files is one entry. Worth noting where this puts natural-key matching: file against file, both sides your own, visible in `--plan`, with nothing accrued at risk — unlike the same matching aimed at a live object.
+
+  Two consequences beyond composition. A **create is atomic**: the whole object is POSTed, instead of POSTing whatever the first file held and patching the rest onto it, so it no longer exists in a partial state in between (and the local projection `--plan` kept in order to model that is gone). And a file that cannot be applied now **fails its whole object** rather than failing alone while its siblings land — one object is either applied or it is not. Result lines, the apply-order table and the plan files are per object accordingly; the apply order lists an object's other files beneath its step.
+
+- **Delete detection compares whole objects.** It worked per file, subtracting anything a surviving sibling still declared; it now compares the union of the files describing an object against the union of the files that described it at the recorded revision, deleted ones included. Same answer for a deleted fragment, and two cases fall out instead of needing to be compensated for: a value **moved between two files** of one object is no longer reported as a removal, and an object whose files all disappeared is still reported whole rather than taken apart value by value. Each removal still names the individual file it came from, since that is what an operator reviewing a prune acts on.
+
 ## [0.9.1] - 2026-09-05
 
 ### Changed

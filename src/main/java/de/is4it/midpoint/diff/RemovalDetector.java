@@ -5,6 +5,7 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -40,14 +41,17 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectType;
  * present then and absent now is one you removed on purpose, whereas a value the server holds but midgie
  * never applied is accrued or someone else's and must be left alone.
  *
- * <p>Last-applied comes from version control: {@code git show <lastRev>:<path>} is exactly the fragment as it
- * was when midgie last deployed it. The removal set is then the <em>delete side</em> of an ordinary
+ * <p>Last-applied comes from version control: {@code git show <lastRev>:<path>} is exactly the file as it was
+ * when midgie last deployed it. The removal set is then the <em>delete side</em> of an ordinary
  * {@code DiffEngine} run with last-applied in the live slot, so no new diff logic is needed.
  *
- * <p>This works per <b>fragment file</b>, which is what makes it correct for objects assembled from several
- * files. Deleting one branding fragment of {@code SystemConfiguration} yields exactly the values that file
- * contributed — the object itself is never a candidate for deletion (it is often
- * {@code indestructible} anyway), and values a sibling fragment still declares are subtracted.
+ * <p>It works per <b>object</b>, on both sides: the union of the files that describe it now against the union
+ * of the files that described it then, deleted ones included. That is what makes it correct for objects
+ * assembled from several files — deleting one branding fragment of {@code SystemConfiguration} yields exactly
+ * the values no surviving file still declares, and a value merely moved between two files of one object never
+ * appears at all, because both sides were combined before they were compared. The object itself is never a
+ * candidate for deletion (it is often {@code indestructible} anyway); one whose every file has gone is
+ * reported as an orphan instead.
  */
 final class RemovalDetector {
 
@@ -146,49 +150,44 @@ final class RemovalDetector {
     }
 
     /**
-     * Values deployed at the recorded revision that {@code units} no longer declare — both from files edited
-     * since (a value dropped out) and from files deleted since (everything they declared).
+     * Values deployed at the recorded revision that {@code units} no longer declare — whether a value was
+     * dropped from a file that is still there, or a whole file was deleted.
      *
-     * @param units the fragments discovered in the tree now
+     * <p>Both sides are <b>whole objects</b>: what the object's files say now, against what the same object's
+     * files said at the recorded revision — including files that have since been deleted. That is what makes
+     * the awkward cases fall out instead of needing compensation. A value moved from one file of an object to
+     * another was never removed and never appears; a deleted fragment contributes exactly the values no
+     * surviving file still declares, because the two sides are unions rather than file pairs.
+     *
+     * @param units the objects discovered in the tree now
      */
-    List<Removal> detect(List<Fragment> units) {
+    List<Removal> detect(List<DeployObject> units) {
         List<Removal> removals = new ArrayList<>();
-        Map<String, List<Fragment>> byIdentity = fragmentsByObject(units);
+        List<LastApplied> lastApplied = lastAppliedObjects(units);
 
-        for (Fragment unit : units) {
-            String relative = git.repoRelative(unit.sourceFile());
-            if (relative == null) {
-                continue; // outside the repository: nothing to compare against
+        for (DeployObject unit : units) {
+            LastApplied previous = claim(lastApplied, identityKeysOf(unit.object()));
+            if (previous == null) {
+                continue; // an object that did not exist at the recorded revision
             }
-            PrismObject<? extends Objectable> lastApplied = parseAt(relative);
-            if (lastApplied == null) {
-                continue; // new file since the last deploy
+            PrismObject<? extends Objectable> before = previous.union();
+            if (before == null) {
+                continue;
             }
-            collect(removals, lastApplied, unit.object(), identityKeyOf(unit.object()), relative,
-                    siblingsOf(byIdentity, unit.object()));
+            collect(removals, before, unit.object(), identityKeyOf(before), previous);
         }
 
-        for (String deleted : deletedFragments(units)) {
-            PrismObject<? extends Objectable> lastApplied = parseAt(deleted);
-            if (lastApplied == null) {
+        for (LastApplied previous : lastApplied) {
+            if (previous.claimed) {
                 continue;
             }
-            String label = identityKeyOf(lastApplied);
-            List<Fragment> siblings = siblingsOf(byIdentity, lastApplied);
-            if (siblings.isEmpty()) {
-                // No fragment declares this object any more. Its values are not individually "removed" — the
-                // whole object left the tree, and taking it apart value by value would strip its name and
-                // leave a mangled object behind. Deleting objects is deliberately out of scope, so say so and
-                // leave it alone.
-                orphaned.add(new Orphan(label, deleted));
-                continue;
+            // Nothing in the tree declares this object any more. Its values are not individually "removed" —
+            // the whole object left, and taking it apart value by value would strip its name and leave a
+            // mangled object behind. Deleting objects is deliberately out of scope, so say so and leave it.
+            PrismObject<? extends Objectable> before = previous.union();
+            if (before != null) {
+                orphaned.add(new Orphan(identityKeyOf(before), previous.sourceLabel()));
             }
-            // A sibling still declares the object, so this fragment's own contribution is a real removal.
-            PrismObject<? extends Objectable> empty = emptyLike(lastApplied);
-            if (empty == null) {
-                continue;
-            }
-            collect(removals, lastApplied, empty, label, deleted, siblings);
         }
 
         LOG.debug("detected {} removal(s) and {} orphaned object(s) against revision {}",
@@ -196,131 +195,98 @@ final class RemovalDetector {
         return removals;
     }
 
-    /** Objects whose every fragment left the tree; reported so the operator can retire them deliberately. */
-    List<Orphan> orphaned() {
-        return orphaned;
-    }
-
     /**
-     * Add the values present in {@code lastApplied} but absent from {@code desired}, skipping any a surviving
-     * fragment of the same object still declares.
+     * One object as it stood at the recorded revision: the files that described it then, and their union.
+     *
+     * <p>Kept as a group rather than a single object because the tree's own layout applies to history too —
+     * an object assembled from three files was three files then as well, and comparing the current object
+     * against any one of them would report the other two's contributions as removed.
      */
-    private void collect(List<Removal> removals, PrismObject<? extends Objectable> lastApplied,
-            PrismObject<? extends Objectable> desired, String objectLabel, String sourceFile,
-            List<Fragment> siblings) {
-        DiffEngine.DiffResult result;
-        try {
-            // last-applied in the live slot: the delete side is "was deployed, no longer declared".
-            result = new DiffEngine(prismContext).diff(desired, lastApplied, EquivalenceStrategy.REAL_VALUE,
-                    DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll());
-        } catch (Exception e) {
-            LOG.trace("could not compare {} against revision {}", sourceFile, lastRevision, e);
-            return;
+    private final class LastApplied {
+
+        private final List<PrismObject<? extends Objectable>> objects = new ArrayList<>();
+        private final List<String> paths = new ArrayList<>();
+        private final Set<String> keys = new LinkedHashSet<>();
+        private boolean claimed;
+        private boolean united;
+        private PrismObject<? extends Objectable> union;
+
+        void add(PrismObject<? extends Objectable> object, String path) {
+            objects.add(object);
+            paths.add(path);
+            keys.addAll(identityKeysOf(object));
         }
-        Class<?> objectClass = lastApplied.getCompileTimeClass();
-        String oid = lastApplied.getOid();
-        String objectName = (lastApplied.getName() != null) ? lastApplied.getName().getOrig() : null;
-        for (ItemDelta<?, ?> mod : result.delta().getModifications()) {
-            if (mod.getValuesToDelete() == null) {
-                continue;
+
+        /** The combined object, or {@code null} when its files contradict each other past combining. */
+        PrismObject<? extends Objectable> union() {
+            if (united) {
+                return union;
             }
-            String path = mod.getPath().toString();
-            if (isUndeletable(mod.getPath(), mod.getDefinition())) {
-                LOG.trace("{} is required and is never a removal candidate ({})", path, sourceFile);
-                continue;
+            united = true;
+            union = combine();
+            return union;
+        }
+
+        private PrismObject<? extends Objectable> combine() {
+            // The OID is an attribute rather than an item, so it does not travel through the union: a file
+            // that names the object without repeating its OID would otherwise produce an unaddressable
+            // "before" side, and every value it declared would read as a removal on an object nothing could
+            // then be pruned from.
+            String oid = null;
+            for (PrismObject<? extends Objectable> object : objects) {
+                if (object.getOid() != null && !object.getOid().isBlank()) {
+                    oid = object.getOid();
+                    break;
+                }
             }
-            for (PrismValue value : mod.getValuesToDelete()) {
-                String rendered = render(value);
-                if (stillDeclaredBy(siblings, mod.getPath(), value)) {
-                    LOG.trace("{} at {} still declared by another fragment; not a removal", rendered, path);
+            List<Fragment> fragments = new ArrayList<>();
+            for (int i = 0; i < objects.size(); i++) {
+                PrismObject<? extends Objectable> object = objects.get(i);
+                if (oid != null && (object.getOid() == null || object.getOid().isBlank())) {
+                    object.setOid(oid);
+                }
+                fragments.add(Fragment.of(object, new File(paths.get(i))));
+            }
+            try {
+                return FragmentUnion.of(fragments);
+            } catch (Exception e) {
+                // Not fatal: history that cannot be combined only costs this object's detection, and
+                // failing the deploy over what a past revision looked like would be the wrong trade.
+                LOG.trace("could not combine {} at revision {}", paths, lastRevision, e);
+                return null;
+            }
+        }
+
+        String sourceLabel() {
+            return (paths.size() == 1) ? paths.get(0) : paths.get(0) + " (+" + (paths.size() - 1) + " more)";
+        }
+
+        /**
+         * Which of this object's files declared {@code value} at {@code path} when it was last deployed.
+         *
+         * <p>The comparison is per object now, but the report is not: "was in role-extra.xml" is what tells
+         * an operator reviewing a prune where the value came from, and naming the whole file set instead
+         * would lose exactly the part they act on. Values are compared with {@code REAL_VALUE} — the same
+         * test the diff uses — never by rendered text.
+         */
+        String sourceOf(ItemPath path, PrismValue value) {
+            ItemPath idFree = path.removeIds();
+            for (int i = 0; i < objects.size(); i++) {
+                List<PrismValue> declared = new ArrayList<>();
+                try {
+                    valuesAt(objects.get(i).getValue(), idFree, declared);
+                } catch (Exception e) {
+                    LOG.trace("could not read {} from {} at revision {}", idFree, paths.get(i), lastRevision, e);
                     continue;
                 }
-                removals.add(new Removal(objectLabel, path, rendered, sourceFile, objectClass, oid,
-                        objectName, mod.getDefinition(), mod.getPath(), value));
-            }
-        }
-    }
-
-    /**
-     * Items that must never be proposed for deletion, however the fragments are laid out. An object's
-     * {@code name} is the case that bites: when a deleted fragment carried {@code <name>} and the surviving
-     * sibling identifies the object by OID alone — a legal and common layout — dismantling the deleted
-     * fragment would put {@code delete name} in the prune delta. midPoint's repository rejects that, failing
-     * the object's whole prune group with an obscure constraint error, and anything that did get through
-     * would leave the object nameless.
-     */
-    private static boolean isUndeletable(ItemPath path, ItemDefinition<?> definition) {
-        ItemPath idFree = path.removeIds();
-        if (idFree.size() == 1 && ObjectType.F_NAME.equivalent(idFree.firstName())) {
-            return true;
-        }
-        return definition != null && definition.isMandatory();
-    }
-
-    /**
-     * The fragments in the tree that describe the same object, indexed under <em>both</em> identity forms.
-     * One object is routinely described by a fragment carrying its OID and another carrying only its name;
-     * indexing by "OID else Type/Name" alone would file those under different keys, so neither would subtract
-     * from the other and a value both declare would be reported as removed — and pruned.
-     */
-    private static Map<String, List<Fragment>> fragmentsByObject(List<Fragment> units) {
-        Map<String, List<Fragment>> byIdentity = new LinkedHashMap<>();
-        for (Fragment unit : units) {
-            for (String key : identityKeysOf(unit.object())) {
-                byIdentity.computeIfAbsent(key, ignored -> new ArrayList<>()).add(unit);
-            }
-        }
-        return byIdentity;
-    }
-
-    /** Every fragment that still describes {@code object}, found under any of its identity forms. */
-    private static List<Fragment> siblingsOf(Map<String, List<Fragment>> byIdentity,
-            PrismObject<? extends Objectable> object) {
-        List<Fragment> siblings = new ArrayList<>();
-        for (String key : identityKeysOf(object)) {
-            for (Fragment candidate : byIdentity.getOrDefault(key, List.of())) {
-                if (!siblings.contains(candidate)) {
-                    siblings.add(candidate);
+                for (PrismValue candidate : declared) {
+                    if (EquivalenceStrategy.REAL_VALUE.equals(candidate, value)) {
+                        return paths.get(i);
+                    }
                 }
             }
+            return sourceLabel(); // a value no single file can be credited with: name them all
         }
-        return siblings;
-    }
-
-    /**
-     * Whether a fragment still in the tree declares this value at this path.
-     *
-     * <p>Asked per removal, against the fragments themselves, rather than by pre-enumerating what each
-     * fragment declares. That pre-enumeration used to diff a fragment against an <em>empty</em> object, which
-     * yields whole-container adds at the top level ({@code deploymentInformation}) while the removal side
-     * recurses into the container ({@code deploymentInformation/headerColor}) — two shapes that can never
-     * compare equal, so no nested value was ever recognised as still declared. Walking the fragment to the
-     * removal's own path removes the asymmetry entirely.
-     *
-     * <p>Values are compared with {@code REAL_VALUE} — the same test the diff itself uses — never by rendered
-     * text, which would match values differing past a truncation point and miss ones differing only in
-     * bookkeeping.
-     */
-    private static boolean stillDeclaredBy(List<Fragment> siblings, ItemPath path, PrismValue value) {
-        ItemPath idFree = path.removeIds();
-        for (Fragment sibling : siblings) {
-            List<PrismValue> declared = new ArrayList<>();
-            try {
-                valuesAt(sibling.object().getValue(), idFree, declared);
-            } catch (Exception e) {
-                // Unknown beats wrong: a fragment we cannot read might well declare the value, and treating
-                // it as "not declared" is what leads --prune to delete something still in the tree.
-                LOG.trace("could not read {} from {}; treating the value as still declared", idFree,
-                        sibling.sourceFile(), e);
-                return true;
-            }
-            for (PrismValue candidate : declared) {
-                if (EquivalenceStrategy.REAL_VALUE.equals(candidate, value)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     /**
@@ -349,18 +315,126 @@ final class RemovalDetector {
         }
     }
 
-    /** Repository-relative fragment paths deleted since the recorded revision. */
-    private List<String> deletedFragments(List<Fragment> units) {
-        List<String> deleted = git.deletedSince(lastRevision);
-        Set<String> present = new LinkedHashSet<>();
-        for (Fragment unit : units) {
-            String relative = git.repoRelative(unit.sourceFile());
-            if (relative != null) {
-                present.add(relative);
+    /**
+     * Every object the tree described at the recorded revision: the files that are still there (read as they
+     * were then) plus the ones deleted since, grouped by identity.
+     */
+    private List<LastApplied> lastAppliedObjects(List<DeployObject> units) {
+        Map<String, LastApplied> byKey = new LinkedHashMap<>();
+        List<LastApplied> groups = new ArrayList<>();
+        for (String path : lastAppliedPaths(units)) {
+            PrismObject<? extends Objectable> object = parseAt(path);
+            if (object == null) {
+                continue; // a file that did not exist yet, or cannot be read as an object
+            }
+            List<String> keys = identityKeysOf(object);
+            LastApplied group = null;
+            for (String key : keys) {
+                group = byKey.get(key);
+                if (group != null) {
+                    break;
+                }
+            }
+            if (group == null) {
+                group = new LastApplied();
+                groups.add(group);
+            }
+            group.add(object, path);
+            // Under every form it identifies itself by, since two files of one object need not agree on
+            // which one they use.
+            for (String key : group.keys) {
+                byKey.put(key, group);
             }
         }
-        deleted.removeIf(present::contains); // a path both "deleted" and present again is not a removal
-        return deleted;
+        return groups;
+    }
+
+    /** The last-applied object sharing any identity form with {@code keys}, marked as claimed. */
+    private static LastApplied claim(List<LastApplied> lastApplied, List<String> keys) {
+        for (LastApplied candidate : lastApplied) {
+            for (String key : keys) {
+                if (candidate.keys.contains(key)) {
+                    candidate.claimed = true;
+                    return candidate;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Repository-relative paths that described objects at the recorded revision: today's plus the deleted. */
+    private List<String> lastAppliedPaths(List<DeployObject> units) {
+        List<String> paths = new ArrayList<>();
+        Set<String> present = new LinkedHashSet<>();
+        for (DeployObject unit : units) {
+            for (File file : unit.sourceFiles()) {
+                String relative = git.repoRelative(file);
+                if (relative != null && present.add(relative)) {
+                    paths.add(relative);
+                }
+            }
+        }
+        for (String deleted : git.deletedSince(lastRevision)) {
+            // A path both "deleted" and present again is not a removal.
+            if (present.add(deleted)) {
+                paths.add(deleted);
+            }
+        }
+        return paths;
+    }
+
+    /** Objects whose every fragment left the tree; reported so the operator can retire them deliberately. */
+    List<Orphan> orphaned() {
+        return orphaned;
+    }
+
+    /** Add the values present in {@code lastApplied} but absent from {@code desired}. */
+    private void collect(List<Removal> removals, PrismObject<? extends Objectable> lastApplied,
+            PrismObject<? extends Objectable> desired, String objectLabel, LastApplied previous) {
+        DiffEngine.DiffResult result;
+        try {
+            // last-applied in the live slot: the delete side is "was deployed, no longer declared".
+            result = new DiffEngine(prismContext).diff(desired, lastApplied, EquivalenceStrategy.REAL_VALUE,
+                    DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll());
+        } catch (Exception e) {
+            LOG.trace("could not compare {} against revision {}", previous.sourceLabel(), lastRevision, e);
+            return;
+        }
+        Class<?> objectClass = lastApplied.getCompileTimeClass();
+        String oid = lastApplied.getOid();
+        String objectName = (lastApplied.getName() != null) ? lastApplied.getName().getOrig() : null;
+        for (ItemDelta<?, ?> mod : result.delta().getModifications()) {
+            if (mod.getValuesToDelete() == null) {
+                continue;
+            }
+            String path = mod.getPath().toString();
+            if (isUndeletable(mod.getPath(), mod.getDefinition())) {
+                LOG.trace("{} is required and is never a removal candidate ({})", path,
+                        previous.sourceLabel());
+                continue;
+            }
+            for (PrismValue value : mod.getValuesToDelete()) {
+                String sourceFile = previous.sourceOf(mod.getPath(), value);
+                removals.add(new Removal(objectLabel, path, render(value), sourceFile, objectClass, oid,
+                        objectName, mod.getDefinition(), mod.getPath(), value));
+            }
+        }
+    }
+
+    /**
+     * Items that must never be proposed for deletion, however the fragments are laid out. An object's
+     * {@code name} is the case that bites: when a deleted fragment carried {@code <name>} and the surviving
+     * sibling identifies the object by OID alone — a legal and common layout — dismantling the deleted
+     * fragment would put {@code delete name} in the prune delta. midPoint's repository rejects that, failing
+     * the object's whole prune group with an obscure constraint error, and anything that did get through
+     * would leave the object nameless.
+     */
+    private static boolean isUndeletable(ItemPath path, ItemDefinition<?> definition) {
+        ItemPath idFree = path.removeIds();
+        if (idFree.size() == 1 && ObjectType.F_NAME.equivalent(idFree.firstName())) {
+            return true;
+        }
+        return definition != null && definition.isMandatory();
     }
 
     private PrismObject<? extends Objectable> parseAt(String repoRelativePath) {
@@ -376,23 +450,10 @@ final class RemovalDetector {
         }
     }
 
-    /** An object of the same type and identity carrying nothing else — the "declares nothing" side. */
-    private PrismObject<? extends Objectable> emptyLike(PrismObject<? extends Objectable> template) {
-        try {
-            PrismObject<? extends Objectable> empty = template.getDefinition().instantiate();
-            empty.setOid(template.getOid());
-            return empty;
-        } catch (Exception e) {
-            LOG.trace("could not instantiate an empty {}", template.getCompileTimeClass(), e);
-            return null;
-        }
-    }
-
     /**
-     * The key both sides of the survivor subtraction must agree on: the OID when there is one, else
-     * {@code Type/Name}. It has to be derived the same way for a fragment in the tree and for one recovered
-     * from git, or an OID-less object's surviving declarations would never match what a deleted fragment
-     * declared and every one of its values would be reported.
+     * The key the report and the prune grouping settle on: the OID when there is one, else {@code Type/Name}.
+     * It has to be derived the same way for an object in the tree and for one recovered from git, or an
+     * OID-less object would never line up with its own history.
      */
     private static String identityKeyOf(PrismObject<? extends Objectable> object) {
         if (object.getOid() != null && !object.getOid().isBlank()) {

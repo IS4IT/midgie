@@ -16,20 +16,26 @@ import java.util.Set;
 
 import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.ItemDefinition;
+import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContainer;
 import com.evolveum.midpoint.prism.PrismContainerValue;
+import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.PrismProperty;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
 /**
  * One logical object to deploy, backed by one or more {@link Fragment}s that share an identity (OID, or
- * type+name). The fragments are kept individually (each is its own apply unit) but treated as one node in
- * the dependency graph. Grouping runs a best-effort consistency check: all fragments must be the same
- * object type, and no single-valued item may be declared with contradicting values across fragments. A
- * multi-valued item declared by more than one fragment is not a contradiction, but — because fragments
- * apply file-by-file and the default is replace — a later PATCH would overwrite the earlier one
- * (last-one-wins), so it is warned about (combine the files, or set a merge policy). The node's outbound
- * dependency edges are the union of its fragments' outbound reference OIDs.
+ * type+name). It is <b>the apply unit</b>: the fragments are combined into a single desired object
+ * ({@link FragmentUnion}) which is reconciled once, so an object described by several files becomes one
+ * PATCH — or one POST — rather than one per file.
+ *
+ * <p>Grouping runs a best-effort consistency check first: all fragments must be the same object type, and no
+ * single-valued item may be declared with contradicting values across fragments. A multi-valued item declared
+ * by more than one fragment needs no check at all — combining is exactly what the union does with it, which
+ * is why the "last-one-wins" warning this class used to emit is gone: the hazard it warned about cannot
+ * happen any more.
+ *
+ * <p>The node's outbound dependency edges are the union of its fragments' outbound reference OIDs.
  */
 final class DeployObject {
 
@@ -37,16 +43,19 @@ final class DeployObject {
 
     private final String identityKey;
     private final List<Fragment> fragments;
+    private final PrismObject<? extends Objectable> object;
     private final String typeName;
     private final String name;
     private final String oid;
     private final String identityLabel;
     private final Set<String> outboundOids;
 
-    private DeployObject(String identityKey, List<Fragment> fragments, String typeName, String name,
-            String oid, String identityLabel, Set<String> outboundOids) {
+    private DeployObject(String identityKey, List<Fragment> fragments,
+            PrismObject<? extends Objectable> object, String typeName, String name, String oid,
+            String identityLabel, Set<String> outboundOids) {
         this.identityKey = identityKey;
         this.fragments = fragments;
+        this.object = object;
         this.typeName = typeName;
         this.name = name;
         this.oid = oid;
@@ -54,33 +63,16 @@ final class DeployObject {
         this.outboundOids = outboundOids;
     }
 
-    /** Group fragments by identity into logical objects, running the per-group consistency check. */
     /**
-     * Whether a merge is <em>already configured</em> for {@code path} on the object being grouped — from the
-     * {@code --policy} file, {@code --multivalue merge}, or a {@code --path} rule.
-     *
-     * <p>Grouping needs to ask, because the cross-fragment clobber warning below names a merge rule as the
-     * fix. Without this it went on saying so after the rule had been added, which is worse than saying
-     * nothing: the operator does what the message asks, sees no change, and stops trusting the message.
-     *
-     * <p>A small interface rather than a {@link Policy} parameter, so grouping does not have to know how a
-     * strategy is resolved — only whether one applies.
+     * One fragment as its own apply unit, for the deployable schema objects: they are ordered among
+     * themselves by {@code xsd:import} rather than by reference, so they never take part in grouping.
      */
-    @FunctionalInterface
-    interface MergeCheck {
-
-        boolean merges(String typeName, String name, String oid, String path);
-
-        /** Nothing is merged — for the callers that group without a strategy in hand (tests, discovery). */
-        MergeCheck NONE = (typeName, name, oid, path) -> false;
+    static DeployObject of(Fragment fragment) throws SchemaException {
+        return build(fragment.identityKey(), List.of(fragment));
     }
 
-    static List<DeployObject> group(List<Fragment> fragments, List<String> warnings) throws SchemaException {
-        return group(fragments, warnings, MergeCheck.NONE);
-    }
-
-    static List<DeployObject> group(List<Fragment> fragments, List<String> warnings, MergeCheck merges)
-            throws SchemaException {
+    /** Group fragments by identity into logical objects, running the per-group consistency check. */
+    static List<DeployObject> group(List<Fragment> fragments) throws SchemaException {
         // One object is routinely described by a fragment carrying its OID and another carrying only its
         // name. Keying purely on "OID else type/name" files those under different keys, making them two
         // objects: the contradiction check and the clobber warning never run between them, nothing that
@@ -100,13 +92,12 @@ final class DeployObject {
         }
         List<DeployObject> objects = new ArrayList<>();
         for (Map.Entry<String, List<Fragment>> entry : byIdentity.entrySet()) {
-            objects.add(build(entry.getKey(), entry.getValue(), warnings, merges));
+            objects.add(build(entry.getKey(), entry.getValue()));
         }
         return objects;
     }
 
-    private static DeployObject build(String key, List<Fragment> group, List<String> warnings,
-            MergeCheck merges) throws SchemaException {
+    private static DeployObject build(String key, List<Fragment> group) throws SchemaException {
         group.sort(Comparator.comparing(fragment -> fragment.sourceFile().getPath()));
         Fragment first = group.get(0);
 
@@ -128,8 +119,6 @@ final class DeployObject {
 
         Map<String, Object> seen = new LinkedHashMap<>();
         Map<String, File> seenIn = new LinkedHashMap<>();
-        Map<String, File> multiSeenIn = new LinkedHashMap<>();
-        Set<String> multiWarned = new LinkedHashSet<>();
         Set<String> outbound = new LinkedHashSet<>();
         for (Fragment fragment : group) {
             Map<String, Object> declared = new LinkedHashMap<>();
@@ -147,36 +136,29 @@ final class DeployObject {
                 }
             }
 
-            // A multi-valued item declared by two fragments is not a contradiction, but file-by-file apply
-            // does not merge them: under the default (replace) the later PATCH overwrites the earlier one.
-            Set<String> multi = new LinkedHashSet<>();
-            collectMultiValued(fragment.object().getValue(), "", multi);
-            for (String path : multi) {
-                File previous = multiSeenIn.putIfAbsent(path, fragment.sourceFile());
-                if (previous == null || !multiWarned.add(path)) {
-                    continue;
-                }
-                // The clobber only happens under replace. A path already set to merge is the fix this very
-                // message recommends, so repeating it there would tell the operator their change did nothing.
-                if (merges.merges(first.typeName(), groupName, groupOid, path)) {
-                    LOG.debug("{}: '{}' is declared by {} and {} but is set to merge, so they combine",
-                            first.identityLabel(), path, previous, fragment.sourceFile());
-                    continue;
-                }
-                warnings.add("object " + first.identityLabel() + ": " + previous + " and "
-                        + fragment.sourceFile() + " both set the multi-valued '" + path + "' — fragments "
-                        + "apply file-by-file, so under the default (replace) a later PATCH overwrites the "
-                        + "earlier one (last-one-wins). Put them in one file, or set '" + path
-                        + " multivalue=merge' in --policy.");
-            }
-
             outbound.addAll(ReferenceCollector.outboundOids(fragment.object()));
         }
         if (groupOid != null) {
             outbound.remove(groupOid);
         }
-        return new DeployObject(key, group, first.typeName(), groupName, groupOid,
+        // Combined only after the consistency check has had its say: a contradiction is a better message
+        // than whatever the union would make of two files that disagree.
+        PrismObject<? extends Objectable> object = FragmentUnion.of(group);
+        if (group.size() > 1) {
+            LOG.debug("object {} is assembled from {} file(s): {}", first.identityLabel(), group.size(),
+                    sourceFilesOf(group));
+        }
+        return new DeployObject(key, group, object, first.typeName(), groupName, groupOid,
                 first.identityLabel(), outbound);
+    }
+
+    /** The files that describe this object, for the messages that have to name all of them. */
+    private static List<File> sourceFilesOf(List<Fragment> group) {
+        List<File> files = new ArrayList<>();
+        for (Fragment fragment : group) {
+            files.add(fragment.sourceFile());
+        }
+        return files;
     }
 
     private static boolean isSet(String value) {
@@ -221,36 +203,45 @@ final class DeployObject {
         }
     }
 
-    /**
-     * Record the paths of multi-valued items (containers or properties) that {@code pcv} declares with at
-     * least one value, descending only through single-valued containers. Two fragments declaring the same
-     * such path clobber under the default replace, which the caller warns about.
-     */
-    private static void collectMultiValued(PrismContainerValue<?> pcv, String prefix, Set<String> out) {
-        for (Item<?, ?> item : pcv.getItems()) {
-            ItemDefinition<?> definition = item.getDefinition();
-            if (definition == null || definition.isOperational() || item.getValues().isEmpty()) {
-                continue;
-            }
-            String path = prefix.isEmpty()
-                    ? item.getElementName().getLocalPart()
-                    : prefix + "/" + item.getElementName().getLocalPart();
-            if (definition.isMultiValue()) {
-                out.add(path);
-            } else if (item instanceof PrismContainer) {
-                for (PrismContainerValue<?> child : ((PrismContainer<?>) item).getValues()) {
-                    collectMultiValued(child, path, out);
-                }
-            }
-        }
-    }
-
     String identityKey() {
         return identityKey;
     }
 
     List<Fragment> fragments() {
         return fragments;
+    }
+
+    /**
+     * The desired object to reconcile: every fragment's contribution combined into one. Identical to the
+     * single fragment's own object when only one file describes this object.
+     */
+    PrismObject<? extends Objectable> object() {
+        return object;
+    }
+
+    /** The files this object is described by, in the order they were read. */
+    List<File> sourceFiles() {
+        return sourceFilesOf(fragments);
+    }
+
+    /**
+     * The object's file(s) in one column's worth of text: the file, or the first of them and how many more
+     * there are. The full list goes in the apply-order table, which has room for it.
+     */
+    String sourceLabel() {
+        List<File> files = sourceFiles();
+        return (files.size() == 1) ? files.get(0).toString()
+                : files.get(0) + " (+" + (files.size() - 1) + " more)";
+    }
+
+    /** The object's {@code Type/Name} path — the identity form the {@code --policy} selectors also use. */
+    String objectPath() {
+        return typeName + "/" + (name != null && !name.isBlank() ? name : "?");
+    }
+
+    /** The OID for the {@code --debug} identity column, or {@code "-"} when the object has none. */
+    String oidLabel() {
+        return (oid != null && !oid.isBlank()) ? oid : "-";
     }
 
     String typeName() {

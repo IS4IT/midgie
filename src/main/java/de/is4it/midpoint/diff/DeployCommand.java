@@ -10,7 +10,6 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -25,7 +24,6 @@ import org.w3c.dom.Element;
 import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
-import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
@@ -45,9 +43,10 @@ import picocli.CommandLine.Parameters;
  * registered so objects using extension attributes parse), then <b>objects</b> (grouped by identity —
  * OID, else type+name — and sorted by outbound reference OIDs).
  *
- * <p>With {@code --url} each unit is reconciled file-by-file (look up current state, diff the fragment
- * {@code --scope present}, PATCH, or POST to create with {@code --create-if-absent}), in that order, so a
- * role is created before the user that references it. {@code --retry} re-applies the failed set until it
+ * <p>With {@code --url} each unit is reconciled in that order — look up current state, diff
+ * ({@code --scope present}), PATCH, or POST to create with {@code --create-if-absent} — so a role is created
+ * before the user that references it. The unit is the <b>object</b>, not the file: an object described by
+ * several files is combined first ({@link FragmentUnion}) and applied once. {@code --retry} re-applies the failed set until it
  * stabilises; {@code --plan <dir>} writes the changes as reviewable files and {@code --apply-plan <dir>}
  * replays them verbatim; {@code --policy <file>} varies the diff strategy per object/item. Writing is gated:
  * a single up-front confirmation by default ({@code --yes}, {@code --confirm-each-apply}, {@code --dry-run}).
@@ -173,9 +172,6 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Plan entries the operator declined under --confirm-each-apply; they are neither applied nor failed. */
     private int declinedEntries;
-
-    /** Which logical object each fragment belongs to, so per-object policy applies to every fragment of it. */
-    private final Map<Fragment, DeployObject> groupOf = new java.util.IdentityHashMap<>();
 
     /** The safety net being accumulated for this run; null when no writing pass will happen. */
     private RollbackPlan rollback;
@@ -328,8 +324,8 @@ public class DeployCommand implements Callable<Integer> {
 
             List<String> warnings = new ArrayList<>(scan.warnings());
             List<String> unreadable = new ArrayList<>();
-            List<DeployObject> objects = DeployObject.group(
-                    parseObjects(prismContext, scan, warnings, unreadable), warnings, this::mergesPath);
+            List<DeployObject> objects =
+                    DeployObject.group(parseObjects(prismContext, scan, warnings, unreadable));
             if (!unreadable.isEmpty()) {
                 // These files say they are midPoint objects and cannot be read. Carrying on would deploy the
                 // rest of the tree and exit 0, so a pipeline goes green with an object missing.
@@ -366,7 +362,7 @@ public class DeployCommand implements Callable<Integer> {
 
             emitWarnings(localSchemas, schemaOrder, objectOrder, warnings);
             Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, matchByName);
-            List<Fragment> units = flatten(schemaOrder, objectOrder);
+            List<DeployObject> units = flatten(schemaOrder, objectOrder);
             LOG.debug("{} apply unit(s); mode={}", units.size(), planDir != null ? "plan" : "apply");
 
             Tracking tracking = resolveTracking(prismContext, client);
@@ -516,7 +512,7 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Values deployed at the recorded revision that the tree no longer declares, or an empty list. */
     private List<RemovalDetector.Removal> findRemovals(PrismContext prismContext, Tracking tracking,
-            List<Fragment> units) {
+            List<DeployObject> units) {
         if (!tracking.canDetect()) {
             return List.of();
         }
@@ -706,52 +702,11 @@ public class DeployCommand implements Callable<Integer> {
                 : revision;
     }
 
-    /**
-     * The strategy for one fragment, resolved against the identity of the <em>object</em> it belongs to.
-     *
-     * <p>Fragments are reconciled one file at a time, but a policy selector names an object. A fragment that
-     * carries only an OID — "add these items to object X" — has no name to match {@code Type/Name} against,
-     * so resolving per fragment silently gave it the CLI baseline while its named sibling got the policy:
-     * one half of an object merging its assignments and the other half replacing them.
-     */
-    /**
-     * Whether {@code path} on this object is already set to merge — asked by grouping before it warns that
-     * two fragments would clobber each other there.
-     *
-     * <p>Resolved the same way the apply does, so every source counts: the {@code --policy} file, a global
-     * {@code --multivalue merge}, and {@code --path} rules. Testing only the policy file would still have
-     * nagged anyone who set merge on the command line.
-     *
-     * <p>It cannot use {@link #strategyFor}, which reads {@code groupOf} — that map is filled from the
-     * result of grouping, so it is empty while grouping runs. The identity is passed in instead, which
-     * grouping has already worked out by the time it asks.
-     */
-    private boolean mergesPath(String typeName, String name, String oid, String path) {
-        if (globalStrategy == null) {
-            return false;   // nothing resolved yet: no strategy to consult, so nothing is merged
-        }
-        StrategyOptions.Resolved resolved = (policy != null)
-                ? policy.resolveFor(typeName, name, oid, globalStrategy)
+    /** The strategy for one object: the CLI flags, with any matching {@code --policy} knob layered on. */
+    private StrategyOptions.Resolved strategyFor(DeployObject unit) {
+        return (policy != null)
+                ? policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy)
                 : globalStrategy;
-        ItemPath itemPath;
-        try {
-            itemPath = ItemPath.fromString(path);
-        } catch (RuntimeException e) {
-            // An unreadable path only costs the suppression, so keep the warning rather than fail the run.
-            LOG.trace("could not read '{}' as an item path while checking the merge strategy", path, e);
-            return false;
-        }
-        return resolved.multiValue.isMerge(itemPath);
-    }
-
-    private StrategyOptions.Resolved strategyFor(Fragment unit) {
-        if (policy == null) {
-            return globalStrategy;
-        }
-        DeployObject group = groupOf.get(unit);
-        return (group != null)
-                ? policy.resolveFor(group.typeName(), group.name(), group.oid(), globalStrategy)
-                : policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy);
     }
 
     /**
@@ -814,25 +769,23 @@ public class DeployCommand implements Callable<Integer> {
                         .thenComparing(DeployObject::identityKey));
     }
 
-    /** The ordered apply units: schema apply-units (SchemaType objects) first, then object fragments. */
-    private List<Fragment> flatten(TopoSort.Result<SchemaFile> schemaOrder,
-            TopoSort.Result<DeployObject> objectOrder) {
-        List<Fragment> units = new ArrayList<>();
+    /**
+     * The ordered apply units: the deployable schema objects first, then the tree's objects — one unit per
+     * object, whatever number of files describe it.
+     */
+    private List<DeployObject> flatten(TopoSort.Result<SchemaFile> schemaOrder,
+            TopoSort.Result<DeployObject> objectOrder) throws SchemaException {
+        List<DeployObject> units = new ArrayList<>();
         for (SchemaFile schema : schemaOrder.ordered()) {
-            units.add(schema.fragment());
+            units.add(DeployObject.of(schema.fragment()));
         }
-        for (DeployObject object : objectOrder.ordered()) {
-            for (Fragment fragment : object.fragments()) {
-                groupOf.put(fragment, object);
-                units.add(fragment);
-            }
-        }
+        units.addAll(objectOrder.ordered());
         return units;
     }
 
     // --- apply ---
 
-    private Integer runApply(Reconciler reconciler, List<Fragment> units) throws Exception {
+    private Integer runApply(Reconciler reconciler, List<DeployObject> units) throws Exception {
         if (dryRun) {
             Tally preview = pass(reconciler, units, true, false);
             emitSummary(preview, true);
@@ -858,7 +811,7 @@ public class DeployCommand implements Callable<Integer> {
             }
         }
         Tally applied = pass(reconciler, units, false, confirmEachApply);
-        List<Fragment> failed = applied.failedUnits;
+        List<DeployObject> failed = applied.failedUnits;
         if (retry && !failed.isEmpty()) {
             // Summarise after the retry rounds, not before: a run whose retries fixed everything used to end
             // on a line saying units had failed while exiting 0.
@@ -878,21 +831,13 @@ public class DeployCommand implements Callable<Integer> {
      * Reconcile every unit in order. When {@code preview} is set, nothing is written. A transport-level
      * failure (auth, connection) aborts; a per-object rejection is recorded and the run continues.
      */
-    private Tally pass(Reconciler reconciler, List<Fragment> units, boolean preview, boolean perUnitPrompt)
+    private Tally pass(Reconciler reconciler, List<DeployObject> units, boolean preview, boolean perUnitPrompt)
             throws Exception {
         Tally tally = new Tally();
-        Map<String, Boolean> wouldCreate = new HashMap<>();
-        for (Fragment unit : units) {
+        for (DeployObject unit : units) {
             try {
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
-
-                // In a preview, a later fragment of an object an earlier fragment would create reads as a
-                // patch. Keyed on the unit's identity, not on outcome.oid: an object being created OID-less
-                // has no OID yet, so every such object would otherwise share the one null key and the
-                // second unrelated create would be mislabelled "after create".
-                boolean afterCreate = preview && outcome.action == Reconciler.Action.CREATE
-                        && wouldCreate.put(unit.identityLabel(), true) != null;
-                Reconciler.Action action = afterCreate ? Reconciler.Action.PATCH : outcome.action;
+                Reconciler.Action action = outcome.action;
 
                 if (!preview && perUnitPrompt
                         && (action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH)) {
@@ -909,7 +854,7 @@ public class DeployCommand implements Callable<Integer> {
                         rollback.recordApplied(action, outcome, affectedOid, unit.identityLabel());
                     }
                 }
-                record(tally, unit, action, outcome, preview, afterCreate);
+                record(tally, unit, action, outcome, preview);
             } catch (Exception e) {
                 if (isFatal(e)) {
                     throw e;
@@ -923,8 +868,8 @@ public class DeployCommand implements Callable<Integer> {
         return tally;
     }
 
-    private void record(Tally tally, Fragment unit, Reconciler.Action action, Reconciler.Outcome outcome,
-            boolean preview, boolean afterCreate) {
+    private void record(Tally tally, DeployObject unit, Reconciler.Action action, Reconciler.Outcome outcome,
+            boolean preview) {
         // Input advisories and the blast radius go to stderr per unit, so a destructive change is visible
         // in the plan before anything is written (and still shows in a real apply).
         for (String warning : outcome.warnings) {
@@ -937,8 +882,8 @@ public class DeployCommand implements Callable<Integer> {
                 break;
             case PATCH:
                 tally.patched++;
-                String detail = afterCreate ? "after create"
-                        : (outcome.changes > 0 ? outcome.changes + " change(s): " : "") + safe(outcome.detail);
+                String detail = (outcome.changes > 0 ? outcome.changes + " change(s): " : "")
+                        + safe(outcome.detail);
                 reportUnit(unit, preview ? "would-patch" : "patched", detail, false);
                 break;
             case IN_SYNC:
@@ -1029,7 +974,7 @@ public class DeployCommand implements Callable<Integer> {
 
     // --- plan (write reviewable files, no server writes) ---
 
-    private Integer runPlan(Reconciler reconciler, List<Fragment> units) throws Exception {
+    private Integer runPlan(Reconciler reconciler, List<DeployObject> units) throws Exception {
         if (PlanStore.isIncomplete(planDir)) {
             // An unfinished plan cannot be replayed anyway, so there is nothing to protect; refusing until
             // the operator deletes it by hand only makes a failed run harder to repeat.
@@ -1044,32 +989,27 @@ public class DeployCommand implements Callable<Integer> {
         // --apply-plan then refuses the partial plan instead of replaying part of the tree as a success.
         PlanStore.markIncomplete(planDir);
         int width = String.valueOf(units.size()).length();
-        Map<String, PrismObject<? extends Objectable>> projected = new HashMap<>();
         Tally tally = new Tally();
         int seq = 0;
-        for (Fragment unit : units) {
+        for (DeployObject unit : units) {
             seq++;
             try {
-                PrismObject<? extends Objectable> desired = unit.object();
-                String key = unit.identityKey();
-                Reconciler.Outcome outcome = projected.containsKey(key)
-                        ? reconciler.planAgainst(desired, projected.get(key), strategyFor(unit))
-                        : reconciler.plan(desired, strategyFor(unit));
+                // One unit per object, so each object is planned once against the server as it stands. The
+                // local projection this used to keep — advanced with each applied delta so that a second
+                // fragment of a to-be-created object became a patch rather than a second create — has
+                // nothing left to answer for now that an object's files are reconciled together.
+                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
 
                 switch (outcome.action) {
                     case CREATE:
                         PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid, unit.name(),
                                 PlanStore.Kind.CREATE, outcome.createBody);
-                        projected.put(key, desired.clone());
                         tally.created++;
                         reportUnit(unit, "would-create", "", false);
                         break;
                     case PATCH:
                         PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid, unit.name(),
                                 PlanStore.Kind.PATCH, outcome.modificationXml);
-                        if (projected.containsKey(key)) {
-                            projected.put(key, applyDelta(projected.get(key), outcome.delta));
-                        }
                         tally.patched++;
                         reportUnit(unit, "would-patch", outcome.changes + " change(s)", false);
                         break;
@@ -1109,14 +1049,6 @@ public class DeployCommand implements Callable<Integer> {
         }
         PlanStore.markComplete(planDir);
         return tally.changed() > 0 ? 1 : 0;
-    }
-
-    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo needs the delta's own object type; matched by construction
-    private static PrismObject<? extends Objectable> applyDelta(PrismObject<? extends Objectable> base,
-            ObjectDelta delta) throws SchemaException {
-        PrismObject clone = base.clone();
-        delta.applyTo(clone);
-        return clone;
     }
 
     // --- apply-plan (replay saved files verbatim) ---
@@ -1310,8 +1242,9 @@ public class DeployCommand implements Callable<Integer> {
     // --- output ---
 
     private void printPlanTable(TopoSort.Result<SchemaFile> schemaOrder, TopoSort.Result<DeployObject> objectOrder) {
-        int steps = schemaOrder.ordered().size()
-                + objectOrder.ordered().stream().mapToInt(object -> object.fragments().size()).sum();
+        // One step per object, not per file: an object described by several files is applied once, so
+        // counting files here would promise more writes than the run will make.
+        int steps = schemaOrder.ordered().size() + objectOrder.ordered().size();
         System.out.println("Apply order (" + steps + (steps == 1 ? " step):" : " steps):"));
 
         Map<String, Integer> schemaSeqByNamespace = new LinkedHashMap<>();
@@ -1329,16 +1262,16 @@ public class DeployCommand implements Callable<Integer> {
         for (DeployObject object : objectOrder.ordered()) {
             List<Integer> needs = object.outboundOids().stream()
                     .map(objectSeqByOid::get).filter(Objects::nonNull).sorted().collect(Collectors.toList());
-            int firstSeq = seq + 1;
-            boolean first = true;
-            for (Fragment fragment : object.fragments()) {
-                seq++;
-                String suffix = first ? needsSuffix(needs) : "   # same object as #" + firstSeq;
-                System.out.println(line(seq, fragment) + suffix);
-                first = false;
+            seq++;
+            System.out.println(line(seq, object) + needsSuffix(needs));
+            // The other files feeding this one step, listed under it: the step is the object, but which
+            // files went into it is exactly what an operator checks the apply order for.
+            List<File> files = object.sourceFiles();
+            for (File extra : files.subList(1, files.size())) {
+                System.out.println(String.format("      + %s", extra));
             }
             if (object.oid() != null) {
-                objectSeqByOid.put(object.oid(), firstSeq);
+                objectSeqByOid.put(object.oid(), seq);
             }
         }
     }
@@ -1373,11 +1306,11 @@ public class DeployCommand implements Callable<Integer> {
                         tally.created, tally.patched, tally.inSync, tally.skipped, tally.failed));
     }
 
-    private void reportUnit(Fragment fragment, String label, String detail, boolean error) {
+    private void reportUnit(DeployObject unit, String label, String detail, boolean error) {
         // source (file) -> target (object): the object path sits last so it reads into the change detail's
         // item path (e.g. SystemConfigurationType/SystemConfiguration  …deploymentInformation/headerColor).
-        report(label, fragment.sourceFile().toString(), verbose() ? fragment.oidLabel() : null,
-                fragment.objectPath(), detail, error);
+        report(label, unit.sourceLabel(), verbose() ? unit.oidLabel() : null,
+                unit.objectPath(), detail, error);
     }
 
     private void reportEntry(PlanStore.Entry entry, String label, String detail, boolean error) {
@@ -1436,11 +1369,19 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     private String line(int seq, Fragment fragment) {
-        StringBuilder out = new StringBuilder(String.format("  %2d  %-44s", seq, fragment.sourceFile().toString()));
+        return line(seq, fragment.sourceFile().toString(), fragment.oidLabel(), fragment.objectPath());
+    }
+
+    private String line(int seq, DeployObject unit) {
+        return line(seq, unit.sourceFiles().get(0).toString(), unit.oidLabel(), unit.objectPath());
+    }
+
+    private String line(int seq, String source, String oidLabel, String objectPath) {
+        StringBuilder out = new StringBuilder(String.format("  %2d  %-44s", seq, source));
         if (verbose()) {
-            out.append(String.format("  %-38s", fragment.oidLabel()));
+            out.append(String.format("  %-38s", oidLabel));
         }
-        return out.append("  ").append(fragment.objectPath()).toString();
+        return out.append("  ").append(objectPath).toString();
     }
 
     private static String needsSuffix(List<Integer> needs) {
@@ -1457,7 +1398,7 @@ public class DeployCommand implements Callable<Integer> {
         int inSync;
         int skipped;
         int failed;
-        final List<Fragment> failedUnits = new ArrayList<>();
+        final List<DeployObject> failedUnits = new ArrayList<>();
 
         int changed() {
             return created + patched;

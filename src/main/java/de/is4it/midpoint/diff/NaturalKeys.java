@@ -80,6 +80,47 @@ final class NaturalKeys {
         }
     }
 
+    /**
+     * The value of {@code container} that {@code candidate} refers to — matched <b>by container id</b>, or,
+     * when that finds nothing, <b>by the schema's natural key</b>.
+     *
+     * <p>The one pairing rule, shared by everything that has to decide "are these two container values the
+     * same entry?": the diff's accrued-value guard asking whether desired declares the value being edited,
+     * and {@link FragmentUnion} asking whether two files describe the same entry of a list. Both need the
+     * same answer, and a second implementation of it would drift in the direction that silently combines or
+     * silently duplicates.
+     *
+     * <p>{@code candidateId} is passed separately because the callers know it differently: the union reads it
+     * off the value, while the diff takes it from a delta path segment and may hold no value at all.
+     *
+     * @return the matching value, or {@code null} when the container holds no counterpart
+     */
+    static PrismContainerValue<?> match(PrismContainer<?> container, PrismContainerValue<?> candidate,
+            Long candidateId) {
+        if (container == null) {
+            return null;
+        }
+        if (candidateId != null) {
+            for (PrismContainerValue<?> value : container.getValues()) {
+                if (candidateId.equals(value.getId())) {
+                    return value;
+                }
+            }
+        }
+        NaturalKeyDefinition key = of(container);
+        // Both sides must carry the key, else the comparison is vacuous: a key absent from both values (an
+        // assignment with no <identifier>) would "match" everything, combining unrelated entries.
+        if (candidate == null || key == null || !carries(key, candidate)) {
+            return null;
+        }
+        for (PrismContainerValue<?> value : container.getValues()) {
+            if (carries(key, value) && key.valuesMatch(candidate, value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     /** The key's constituent names, for a message: {@code "identifier"}, {@code "type + connectorRef"}. */
     static String names(PrismContainer<?> container) {
         ItemDefinition<?> definition = (container != null) ? container.getDefinition() : null;

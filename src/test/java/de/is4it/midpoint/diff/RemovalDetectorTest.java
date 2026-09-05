@@ -114,8 +114,8 @@ class RemovalDetectorTest {
         run(dir, "git", "commit", "-qm", "delete the only fragment");
 
         RemovalDetector detector = new RemovalDetector(prismContext, GitRevision.of(dir.toFile()), first);
-        List<RemovalDetector.Removal> removals = detector.detect(
-                List.of(Fragment.of(prismContext.parseObject(other.toFile()), other.toFile())));
+        List<RemovalDetector.Removal> removals = detector.detect(DeployObject.group(
+                List.of(Fragment.of(prismContext.parseObject(other.toFile()), other.toFile()))));
 
         assertTrue(removals.isEmpty(), "an orphaned object must not be taken apart value by value: " + removals);
         assertFalse(removals.stream().anyMatch(r -> r.path.contains("name")),
@@ -234,11 +234,14 @@ class RemovalDetectorTest {
     /** Run detection for the files currently present, comparing against {@code revision}. */
     private static List<RemovalDetector.Removal> detect(Path dir, String revision, Path... present)
             throws Exception {
-        java.util.List<Fragment> units = new java.util.ArrayList<>();
+        java.util.List<Fragment> fragments = new java.util.ArrayList<>();
         for (Path file : present) {
-            units.add(Fragment.of(prismContext.parseObject(file.toFile()), file.toFile()));
+            fragments.add(Fragment.of(prismContext.parseObject(file.toFile()), file.toFile()));
         }
-        return new RemovalDetector(prismContext, GitRevision.of(dir.toFile()), revision).detect(units);
+        // Grouped exactly as deploy groups them: detection compares whole objects, so files describing one
+        // object have to arrive as one unit here too.
+        return new RemovalDetector(prismContext, GitRevision.of(dir.toFile()), revision)
+                .detect(DeployObject.group(fragments));
     }
 
     private static String role(String body) {

@@ -9,14 +9,18 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
+import javax.xml.namespace.QName;
+
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.PrismContext;
+import com.evolveum.midpoint.prism.PrismValue;
+import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Grouping fragments into logical objects. The interesting case is a single object described by files that
@@ -38,18 +42,17 @@ class DeployObjectTest {
     @Test
     void aFragmentThatOmitsTheOidJoinsTheObjectItNames() throws Exception {
         // Two files, one object. Keyed on "OID else type/name" they land under different keys and become two
-        // objects: the contradiction check and the multi-valued clobber warning never run between them, the
-        // OID-less half gets no inbound dependency edge, and at apply time it is skipped as "no oid".
-        List<String> warnings = new ArrayList<>();
+        // objects: the contradiction check never runs between them, they are never combined, the OID-less
+        // half gets no inbound dependency edge, and at apply time it is skipped as "no oid".
         List<DeployObject> objects = DeployObject.group(List.of(
                 fragment("with-oid.xml", "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
                         + "  <name>Manager</name>\n  <description>defined here</description>\n</role>"),
                 fragment("no-oid.xml", "<role xmlns=\"" + NS + "\">\n"
-                        + "  <name>Manager</name>\n  <subtype>added here</subtype>\n</role>")), warnings);
+                        + "  <name>Manager</name>\n  <subtype>added here</subtype>\n</role>")));
 
         assertEquals(1, objects.size(), "both files describe one object: " + objects);
         DeployObject object = objects.get(0);
-        assertEquals(2, object.fragments().size(), "and both are kept as apply units");
+        assertEquals(2, object.fragments().size(), "and both are kept as its source files");
         assertEquals(OID, object.oid(), "the group is addressed by the OID one of them carries");
         assertEquals("Manager", object.name());
         for (Fragment fragment : object.fragments()) {
@@ -59,28 +62,38 @@ class DeployObjectTest {
     }
 
     @Test
-    void theClobberWarningNowSeesBothHalvesOfSuchAnObject() throws Exception {
-        // The warning exists because fragments apply file-by-file and replace is the default, so the later
-        // PATCH overwrites the earlier one. Split across two identity forms it never fired.
-        List<String> warnings = new ArrayList<>();
-        DeployObject.group(List.of(
+    void bothHalvesOfSuchAnObjectAreCombined() throws Exception {
+        // What both halves declare of one multi-valued item has to end up in the object that is applied.
+        // Reconciled file by file this was the "last-one-wins" clobber the grouping used to warn about, and
+        // it was invisible when the two files identified the object differently — one by OID, one by name.
+        List<DeployObject> objects = DeployObject.group(List.of(
                 fragment("a.xml", "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n  <name>Manager</name>\n"
                         + "  <subtype>one</subtype>\n</role>"),
                 fragment("b.xml", "<role xmlns=\"" + NS + "\">\n  <name>Manager</name>\n"
-                        + "  <subtype>two</subtype>\n</role>")), warnings);
+                        + "  <subtype>two</subtype>\n</role>")));
 
-        assertTrue(warnings.stream().anyMatch(w -> w.contains("subtype")),
-                "the multi-valued clobber must be warned about: " + warnings);
+        assertEquals(1, objects.size(), "one object: " + objects);
+        assertEquals(List.of("one", "two"), subtypes(objects.get(0)),
+                "both files' values must survive into the object that is applied");
     }
 
     @Test
     void unrelatedObjectsStayApart() throws Exception {
-        List<String> warnings = new ArrayList<>();
         List<DeployObject> objects = DeployObject.group(List.of(
                 fragment("a.xml", "<role xmlns=\"" + NS + "\">\n  <name>Manager</name>\n</role>"),
-                fragment("b.xml", "<role xmlns=\"" + NS + "\">\n  <name>Auditor</name>\n</role>")), warnings);
+                fragment("b.xml", "<role xmlns=\"" + NS + "\">\n  <name>Auditor</name>\n</role>")));
 
         assertEquals(2, objects.size(), "different names are different objects: " + objects);
+    }
+
+    private static List<String> subtypes(DeployObject object) {
+        List<String> values = new ArrayList<>();
+        Item<?, ?> item = object.object().findItem(ItemPath.create(new QName(NS, "subtype")));
+        for (PrismValue value : (item != null) ? item.getValues() : List.<PrismValue>of()) {
+            Object real = value.getRealValue();   // typed as <T> T, so String.valueOf needs an Object here
+            values.add(String.valueOf(real));
+        }
+        return values;
     }
 
     private static Fragment fragment(String fileName, String xml) throws Exception {

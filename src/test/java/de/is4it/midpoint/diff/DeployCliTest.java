@@ -40,7 +40,8 @@ class DeployCliTest {
     void printsTwoTierApplyOrder() {
         Result r = run("deploy", TREE);
         assertEquals(0, r.exit, r.err);
-        assertTrue(r.out.contains("Apply order (8 steps)"), r.out);
+        // Seven, not eight: the two files sharing the Manager OID are one object and so one step.
+        assertTrue(r.out.contains("Apply order (7 steps)"), r.out);
 
         // Schema tier: base sorts before the lcm schema that imports it, and both before any object.
         assertOrder(r.out, "base-schema", "lcm-schema");
@@ -51,8 +52,8 @@ class DeployCliTest {
         assertOrder(r.out, "manager", "ajones.xml");
         assertOrder(r.out, "root.xml", "jsmith.xml");
 
-        // Two files share the Manager OID: grouped as one object (consecutive, marked), applied individually.
-        assertTrue(r.out.contains("same object as"), r.out);
+        // Two files share the Manager OID: one object, one step, with the second file listed under it.
+        assertTrue(r.out.contains("+ src/test/resources/deploy/roles/manager.xml"), r.out);
         // A raw .xsd is registered but not deployed; a non-object file is skipped with a warning.
         assertTrue(r.err.contains("custom.xsd"), r.err);
         assertTrue(r.err.contains("notes.xml"), r.err);
@@ -75,7 +76,8 @@ class DeployCliTest {
         write(dir, "b.xml", roleNoOid("Shared", "<subtype>two</subtype>"));
         Result r = run("deploy", dir.toString());
         assertEquals(0, r.exit, r.err);
-        assertTrue(r.out.contains("same object as"), "same type+name are one object:\n" + r.out);
+        assertTrue(r.out.contains("Apply order (1 step)"), "same type+name are one object:\n" + r.out);
+        assertTrue(r.out.contains("+ " + dir.resolve("b.xml")), "fed by both files:\n" + r.out);
     }
 
     @Test
@@ -84,7 +86,7 @@ class DeployCliTest {
         write(dir, "b.xml", roleNoOid("Other", ""));
         Result r = run("deploy", dir.toString());
         assertEquals(0, r.exit, r.err);
-        assertFalse(r.out.contains("same object as"), "different names are distinct objects:\n" + r.out);
+        assertTrue(r.out.contains("Apply order (2 steps)"), "different names are distinct objects:\n" + r.out);
     }
 
     @Test
@@ -97,9 +99,10 @@ class DeployCliTest {
     }
 
     @Test
-    void multiValuedFragmentsSharingAContainerAreWarned(@TempDir Path dir) throws IOException {
-        // Two fragments of one role each add to the multi-valued <inducement> — not a contradiction, but
-        // file-by-file apply would clobber it under the default (replace), so it is warned (not fatal).
+    void multiValuedFragmentsSharingAContainerAreOneUnitNotAWarning(@TempDir Path dir) throws IOException {
+        // Two fragments of one role each add to the multi-valued <inducement>. Reconciled file by file this
+        // was the "last-one-wins" clobber, warned about and worked around with multivalue=merge; the object
+        // is now applied once, with both files' contributions in it, so there is nothing left to warn about.
         String oid = "11111111-0000-0000-0e00-000000000004";
         write(dir, "a.xml", role(oid, "Shared",
                 "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fa\" type=\"c:RoleType\"/></inducement>"));
@@ -107,62 +110,11 @@ class DeployCliTest {
                 "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fb\" type=\"c:RoleType\"/></inducement>"));
         Result r = run("deploy", dir.toString());
         assertEquals(0, r.exit, r.err);
-        assertTrue(r.err.contains("multi-valued 'inducement'"), r.err);
-        assertTrue(r.err.contains("last-one-wins") && r.err.contains("multivalue=merge"), r.err);
-    }
-
-    @Test
-    void theClobberWarningStopsOnceThatPathIsSetToMerge(@TempDir Path dir) throws IOException {
-        // The warning names a merge rule as the fix, so it has to notice when the fix is in place. It did
-        // not: grouping never saw the policy, so the message went on repeating after the rule was added —
-        // which teaches the operator that midgie's advice does not work.
-        String oid = "11111111-0000-0000-0e00-000000000014";
-        write(dir, "a.xml", role(oid, "Shared",
-                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fa\" type=\"c:RoleType\"/></inducement>"));
-        write(dir, "b.xml", role(oid, "Shared",
-                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fb\" type=\"c:RoleType\"/></inducement>"));
-        write(dir, "midgie.policy", "RoleType/Shared/inducement  multivalue=merge\n");
-
-        Result warned = run("deploy", dir.toString());
-        assertTrue(warned.err.contains("multi-valued 'inducement'"),
-                "without a policy the warning still fires: " + warned.err);
-
-        Result quiet = run("deploy", dir.toString(), "--policy", dir.resolve("midgie.policy").toString(),
-                "--url", DEAD_HOST, "-u", "u", "-p", "p", "--dry-run");
-        assertFalse(quiet.err.contains("multi-valued 'inducement'"),
-                "the rule the message asked for must silence it:\n" + quiet.err);
-    }
-
-    @Test
-    void theClobberWarningAlsoRespectsMergeSetOnTheCommandLine(@TempDir Path dir) throws IOException {
-        // --multivalue and --path are the other ways to set merge; testing only the policy file would have
-        // left anyone using those still being nagged.
-        String oid = "11111111-0000-0000-0e00-000000000015";
-        write(dir, "a.xml", role(oid, "Shared",
-                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fa\" type=\"c:RoleType\"/></inducement>"));
-        write(dir, "b.xml", role(oid, "Shared",
-                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fb\" type=\"c:RoleType\"/></inducement>"));
-
-        Result r = run("deploy", dir.toString(), "--path", "inducement=merge");
-
-        assertFalse(r.err.contains("multi-valued 'inducement'"), r.err);
-    }
-
-    @Test
-    void aPathTheMergeRuleDoesNotCoverIsStillWarnedAbout(@TempDir Path dir) throws IOException {
-        // Suppression is per path, not per object: a rule for one container must not silence another.
-        String oid = "11111111-0000-0000-0e00-000000000016";
-        write(dir, "a.xml", role(oid, "Shared",
-                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fa\" type=\"c:RoleType\"/></inducement>"
-                        + "<subtype>one</subtype>"));
-        write(dir, "b.xml", role(oid, "Shared",
-                "<inducement><targetRef oid=\"11111111-0000-0000-0e00-0000000000fb\" type=\"c:RoleType\"/></inducement>"
-                        + "<subtype>two</subtype>"));
-
-        Result r = run("deploy", dir.toString(), "--path", "inducement=merge");
-
-        assertFalse(r.err.contains("multi-valued 'inducement'"), "covered: " + r.err);
-        assertTrue(r.err.contains("multi-valued 'subtype'"), "not covered, so still warned: " + r.err);
+        assertFalse(r.err.contains("last-one-wins"), "the clobber cannot happen any more: " + r.err);
+        assertFalse(r.err.contains("multivalue=merge"), "so the workaround is not advised: " + r.err);
+        assertTrue(r.out.contains("Apply order (1 step)"), "one object, one step:\n" + r.out);
+        assertTrue(r.out.contains("+ " + dir.resolve("b.xml")),
+                "and the other file feeding it is named under it:\n" + r.out);
     }
 
     @Test
