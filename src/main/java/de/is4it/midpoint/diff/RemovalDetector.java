@@ -494,12 +494,34 @@ final class RemovalDetector {
      * truncated mid-token, with the identifying part off the end. Its own items are named instead.
      */
     private static String render(PrismValue value) {
+        try {
+            return describe(value);
+        } catch (RuntimeException e) {
+            // A preview is never worth a failed run. This is the report of what is about to be deleted; if
+            // one value cannot be summarised, the operator is better served by the path and the count than
+            // by an aborted deploy.
+            LOG.trace("could not render a removed value", e);
+            return "";
+        }
+    }
+
+    private static String describe(PrismValue value) {
         if (value instanceof PrismContainerValue<?> container) {
             List<String> parts = new ArrayList<>();
             for (Item<?, ?> item : container.getItems()) {
-                Object real = item.getRealValue();
-                if (real != null) {
-                    parts.add(item.getElementName().getLocalPart() + "=" + abbreviate(String.valueOf(real)));
+                String name = item.getElementName().getLocalPart();
+                // Only a single-valued item has "the" real value. Asking a multi-valued one throws
+                // ("Attempt to get single value from a multivalued container panel"), which is how a GUI
+                // page holding two panels used to kill the whole run from inside this report — so the count
+                // is shown instead, which is what matters when reviewing a deletion anyway.
+                int count = item.getValues().size();
+                if (count == 1) {
+                    Object real = item.getRealValue();
+                    if (real != null) {
+                        parts.add(name + "=" + abbreviate(String.valueOf(real)));
+                    }
+                } else if (count > 1) {
+                    parts.add(name + " ×" + count);
                 }
                 if (parts.size() == 4) {
                     parts.add("…");

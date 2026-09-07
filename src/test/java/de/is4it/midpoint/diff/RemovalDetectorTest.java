@@ -229,6 +229,34 @@ class RemovalDetectorTest {
         assertEquals(OID, delta.getOid());
     }
 
+    @Test
+    void aRemovedValueHoldingAMultiValuedContainerIsStillReported(@TempDir Path dir) throws Exception {
+        // Each removal is reported with a one-line preview of the value. Building it used to ask every item
+        // of that value for "the" real value, which prism refuses for a multi-valued one — so dropping a GUI
+        // details page that held two panels threw "Attempt to get single value from a multivalued container
+        // panel" out of findRemovals and killed the whole deploy, before anything was applied and even under
+        // --dry-run. A preview must never be able to do that.
+        Path file = dir.resolve("sysconfig.xml");
+        Files.writeString(file, sysconfig("<adminGuiConfiguration><objectDetails><objectDetailsPage>"
+                + "<type>UserType</type>"
+                + "<panel><identifier>basic</identifier></panel>"
+                + "<panel><identifier>extra</identifier></panel>"
+                + "</objectDetailsPage></objectDetails></adminGuiConfiguration>"), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, sysconfig("<adminGuiConfiguration><objectDetails/></adminGuiConfiguration>"),
+                StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+
+        assertEquals(1, removals.size(), "the dropped page is one removal: " + removals);
+        RemovalDetector.Removal removal = removals.get(0);
+        assertTrue(removal.path.contains("objectDetailsPage"), removal.toString());
+        assertTrue(removal.value.contains("type=UserType"), "the preview names what it can: " + removal);
+        assertTrue(removal.value.contains("panel ×2"),
+                "and says how many of what it cannot: " + removal);
+    }
+
     // --- helpers ---
 
     /** Run detection for the files currently present, comparing against {@code revision}. */

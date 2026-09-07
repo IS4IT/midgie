@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The removal report no longer fails the run it is describing.** Every detected removal is listed with a one-line preview of the value, and building that preview asked each item of the value for "the" real value — which prism refuses for a multi-valued one. So a `SystemConfiguration` that dropped a GUI details page holding two `panel`s died with a bare `midgie: Attempt to get single value from a multivalued container panel`, thrown out of delete detection before anything was applied — under `--dry-run` too, since the removals are computed either way. A cosmetic string could stop a deploy. It now shows what it can (`{type=UserType, panel ×2}`), giving the count for multi-valued items rather than demanding a single value from them, and the whole preview is guarded so that no future value can turn the report into a failed run. Anything the guard catches is reported as an empty preview beside its path and count.
+
 ## [0.10.1] - 2026-09-07
 
 ### Fixed
