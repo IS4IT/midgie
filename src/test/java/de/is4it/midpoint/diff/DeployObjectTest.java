@@ -78,6 +78,20 @@ class DeployObjectTest {
     }
 
     @Test
+    void aSingleFragmentBecomesItsOwnUnit() throws Exception {
+        // How a deployable schema object reaches the apply loop: it never groups, so it is wrapped one at a
+        // time. The list it arrives in is immutable, which the group sort used to try to reorder in place —
+        // an UnsupportedOperationException that failed every live deploy of a tree holding extension schema.
+        Fragment only = fragment("schema.xml", "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
+                + "  <name>Alone</name>\n</role>");
+
+        DeployObject unit = DeployObject.of(only);
+
+        assertEquals(OID, unit.oid());
+        assertEquals(List.of(only), unit.fragments());
+    }
+
+    @Test
     void unrelatedObjectsStayApart() throws Exception {
         List<DeployObject> objects = DeployObject.group(List.of(
                 fragment("a.xml", "<role xmlns=\"" + NS + "\">\n  <name>Manager</name>\n</role>"),

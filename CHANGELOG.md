@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`deploy --url` no longer dies on a tree that carries extension schema.** 0.10.0 made the apply unit the object rather than the file, and a deployable `SchemaType` object is the one unit that does not come out of grouping — it is wrapped one at a time, in an immutable single-element list. The group's file-order sort then tried to reorder that list in place, so every live deploy of a tree holding extension schema failed with a bare `java.lang.UnsupportedOperationException` while assembling its units, before the first request reached the server. Nothing was written, and nothing was at risk; the run simply could not start. Offline runs were unaffected — they print the apply order and return before the units are built, which is precisely why the tests missed it: the committed fixture tree holds two `SchemaType` objects but is only ever deployed offline, while the live tests build their own trees without any. The sort now runs on a copy, so `build` no longer rearranges a list it does not own, and both a unit test and a stub-server deploy of a tree containing a schema object cover the path.
+
 ## [0.10.0] - 2026-09-05
 
 ### Changed

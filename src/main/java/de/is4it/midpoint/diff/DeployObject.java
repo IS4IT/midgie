@@ -97,7 +97,12 @@ final class DeployObject {
         return objects;
     }
 
-    private static DeployObject build(String key, List<Fragment> group) throws SchemaException {
+    private static DeployObject build(String key, List<Fragment> fragments) throws SchemaException {
+        // Ordered on a copy rather than in place: the caller's list is not ours to rearrange, and one of
+        // them cannot be — a deployable schema object arrives from {@link #of} as a single-fragment
+        // List.of(...), which threw UnsupportedOperationException on the sort and failed every live deploy
+        // of a tree holding extension schema.
+        List<Fragment> group = new ArrayList<>(fragments);
         group.sort(Comparator.comparing(fragment -> fragment.sourceFile().getPath()));
         Fragment first = group.get(0);
 

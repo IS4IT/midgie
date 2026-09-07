@@ -57,6 +57,7 @@ class DeployUnionTest {
     private String host;
     private final List<String> patched = new CopyOnWriteArrayList<>();
     private final List<String> created = new CopyOnWriteArrayList<>();
+    private final List<String> createdTypes = new CopyOnWriteArrayList<>();
     private volatile boolean objectExists = true;
 
     @BeforeAll
@@ -68,6 +69,7 @@ class DeployUnionTest {
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/midpoint/ws/rest/roles", this::handle);
+        server.createContext("/midpoint/ws/rest/schemas", this::handle);
         server.start();
         host = "http://127.0.0.1:" + server.getAddress().getPort() + "/midpoint";
     }
@@ -103,7 +105,36 @@ class DeployUnionTest {
                 "the created object carries both files: " + created);
     }
 
+    @Test
+    void aTreeHoldingADeployableSchemaObjectReachesTheApplyLoop(@TempDir Path dir) throws Exception {
+        // A deployable SchemaType object is the one apply unit that does not come out of grouping: it is
+        // wrapped one at a time, in an immutable single-fragment list. The group sort tried to reorder that
+        // list in place, so every live deploy of a tree holding extension schema died with an
+        // UnsupportedOperationException before its first request. Offline runs never showed it — they print
+        // the apply order and return before the units are assembled — and no live test deployed such a tree.
+        objectExists = false;
+        writeFragments(dir);
+        Files.writeString(dir.resolve("schema.xml"), schemaObject(), StandardCharsets.UTF_8);
+
+        assertEquals(0, deploy(dir, "--create-if-absent"), "the deploy should succeed");
+
+        assertTrue(createdTypes.contains("schemas"), "the schema object is applied: " + createdTypes);
+        assertTrue(createdTypes.contains("roles"), "and so is the object beside it: " + createdTypes);
+    }
+
     // --- helpers ---
+
+    /** An exported extension schema — a SchemaType object, so a deployable unit in its own right. */
+    private static String schemaObject() {
+        return "<schema xmlns=\"" + NS + "\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" "
+                + "oid=\"dddddddd-0000-0000-0f00-000000000004\">"
+                + "<name>union-test-schema</name>"
+                + "<definition><xsd:schema elementFormDefault=\"qualified\" "
+                + "targetNamespace=\"http://is4it.de/midpoint/v1/unionTest\">"
+                + "<xsd:complexType name=\"UnionThingType\">"
+                + "<xsd:sequence><xsd:element name=\"label\" type=\"xsd:string\"/></xsd:sequence>"
+                + "</xsd:complexType></xsd:schema></definition></schema>";
+    }
 
     private static void writeFragments(Path dir) throws IOException {
         Files.writeString(dir.resolve("a.xml"), role("<subtype>from-a</subtype>"), StandardCharsets.UTF_8);
@@ -139,6 +170,7 @@ class DeployUnionTest {
             respond(exchange, 200, objectExists ? searchResult() : emptyResult());
         } else if ("POST".equals(method)) {
             created.add(body);
+            createdTypes.add(path.substring(path.lastIndexOf('/') + 1));
             exchange.getResponseHeaders().add("Location", host + "/ws/rest/roles/" + OID);
             respond(exchange, 201, "");
         } else if ("PATCH".equals(method)) {
