@@ -181,6 +181,12 @@ public class DiffCommand implements Callable<Integer> {
                     System.err.println("midgie: note: '" + path + "' is a smart reference; the OID midPoint "
                             + "resolved its filter to is left in place.");
                 }
+                for (String path : result.incompleteSkippedPaths()) {
+                    System.err.println("midgie: warning: the server did not return '" + path
+                            + "' (it came back incomplete), so its values are unknown, not empty — midgie "
+                            + "will not patch an item it cannot see. Check the account's read authorization "
+                            + "for that item.");
+                }
                 for (String path : result.protectedSkippedPaths()) {
                     System.err.println("midgie: note: skipped protected value at '" + path
                             + "' — ciphertext changes on every fetch and is not safely diffable.");

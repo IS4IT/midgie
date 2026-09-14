@@ -546,6 +546,48 @@ class DiffCommandTest {
 
     // --- helpers ---
 
+    @Test
+    void anItemTheServerDidNotSendIsNotDiffedAsEmpty(@TempDir Path dir) throws Exception {
+        // midPoint does not return a LookupTableType's rows unless asked, and says so: <row incomplete="true"/>.
+        // Read as written that is "the table has no rows", so every run emitted the whole table as an
+        // addition and never converged — and against a table someone had added to, replace would have
+        // deleted rows midgie never saw. Unknown is not empty: the item is left out of the delta and named.
+        File live = write(dir, "live.xml", lookupTable("<row incomplete=\"true\"/>"));
+        File desired = write(dir, "desired.xml", lookupTable(
+                "<row><key>active</key><label>Aktiv</label></row>"
+                        + "<row><key>expired</key><label>Abgelaufen</label></row>"));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+
+        assertFalse(touchesItem(result, "row"), "an unsent item must not be diffed: " + paths(result));
+        assertTrue(result.incompleteSkippedPaths().stream().anyMatch(p -> p.contains("row")),
+                "and it must be reported: " + result.incompleteSkippedPaths());
+    }
+
+    @Test
+    void aCompleteLookupTableStillDiffsNormally(@TempDir Path dir) throws Exception {
+        // The other half: once the rows are actually there, nothing is suppressed. Over-suppressing would
+        // turn the fix into "midgie never manages lookup tables at all".
+        File live = write(dir, "live.xml", lookupTable(
+                "<row id=\"2\"><key>active</key><label>Aktiv</label></row>"
+                        + "<row id=\"3\"><key>expired</key><label>Abgelaufen</label></row>"));
+        File desired = write(dir, "desired.xml", lookupTable(
+                "<row><key>active</key><label>Aktiv</label></row>"
+                        + "<row><key>expired</key><label>Abgelaufen (LOGA)</label></row>"));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+
+        assertTrue(result.incompleteSkippedPaths().isEmpty(), "nothing to skip: "
+                + result.incompleteSkippedPaths());
+        // row is keyed by <key>, which the file fills in, so auto pairs the entries and edits in place.
+        assertTrue(paths(result).stream().anyMatch(p -> p.contains("label")),
+                "the changed label must surface as a deep edit: " + paths(result));
+    }
+
     // ---- --equivalence auto -------------------------------------------------------------------------
 
     @Test
@@ -1065,6 +1107,13 @@ class DiffCommandTest {
                 + "  <description>" + description + "</description>\n"
                 + extra
                 + "</role>";
+    }
+
+    /** A lookup table; {@code rows} is the raw row markup, so a test can write {@code incomplete="true"}. */
+    private static String lookupTable(String rows) {
+        return "<lookupTable xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"88888888-0000-0000-0000-00000000bbbb\">\n"
+                + "  <name>zz-lookup</name>\n  " + rows + "\n</lookupTable>";
     }
 
     private static String user(String... assignments) {

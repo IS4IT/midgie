@@ -89,6 +89,7 @@ the midPoint source tree.
   those it can reach, and the union catches the ones only visible once two entries have been paired (a
   contradiction *inside* a keyed container value), since picking one would make the result depend on the order
   the files were read in.
+- *Items the server withholds* — midPoint does not return some items unless asked, marking them `incomplete="true"`; `LookupTableType/row` is the case that bites, `jpegPhoto` another. "Not sent" must never be read as "empty", or a lookup table re-proposes its whole contents every run and rows nobody can see are quietly in line for deletion. Which items those are is not in the bundled schema (midPoint decides it in its repository layer), so `LiveLookup` follows the server's own marker: an object that comes back carrying one is re-read with `?include=<path>`, and only such an object pays the second request. Anything still incomplete after that is one the server will not give up at all, and `DiffEngine.stripIncompleteItems` drops its item deltas and reports the paths — the same shape as protected values, for the same reason.
 - *Delete detection (three-way merge)* — a two-way diff cannot express a removal: a value dropped from a
   desired file simply stops being mentioned, so under `merge` the delta is empty and the value survives while
   `diff` reports no differences. `deploy` therefore also compares desired against **last-applied**, which for

@@ -5,6 +5,18 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A lookup table now deploys idempotently, and rows midgie cannot see are no longer treated as deleted.** midPoint does not return a `LookupTableType`'s rows unless they are asked for: a plain read gives back `<row incomplete="true"/>`, meaning "there are rows, I am not sending them". midgie read that as "the table has no rows", so every run proposed the whole table again — `would-patch … add row` on a tree that had just been deployed, for ever, with `diff` never reporting in-sync and the CI exit-code gate stuck on 1. The rows were the one thing a lookup table is for, so this made the type effectively undeployable.
+
+  The quiet half was worse. Against a table an administrator had added a row to, midgie could not see that row either, so under the default `replace` it was in line to be destroyed without ever being named — the blast-radius warning and the removal count had nothing to report, because as far as midgie knew there was nothing there.
+
+  Live objects are now re-read asking for whatever the server marked incomplete, so the diff sees the real table: an unchanged one is in sync, a changed row surfaces as a precise in-place edit (`replace row/4/label`), and a row someone else added is visible — deleted under `replace`, with the usual warning naming it, and kept under `multivalue=merge`. Which items midPoint withholds is not in the bundled schema, so this follows the server's own `incomplete` marker rather than a hardcoded list, and covers the other withheld items (a `jpegPhoto`, for one) by the same route. The second request is made only for an object that actually comes back carrying the marker.
+
+  As a backstop, an item still marked incomplete after that re-read — the server will not hand it over at all, typically because the account cannot read it — is now **left out of the delta** and reported, instead of being diffed as empty. `midgie` had exactly one place that got this right, the `include=row` its own state table has always used; that knowledge is now where every live read goes through.
+
 ## [0.11.1] - 2026-09-14
 
 ### Fixed

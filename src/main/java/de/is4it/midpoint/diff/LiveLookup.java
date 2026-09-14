@@ -15,7 +15,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.evolveum.midpoint.prism.Containerable;
+import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.Objectable;
+import com.evolveum.midpoint.prism.PrismContainer;
+import com.evolveum.midpoint.prism.PrismContainerValue;
 import com.evolveum.midpoint.prism.PrismConstants;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
@@ -126,11 +129,62 @@ final class LiveLookup {
         List<PrismObject<? extends Objectable>> matches = new ArrayList<>();
         if (list != null) {
             for (ObjectType object : list.getObject()) {
-                matches.add(object.asPrismObject());
+                matches.add(complete(prismContext, client, restType, object.asPrismObject()));
             }
         }
         LOG.trace("search {} → {} object(s)", restType, matches.size());
         return matches;
+    }
+
+    /**
+     * Re-read {@code object} asking for the items midPoint declined to send.
+     *
+     * <p>Some items are not returned by default and come back as {@code <row incomplete="true"/>} — a
+     * {@code LookupTableType}'s {@code row} is the everyday case, a {@code jpegPhoto} another. Diffing that
+     * as written would read "the server has no rows" from "the server did not send the rows": every run
+     * would emit the whole table as an addition and never converge, and against a table an admin had added
+     * to, a replace would destroy the rows midgie could not see.
+     *
+     * <p>Which items those are is not in the bundled schema — midPoint decides it in its repository layer —
+     * so this follows the server's own {@code incomplete} marker rather than a list to keep in step. The
+     * second request is made only for an object that actually carries one.
+     */
+    private static PrismObject<? extends Objectable> complete(PrismContext prismContext,
+            MidpointRestClient client, String restType, PrismObject<? extends Objectable> object)
+            throws SchemaException, IOException {
+        List<String> incomplete = incompletePaths(object);
+        if (incomplete.isEmpty() || object.getOid() == null) {
+            return object;
+        }
+        LOG.debug("{}/{} came back without {}; re-reading with include", restType, object.getOid(), incomplete);
+        return prismContext.parseObject(
+                client.getObject(restType, object.getOid(), incomplete.toArray(new String[0])));
+    }
+
+    /** The id-free paths of every item the server marked {@code incomplete}, deepest container first. */
+    static List<String> incompletePaths(PrismObject<? extends Objectable> object) {
+        List<String> paths = new ArrayList<>();
+        collectIncomplete(object.getValue(), "", paths);
+        return paths;
+    }
+
+    private static void collectIncomplete(PrismContainerValue<?> container, String prefix, List<String> paths) {
+        for (Item<?, ?> item : container.getItems()) {
+            String path = prefix.isEmpty()
+                    ? item.getElementName().getLocalPart()
+                    : prefix + "/" + item.getElementName().getLocalPart();
+            if (item.isIncomplete()) {
+                if (!paths.contains(path)) {
+                    paths.add(path);
+                }
+                continue; // nothing below it was sent either
+            }
+            if (item instanceof PrismContainer<?> nested) {
+                for (PrismContainerValue<?> value : nested.getValues()) {
+                    collectIncomplete(value, path, paths);
+                }
+            }
+        }
     }
 
     @SuppressWarnings("unchecked") // an object's compile-time class is always a Containerable

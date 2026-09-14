@@ -553,6 +553,7 @@ A CA certificate is the case worth spelling out. With `cacert` in the file, TLS 
 - **Protected/encrypted values** — `ProtectedStringType` deltas (e.g. `credentials/password/value`) are
   dropped from the delta and their paths reported: the ciphertext re-encrypts on every fetch, so diffing it
   yields spurious deltas *and* would leak the secret. Rotate credentials through midPoint's own API.
+- **Items the server withholds** — midPoint does not return some items unless they are asked for, and says so by sending `<row incomplete="true"/>`. A `LookupTableType`'s `row` is the everyday case (a `jpegPhoto` another): read as written it means "no rows", so a lookup table would re-propose its whole contents on every run and never reach in-sync, and a row an admin had added would be in line for deletion without ever being named. midgie re-reads a live object asking for whatever came back incomplete, so the diff sees the real thing. Anything the server still will not hand over — no read authorization on it, usually — is **left out of the delta** and reported rather than diffed as empty: unknown is not absent, and a delta built on that would overwrite content midgie never saw.
 - **Type/OID cross-check** — enforces the "same object" contract: the diff refuses inputs of different
   types, or inputs that both carry an OID when the OIDs differ, so you cannot accidentally diff the wrong
   object. A desired object with no OID is an unbound template and is allowed (the current object's OID

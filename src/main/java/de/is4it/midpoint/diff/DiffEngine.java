@@ -272,6 +272,12 @@ public final class DiffEngine {
         // credential API, not a blind PATCH of stale ciphertext.
         List<String> protectedSkipped = stripProtectedValues(delta);
 
+        // An item the server marked incomplete was not sent, and "not sent" is not "empty". LiveLookup
+        // re-reads such an object asking for those items; anything still incomplete here is something the
+        // server will not hand over (no read permission on it, typically). Diffing it would turn the values
+        // midgie cannot see into a deletion, so those item deltas are dropped and reported.
+        List<String> incompleteSkipped = stripIncompleteItems(delta, live);
+
         // Record what each replace is about to overwrite. Run after the strips, so nothing is recorded for a
         // delta that is no longer there.
         recordOldValues(delta, live);
@@ -294,7 +300,7 @@ public final class DiffEngine {
                 DeltaOutput.removedValueCount(delta), mergeFallbacks, protectedSkipped, accruedInPlaceEdits,
                 inputWarnings.size(), smartReferences, equivalenceChoices);
         return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits, inputWarnings,
-                smartReferences, equivalenceChoices);
+                smartReferences, equivalenceChoices, incompleteSkipped);
     }
 
     private static <O extends Objectable> ObjectDelta<O> reconcile(PrismObject<O> live, PrismObject<?> desired,
@@ -529,6 +535,48 @@ public final class DiffEngine {
             }
         }
         return references;
+    }
+
+    /**
+     * Drop item deltas that touch an item the live object reports as {@code incomplete}, and return their
+     * paths. midPoint does not return some items unless asked ({@code LookupTableType/row}, a
+     * {@code jpegPhoto}); {@link LiveLookup} re-reads the object for those, so anything still marked here is
+     * one the server would not give up. Its values are unknown, not absent — emitting a delta for it would
+     * write over content midgie never saw.
+     */
+    private static List<String> stripIncompleteItems(ObjectDelta<?> delta, PrismObject<?> live) {
+        List<List<String>> incomplete = new ArrayList<>();
+        collectIncomplete(live.getValue(), List.of(), incomplete);
+        if (incomplete.isEmpty()) {
+            return List.of();
+        }
+        List<String> skipped = new ArrayList<>();
+        List<ItemDelta<?, ?>> toRemove = new ArrayList<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            if (isUnder(localNames(mod.getPath()), incomplete)) {
+                toRemove.add(mod);
+                skipped.add(mod.getPath().toString());
+            }
+        }
+        toRemove.forEach(delta::removeModification);
+        return skipped;
+    }
+
+    private static void collectIncomplete(PrismContainerValue<?> container, List<String> prefix,
+            List<List<String>> found) {
+        for (Item<?, ?> item : container.getItems()) {
+            List<String> path = new ArrayList<>(prefix);
+            path.add(item.getElementName().getLocalPart());
+            if (item.isIncomplete()) {
+                found.add(path);
+                continue;
+            }
+            if (item instanceof PrismContainer<?> nested) {
+                for (PrismContainerValue<?> value : nested.getValues()) {
+                    collectIncomplete(value, path, found);
+                }
+            }
+        }
     }
 
     private static List<String> stripProtectedValues(ObjectDelta<?> delta) {
@@ -1019,11 +1067,12 @@ public final class DiffEngine {
         private final List<String> inputWarnings;
         private final List<String> smartReferencePaths;
         private final List<String> equivalenceChoices;
+        private final List<String> incompleteSkippedPaths;
 
         DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths,
                 List<String> protectedSkippedPaths, List<String> accruedInPlaceEditPaths,
                 List<String> inputWarnings, List<String> smartReferencePaths,
-                List<String> equivalenceChoices) {
+                List<String> equivalenceChoices, List<String> incompleteSkippedPaths) {
             this.delta = delta;
             this.mergeFallbackPaths = List.copyOf(mergeFallbackPaths);
             this.protectedSkippedPaths = List.copyOf(protectedSkippedPaths);
@@ -1031,6 +1080,15 @@ public final class DiffEngine {
             this.inputWarnings = List.copyOf(inputWarnings);
             this.smartReferencePaths = List.copyOf(smartReferencePaths);
             this.equivalenceChoices = List.copyOf(equivalenceChoices);
+            this.incompleteSkippedPaths = List.copyOf(incompleteSkippedPaths);
+        }
+
+        /**
+         * Paths the live object reported as {@code incomplete} — the server did not send them, so they were
+         * left out of the delta rather than diffed as empty (see {@code stripIncompleteItems}).
+         */
+        public List<String> incompleteSkippedPaths() {
+            return incompleteSkippedPaths;
         }
 
         /**

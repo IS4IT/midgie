@@ -57,6 +57,7 @@ class LiveIntegrationTest {
     private static final String DEPLOY_ROLE_OID = "a17e57e5-0000-0000-0000-0000000000d1";
     private static final String DEPLOY_USER_OID = "a17e57e5-0000-0000-0000-0000000000d2";
     private static final String DEPLOY_MATCH_OID = "a17e57e5-0000-0000-0000-0000000000d3";
+    private static final String LOOKUP_OID = "a17e57e5-0000-0000-0000-0000000000d4";
     // An OID-less role, created by the server with a random OID; cleaned up by name.
     private static final String COMBO_NAME = "zz-it-combo-role";
 
@@ -82,6 +83,37 @@ class LiveIntegrationTest {
             deleteTestUser();
             deleteDeployObjects();
         }
+    }
+
+    @Test
+    void deployingALookupTableIsIdempotent(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        tryDelete(SyncState.REST_TYPE, LOOKUP_OID);
+
+        // midPoint does not return a LookupTableType's rows unless asked: they come back as
+        // <row incomplete="true"/>. Taken at face value that reads as "the table has no rows", so every run
+        // re-proposed the whole table and the deploy never converged. Only a live server produces that
+        // marker, so this is the test that would have caught it.
+        File table = writeLookupTable(dir, "v1", "Abgelaufen");
+        assertEquals(0, run("apply", table.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--create-if-absent", "--yes").exit);
+
+        CliResult second = run("diff", table.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--format", "summary");
+        assertEquals(0, second.exit, "an unchanged lookup table must be in sync, got: " + second.out);
+
+        // A real row change must still be seen — the fix must not suppress the rows it just learned to read.
+        File edited = writeLookupTable(dir, "v2", "Abgelaufen (LOGA)");
+        CliResult drift = run("diff", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--format", "summary");
+        assertEquals(1, drift.exit, drift.err);
+        assertTrue(drift.out.contains("label"), "the changed row label must surface: " + drift.out);
+
+        assertEquals(0, run("apply", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes").exit);
+        assertEquals(0, run("diff", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--format", "summary").exit, "and it settles after applying");
+
+        tryDelete(SyncState.REST_TYPE, LOOKUP_OID);
     }
 
     @Test
@@ -499,6 +531,19 @@ class LiveIntegrationTest {
                         + "  <assignment><targetRef oid=\"" + DEPLOY_ROLE_OID + "\" type=\"c:RoleType\"/></assignment>\n"
                         + "</user>",
                 StandardCharsets.UTF_8);
+    }
+
+    /** A lookup table with three rows keyed by {@code key} — the shape whose rows the server withholds. */
+    private static File writeLookupTable(Path dir, String tag, String expiredLabel) throws IOException {
+        String xml = "<lookupTable xmlns=\"" + NS + "\" oid=\"" + LOOKUP_OID + "\">\n"
+                + "  <name>zz-it-lookup</name>\n"
+                + "  <row><key>active</key><label>Aktiv</label></row>\n"
+                + "  <row><key>planned</key><label>Geplant</label></row>\n"
+                + "  <row><key>expired</key><label>" + expiredLabel + "</label></row>\n"
+                + "</lookupTable>";
+        Path path = dir.resolve("lookup-" + tag + ".xml");
+        Files.writeString(path, xml, StandardCharsets.UTF_8);
+        return path.toFile();
     }
 
     /** A user whose {@code adminGuiConfiguration} holds two panels keyed by {@code identifier}. */
