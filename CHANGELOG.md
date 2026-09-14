@@ -5,6 +5,14 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A contradiction between two fragments now names both files, and diffs long values instead of printing them twice.** When two files describing one object disagreed about a single-valued item *inside* a multi-valued container — an `item/mapping/description` in an object template, say — only the incoming file was named; the other side was "another fragment of the same object", leaving the reader to find it by hand. The value it clashed with sits in the accumulated union by then and belongs to no single file, which is why it had no name to give: it is now traced back by asking the already-merged fragments which of them declares it, so all the files involved are named (and where several agreed against one, that shows too).
+
+  The larger problem was the values themselves. Both were printed in full, so two twenty-line `description`s differing in one clause filled the terminal with near-identical text and left the actual change to be found by eye — the message was longest exactly when it was least readable. Long values are now reported as a diff, unchanged stretches collapsed, so the message shows *what changed* rather than restating both versions. Short values are still shown inline as before. The same treatment covers the other place two fragments can contradict each other, the top-level grouping check — it already named both files, but printed both values in full just the same, and the two now read alike. Values too large to diff are reported as such, with their sizes, rather than dumped. A difference that is only whitespace is called out, since a diff of that pair otherwise shows lines marked as changed that look identical.
+
 ## [0.11.0] - 2026-09-14
 
 ### Changed

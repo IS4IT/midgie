@@ -131,9 +131,12 @@ final class DeployObject {
             for (Map.Entry<String, Object> entry : declared.entrySet()) {
                 Object previous = seen.get(entry.getKey());
                 if (previous != null && !previous.equals(entry.getValue())) {
+                    // Long values (a description, an expression) are reported as a diff rather than twice in
+                    // full — see TextDiff.clash, shared with the same check inside FragmentUnion.
                     throw new SchemaException("Contradiction for object " + first.identityLabel() + " at '"
-                            + entry.getKey() + "': " + seenIn.get(entry.getKey()) + " sets '" + previous
-                            + "' but " + fragment.sourceFile() + " sets '" + entry.getValue() + "'.");
+                            + entry.getKey() + "': " + TextDiff.clash(
+                                    String.valueOf(seenIn.get(entry.getKey())), String.valueOf(previous),
+                                    String.valueOf(fragment.sourceFile()), String.valueOf(entry.getValue())));
                 }
                 if (previous == null) {
                     seen.put(entry.getKey(), entry.getValue());

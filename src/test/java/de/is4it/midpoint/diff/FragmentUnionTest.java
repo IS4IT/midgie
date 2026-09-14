@@ -24,6 +24,7 @@ import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -133,6 +134,63 @@ class FragmentUnionTest {
         assertTrue(failure.getMessage().contains("panelType"), failure.getMessage());
         assertTrue(failure.getMessage().contains("b.xml"), "and it names the file that clashed: "
                 + failure.getMessage());
+        assertTrue(failure.getMessage().contains("a.xml"), "and the one it clashed with: "
+                + failure.getMessage());
+    }
+
+    @Test
+    void aContradictionNamesBothFilesAndTheirValues() throws Exception {
+        // Naming only the incoming file left the reader hunting for the other side of the clash by hand.
+        // The value it clashed with sits in the accumulated union and belongs to no single file by then, so
+        // it is traced back by asking the already-merged fragments which of them declares it.
+        SchemaException failure = assertThrows(SchemaException.class, () -> FragmentUnion.of(List.of(
+                fragment("first.xml", role("<description>from the first file</description>")),
+                fragment("second.xml", role("<description>from the second file</description>")))));
+
+        String message = failure.getMessage();
+        assertTrue(message.contains("first.xml") && message.contains("second.xml"),
+                "both files must be named: " + message);
+        assertTrue(message.contains("from the first file") && message.contains("from the second file"),
+                "and both values shown, since they are short: " + message);
+    }
+
+    @Test
+    void aMultiLineContradictionIsReportedAsADiff() throws Exception {
+        // The case that prompted this: two long descriptions differing in one clause. Printing both in full
+        // leaves the reader comparing near-identical blocks by eye, so the message shows the difference.
+        String shared = "Fachliche Lebenszyklus-Phase der Orgeinheit.\n"
+                + "Beide Stichtage kommen nativ aus activation/.\n";
+        SchemaException failure = assertThrows(SchemaException.class, () -> FragmentUnion.of(List.of(
+                fragment("org.xml", role("<description>" + shared
+                        + "Aktivierung ist activation/validFrom (aus histab_datum_orgeinheit).\n"
+                        + "Vier Werte, kein 'deleted'.</description>")),
+                fragment("org-loga.xml", role("<description>" + shared
+                        + "Aktivierung ist activation/validFrom (aus histab_datum_orgeinheit des A-Satzes).\n"
+                        + "Vier Werte, kein 'deleted'.</description>")))));
+
+        String message = failure.getMessage();
+        assertTrue(message.contains("org.xml") && message.contains("org-loga.xml"),
+                "both files named: " + message);
+        assertTrue(message.contains("--- ") && message.contains("+++ "), "a diff header: " + message);
+        assertTrue(message.contains("- Aktivierung ist activation/validFrom (aus histab_datum_orgeinheit)."),
+                "the line that went: " + message);
+        assertTrue(message.contains("+ Aktivierung ist activation/validFrom (aus histab_datum_orgeinheit des A-Satzes)."),
+                "and the line that replaced it: " + message);
+        assertFalse(message.contains("another fragment of the same object"),
+                "the vague wording is gone: " + message);
+    }
+
+    @Test
+    void aContradictionAgainstSeveralAgreeingFragmentsNamesThemAll() throws Exception {
+        // Three files agree, the fourth does not — saying which side is the odd one out is the useful part.
+        SchemaException failure = assertThrows(SchemaException.class, () -> FragmentUnion.of(List.of(
+                fragment("a.xml", role("<description>agreed</description>")),
+                fragment("b.xml", role("<description>agreed</description>")),
+                fragment("odd.xml", role("<description>different</description>")))));
+
+        String message = failure.getMessage();
+        assertTrue(message.contains("a.xml") && message.contains("b.xml") && message.contains("odd.xml"),
+                "every file involved is named: " + message);
     }
 
     // --- helpers ---

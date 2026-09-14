@@ -19,8 +19,11 @@ import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
+import com.evolveum.midpoint.util.exception.SchemaException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Grouping fragments into logical objects. The interesting case is a single object described by files that
@@ -108,6 +111,30 @@ class DeployObjectTest {
             values.add(String.valueOf(real));
         }
         return values;
+    }
+
+    @Test
+    void aTopLevelMultiLineContradictionIsReportedAsADiff() throws Exception {
+        // The grouping check already named both files; what it did not do was show which part of two long
+        // values differs. It reaches top-level items, so a <description> set by two files lands here rather
+        // than in FragmentUnion — both must read alike.
+        String shared = "Line one, shared by both files.\nLine two, also shared.\n";
+        SchemaException failure = assertThrows(SchemaException.class, () -> DeployObject.group(List.of(
+                fragment("first.xml", role(shared + "Only the first file says this.")),
+                fragment("second.xml", role(shared + "Only the second file says that.")))));
+
+        String message = failure.getMessage();
+        assertTrue(message.contains("first.xml") && message.contains("second.xml"),
+                "both files named: " + message);
+        assertTrue(message.contains("--- ") && message.contains("+++ "), "a diff header: " + message);
+        assertTrue(message.contains("- Only the first file says this."), message);
+        assertTrue(message.contains("+ Only the second file says that."), message);
+        assertTrue(message.contains("  Line two, also shared."), "shared context kept: " + message);
+    }
+
+    private static String role(String description) {
+        return "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n  <name>Grouped</name>\n"
+                + "  <description>" + description + "</description>\n</role>";
     }
 
     private static Fragment fragment(String fileName, String xml) throws Exception {
