@@ -183,6 +183,111 @@ final class NaturalKeys {
         return false;
     }
 
+    /**
+     * Whether <em>every</em> value of the container carries the full key — the test
+     * {@code --equivalence auto} needs, as opposed to {@link #anyCarries}, which answers the weaker
+     * question {@code init --write-policy} asks of a human.
+     *
+     * <p>One key-less value among keyed siblings is enough to do harm: prism's
+     * {@code DefaultNaturalKeyDefinitionImpl.valuesMatch} treats a constituent that is absent from
+     * <em>both</em> values as matching, so that one value would pair with whichever live value also
+     * lacks the key, and be edited into it.
+     */
+    private static boolean allCarry(NaturalKeyDefinition key, PrismContainer<?> container) {
+        for (PrismContainerValue<?> value : container.getValues()) {
+            if (!carries(key, value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * One decision of the {@code --equivalence auto} walk: a multi-valued container of the desired object,
+     * and whether natural-key pairing is safe throughout the subtree it roots.
+     *
+     * @param path           the container's id-free item path
+     * @param naturalKeySafe whether the subtree may be diffed under {@code natural-keys}
+     * @param reason         why not, naming the offending container and its key; {@code null} when safe
+     */
+    record AutoBucket(ItemPath path, boolean naturalKeySafe, String reason) {
+    }
+
+    /**
+     * Split {@code object} into the subtrees that {@code --equivalence auto} may diff under
+     * {@code natural-keys} and those it must diff under {@code real-value}.
+     *
+     * <p>The cut points are the <b>multi-valued containers reachable through single-valued ones only</b>.
+     * They are the only safe places to switch equivalence, because the two strategies express a change
+     * <em>inside</em> a multi-valued container at different depths: {@code natural-keys} pairs the entry and
+     * emits {@code objectDetailsPage/3/panel}, while {@code real-value} cannot pair it and emits a
+     * whole-value add/delete at {@code objectDetailsPage}. Cutting below such a container would let one pass
+     * express a change the other pass expressed at an ancestor, losing or duplicating it. A single-valued
+     * container is safe to cut below: prism always dives into one (its
+     * {@code PrismContainerValueImpl.representsSameValue} returns true immediately under {@code lax}).
+     *
+     * <p>A cut is safe for natural keys only when <em>no</em> container in its whole subtree declares a key
+     * that its values fail to fill in — which is what keeps {@code assignment} and friends out, with no
+     * hardcoded deny list: they declare {@code identifier}, real configuration omits it, and so the subtree
+     * is rejected on its own evidence.
+     */
+    static List<AutoBucket> autoBuckets(PrismObject<?> object) {
+        List<AutoBucket> buckets = new ArrayList<>();
+        collectBuckets(object.getValue(), ItemPath.EMPTY_PATH, buckets);
+        return buckets;
+    }
+
+    private static void collectBuckets(PrismContainerValue<?> value, ItemPath prefix, List<AutoBucket> buckets) {
+        for (Item<?, ?> item : value.getItems()) {
+            if (!(item instanceof PrismContainer<?> container)) {
+                continue;
+            }
+            ItemDefinition<?> definition = container.getDefinition();
+            if (definition == null || definition.isOperational() || container.getValues().isEmpty()) {
+                continue;
+            }
+            ItemPath path = prefix.append(item.getElementName());
+            if (definition.isMultiValue()) {
+                String unsafe = firstUnfilledKey(container, path);
+                buckets.add(new AutoBucket(path, unsafe == null, unsafe));
+            } else {
+                for (PrismContainerValue<?> child : container.getValues()) {
+                    collectBuckets(child, path, buckets);
+                }
+            }
+        }
+    }
+
+    /**
+     * The first container at or below {@code container} that declares a natural key not every one of its
+     * values fills in, as a ready-to-print reason; {@code null} when the whole subtree is safe.
+     */
+    private static String firstUnfilledKey(PrismContainer<?> container, ItemPath path) {
+        ItemDefinition<?> definition = container.getDefinition();
+        if (definition != null && definition.isMultiValue()) {
+            NaturalKeyDefinition key = of(container);
+            if (key != null && !allCarry(key, container)) {
+                return pathText(path) + " does not fill in its key (" + names(container) + ")";
+            }
+        }
+        for (PrismContainerValue<?> value : container.getValues()) {
+            for (Item<?, ?> item : value.getItems()) {
+                if (!(item instanceof PrismContainer<?> child)) {
+                    continue;
+                }
+                ItemDefinition<?> childDefinition = child.getDefinition();
+                if (childDefinition == null || childDefinition.isOperational() || child.getValues().isEmpty()) {
+                    continue;
+                }
+                String unsafe = firstUnfilledKey(child, path.append(item.getElementName()));
+                if (unsafe != null) {
+                    return unsafe;
+                }
+            }
+        }
+        return null;
+    }
+
     private static String pathText(ItemPath path) {
         List<String> names = new ArrayList<>();
         for (Object segment : path.getSegments()) {

@@ -217,26 +217,20 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   that path on *replace* if you want a true in-place update); a single-valued item, or any item that diffs
   to a whole-value replace, cannot merge and is left as replace (noted on stderr).
 
-  > **Why `replace` + `real-value` stay the defaults** (considered and rejected: defaulting to `merge`, with
-  > `natural-keys` where the schema declares one, to reduce the risk of accidental deletion). `merge` can
-  > express neither an edit nor a removal: a content change reads as "old gone, new added" and merge drops
-  > the deletion, so values accumulate (`[alpha]` + desired `[beta]` → `[alpha, beta]`); and dropping an
-  > entry from the desired file produces an *empty* delta, so `diff` reports "No differences" and exits `0`
-  > while the live object still holds it — which silently defeats drift detection and the CI exit-code
-  > contract, the very thing that would tell you there is cruft to clean up. `natural-keys` is not a default
-  > either: it is prism-`@Experimental`, and the many types that declare a natural key real config never
-  > fills in (`assignment`/`inducement`/`authorization` declare `identifier`) make prism pair unrelated
-  > values, which the accrued-value guard then correctly refuses — an ordinary assignment change would fail
-  > out of the box. A *schema-dependent* equivalence default is not expressible anyway: equivalence is a
-  > single input to prism's whole-object diff (`reconcile` → `live.diff(desired, strategy)`), unlike
-  > `multivalue`, which midgie varies per path by post-processing the delta. The risk that motivated the
-  > question — a partially declared multi-valued container deleting what it does not list — is instead
-  > handled by the input warnings (see "Safety guards"), which name the container, the counts, and the fix.
-- `--equivalence real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal`
-  (default **real-value**), loosest to strictest — the value-equivalence test that decides what counts as
-  drift and how entries are matched:
+  > **Why `replace` stays the default** (considered and rejected: defaulting to `merge` to reduce the risk of accidental deletion). `merge` can express neither an edit nor a removal: a content change reads as "old gone, new added" and merge drops the deletion, so values accumulate (`[alpha]` + desired `[beta]` → `[alpha, beta]`); and dropping an entry from the desired file produces an *empty* delta, so `diff` reports "No differences" and exits `0` while the live object still holds it — which silently defeats drift detection and the CI exit-code contract, the very thing that would tell you there is cruft to clean up. The risk that motivated the question — a partially declared multi-valued container deleting what it does not list — is instead handled by the input warnings (see "Safety guards"), which name the container, the counts, and the fix.
+  >
+  > Equivalence *is* schema-dependent, and `auto` is the default that makes it so. An earlier version of this note said a schema-dependent equivalence default was "not expressible anyway", because equivalence is a single input to prism's whole-object diff (`live.diff(desired, strategy)`) unlike `multivalue`, which midgie varies per path by post-processing the delta. That is true *within one diff* and remains the reason per-**path** equivalence is not offered; it is not a reason to diff the object only once. See `--equivalence auto` below.
+- `--equivalence auto|real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal`
+  (default **auto**) — the value-equivalence test that decides what counts as drift and how entries are
+  matched. `auto` chooses between the first two of the named strategies per container; the rest are listed
+  loosest to strictest:
+  - *auto* — **the default.** Per multi-valued container, `natural-keys` where the schema declares a key and every desired value fills it in, `real-value` everywhere else. The object is diffed under both and each item delta is kept from the pass its path belongs to, because prism takes one equivalence per whole-object diff. Buckets are cut only at multi-valued containers reachable through single-valued ones, and a whole subtree is rejected if anything inside it has an unfilled key — the two strategies express a change inside a multi-valued container at different depths (`objectDetailsPage/84/panel` vs a whole-value replace of `objectDetailsPage`), so a cut inside one would lose or duplicate it. With nothing to pair this is a single `real-value` pass, identical to the pre-`auto` default.
+
+    What it buys: a keyed entry is updated **in place**, keeping its container id and the metadata hanging off it, where `real-value` alone replaces the whole container. What it avoids: prism's `DefaultNaturalKeyDefinitionImpl.valuesMatch` treats a key constituent absent from *both* values as matching, so an object-wide `natural-keys` pairs unrelated values positionally on the many types that declare a key real config never fills in — `assignment`, `inducement` and `authorization` among them. Deciding per container from whether the key is actually filled in keeps those out on their own evidence, with no hardcoded deny list.
+
+    Only `real-value` and `natural-keys` are ever chosen. `consider-different-ids` makes no difference for an id-free desired file (its rule is that ids must not *contradict*, and `null` vs `123` does not); `ignore-metadata` re-considers reference filters, which would fight `--smart-refs`; and `data`/`literal` consider operational data and metadata, so against a live server they never diff empty and would break the exit-code contract. Note that `natural-keys` is built from `REAL_VALUE_CONSIDER_DIFFERENT_IDS`, so that bucket carries the non-contradicting-ids rule too.
   - *real-value* — ignores container ids, metadata, operational items, element names, ns prefixes, ref
-    filters/options. The config-diff default (no churn from midPoint's own bookkeeping).
+    filters/options. No churn from midPoint's own bookkeeping; what `auto` falls back to.
   - *consider-different-ids* — as *real-value*, but PCV ids must not contradict (pairs/edits entries by id).
   - *natural-keys* — as *consider-different-ids*, plus container natural keys. Maps to
     `REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS`; prism-`@Experimental`, so it prints a note on stderr

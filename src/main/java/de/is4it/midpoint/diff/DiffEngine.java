@@ -108,6 +108,56 @@ public final class DiffEngine {
         SmartReferenceCheck NEVER = (live, desired) -> false;
     }
 
+    /**
+     * Which equivalence to diff under: either a strategy the operator named outright, or {@link #auto()},
+     * which picks one <em>per subtree</em> of each object.
+     *
+     * <p>Auto exists because prism takes a single equivalence for a whole-object diff, while the right
+     * answer differs within one object. {@code natural-keys} pairs an entry of a multi-valued container by
+     * its schema-declared {@code a:naturalKey} and edits it in place, preserving its container id and
+     * metadata — a real improvement over {@code real-value}, which cannot pair an id-free desired value and
+     * so replaces the entry wholesale. But prism's {@code DefaultNaturalKeyDefinitionImpl.valuesMatch}
+     * treats a key constituent absent from <em>both</em> values as matching, so on the many types that
+     * declare a key real configuration never fills in ({@code assignment} and {@code inducement} declare
+     * {@code identifier}) it pairs unrelated values positionally and edits one into the other.
+     *
+     * <p>So auto diffs the object under both strategies and keeps each item delta from the pass its path
+     * belongs to (see {@code reconcileAuto}). Only {@code real-value} and {@code natural-keys} are ever
+     * chosen: the other presets either make no difference for an id-free desired file
+     * ({@code consider-different-ids}) or consider operational data and metadata, which against a live
+     * server never diffs empty and would break the exit-code drift contract ({@code data}, {@code literal})
+     * or re-surface resolved smart references ({@code ignore-metadata}).
+     */
+    public static final class EquivalencePlan {
+
+        private static final EquivalencePlan AUTO = new EquivalencePlan(null);
+
+        private final ParameterizedEquivalenceStrategy fixed;
+
+        private EquivalencePlan(ParameterizedEquivalenceStrategy fixed) {
+            this.fixed = fixed;
+        }
+
+        /** Diff everything under the one strategy the operator named. */
+        public static EquivalencePlan of(ParameterizedEquivalenceStrategy strategy) {
+            return new EquivalencePlan(strategy);
+        }
+
+        /** Decide per subtree, per object. */
+        public static EquivalencePlan auto() {
+            return AUTO;
+        }
+
+        public boolean isAuto() {
+            return fixed == null;
+        }
+
+        /** The named strategy; {@code null} under {@link #auto()}. */
+        public ParameterizedEquivalenceStrategy fixedStrategy() {
+            return fixed;
+        }
+    }
+
     private final PrismContext prismContext;
 
     public DiffEngine(PrismContext prismContext) {
@@ -128,8 +178,15 @@ public final class DiffEngine {
     public DiffResult diff(File desiredFile, File liveFile, ParameterizedEquivalenceStrategy strategy,
             Scope scope, MultiValueStrategy multiValue, SmartReferenceCheck smartRefs)
             throws SchemaException, IOException {
+        return diff(desiredFile, liveFile, EquivalencePlan.of(strategy), scope, multiValue, smartRefs);
+    }
+
+    /** As above, taking an {@link EquivalencePlan} rather than one fixed strategy. */
+    public DiffResult diff(File desiredFile, File liveFile, EquivalencePlan equivalence,
+            Scope scope, MultiValueStrategy multiValue, SmartReferenceCheck smartRefs)
+            throws SchemaException, IOException {
         return diff(prismContext.parseObject(desiredFile), prismContext.parseObject(liveFile),
-                strategy, scope, multiValue, smartRefs);
+                equivalence, scope, multiValue, smartRefs);
     }
 
     /**
@@ -159,6 +216,17 @@ public final class DiffEngine {
     public DiffResult diff(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> live,
             ParameterizedEquivalenceStrategy strategy, Scope scope, MultiValueStrategy multiValue,
             SmartReferenceCheck smartRefs) throws SchemaException {
+        return diff(desired, live, EquivalencePlan.of(strategy), scope, multiValue, smartRefs);
+    }
+
+    /**
+     * As above, but taking an {@link EquivalencePlan} — which may be {@link EquivalencePlan#auto()}, letting
+     * the engine choose the equivalence per subtree of this object. The command layer uses this overload;
+     * the internal callers that need one fixed strategy use the one above.
+     */
+    public DiffResult diff(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> live,
+            EquivalencePlan equivalence, Scope scope, MultiValueStrategy multiValue,
+            SmartReferenceCheck smartRefs) throws SchemaException {
 
         Class<?> desiredType = desired.getCompileTimeClass();
         Class<?> liveType = live.getCompileTimeClass();
@@ -180,10 +248,11 @@ public final class DiffEngine {
         // before.diff(after) => delta that, applied to `before`, yields `after`. before = live,
         // after = desired, so the delta reconciles the live object to the desired state. REAL_VALUE
         // matches container/property values by content (ignoring PCV ids), which yields clean whole-value
-        // add/delete deltas — exactly what merge needs (see applyMerge). The command layer defaults merge
-        // to real-value and only warns for other strategies; under an id-considering strategy merge may
-        // see paired/edited values instead of clean add/delete, so applyMerge has less to strip.
-        ObjectDelta<? extends Objectable> delta = reconcile(live, desired, strategy);
+        // add/delete deltas — exactly what merge needs (see applyMerge). Under an id-considering strategy
+        // merge may see paired/edited values instead of clean add/delete, so applyMerge has less to strip;
+        // that is true of the natural-keys half of an auto diff as much as of an explicit --equivalence.
+        List<String> equivalenceChoices = new ArrayList<>();
+        ObjectDelta<? extends Objectable> delta = reconcile(live, desired, equivalence, equivalenceChoices);
 
         // First, before anything else reads the delta: drop the differences that are not differences at all,
         // only midPoint having resolved a smart reference. Ahead of applyMerge because merge would otherwise
@@ -219,20 +288,110 @@ public final class DiffEngine {
         List<String> inputWarnings = findInputWarnings(desired, live, multiValue);
 
         LOG.debug("diff {} (scope={}, {}) → {} modification(s), removes {} value(s); mergeFallback={}, "
-                + "protectedSkipped={}, accruedInPlace={}, inputWarnings={}, smartRefs={}",
+                + "protectedSkipped={}, accruedInPlace={}, inputWarnings={}, smartRefs={}, equivalence={}",
                 desiredType != null ? desiredType.getSimpleName() : "?", scope,
                 multiValue.isMergeActive() ? "merge" : "replace", delta.getModifications().size(),
                 DeltaOutput.removedValueCount(delta), mergeFallbacks, protectedSkipped, accruedInPlaceEdits,
-                inputWarnings.size(), smartReferences);
+                inputWarnings.size(), smartReferences, equivalenceChoices);
         return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits, inputWarnings,
-                smartReferences);
+                smartReferences, equivalenceChoices);
     }
 
-    private static <O extends Objectable> ObjectDelta<O> reconcile(
-            PrismObject<O> live, PrismObject<?> desired, ParameterizedEquivalenceStrategy strategy) {
+    private static <O extends Objectable> ObjectDelta<O> reconcile(PrismObject<O> live, PrismObject<?> desired,
+            EquivalencePlan equivalence, List<String> choices) {
         @SuppressWarnings("unchecked") // the two objects were verified to share a compile-time class
         PrismObject<O> desiredTyped = (PrismObject<O>) desired;
-        return live.diff(desiredTyped, strategy);
+        if (!equivalence.isAuto()) {
+            return live.diff(desiredTyped, equivalence.fixedStrategy());
+        }
+        return reconcileAuto(live, desiredTyped, choices);
+    }
+
+    /**
+     * The {@code --equivalence auto} diff: {@code natural-keys} where the schema's keys are filled in and
+     * pairing is therefore safe, {@code real-value} everywhere else, within one object.
+     *
+     * <p>prism takes one equivalence per whole-object diff, so the object is diffed <b>twice</b> and each
+     * item delta is kept from the pass its path belongs to. That is sound because the item deltas of an
+     * {@code ObjectModificationType} are independent, and because the buckets never cut into a multi-valued
+     * container (see {@link NaturalKeys#autoBuckets}), so the two passes never express the same change at
+     * paths that land in different buckets.
+     *
+     * <p>Diffing twice is only needed when the object genuinely splits. With nothing safe to pair this is a
+     * single {@code real-value} pass — byte-identical to the old default — and with nothing to protect it is
+     * a single {@code natural-keys} pass.
+     */
+    private static <O extends Objectable> ObjectDelta<O> reconcileAuto(
+            PrismObject<O> live, PrismObject<O> desired, List<String> choices) {
+
+        List<List<String>> naturalKeyPaths = new ArrayList<>();
+        int total = 0;
+        for (NaturalKeys.AutoBucket bucket : NaturalKeys.autoBuckets(desired)) {
+            total++;
+            if (bucket.naturalKeySafe()) {
+                naturalKeyPaths.add(localNames(bucket.path()));
+                choices.add(pathText(bucket.path()) + "=natural-keys");
+            } else {
+                choices.add(pathText(bucket.path()) + "=real-value (" + bucket.reason() + ")");
+            }
+        }
+
+        if (naturalKeyPaths.isEmpty()) {
+            return live.diff(desired, EquivalenceStrategy.REAL_VALUE);
+        }
+        if (naturalKeyPaths.size() == total) {
+            return live.diff(desired, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
+        }
+
+        ObjectDelta<O> natural =
+                live.diff(desired, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
+        ObjectDelta<O> real = live.diff(desired, EquivalenceStrategy.REAL_VALUE);
+        retainBucket(natural, naturalKeyPaths, true);
+        retainBucket(real, naturalKeyPaths, false);
+        // Copy first: getModifications() hands back the delta's own live collection.
+        natural.addModifications(new ArrayList<>(real.getModifications()));
+        return natural;
+    }
+
+    /**
+     * Drop every item delta that does not belong to this pass. A modification belongs to the natural-keys
+     * bucket when one of {@code naturalKeyPaths} is a prefix of its (id-free) path; everything else — plain
+     * properties, single-valued containers, and the multi-valued containers auto rejected — belongs to the
+     * real-value bucket, where the two strategies agree anyway.
+     */
+    private static void retainBucket(ObjectDelta<?> delta, List<List<String>> naturalKeyPaths, boolean keepInside) {
+        List<ItemDelta<?, ?>> toRemove = new ArrayList<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            if (isUnder(localNames(mod.getPath()), naturalKeyPaths) != keepInside) {
+                toRemove.add(mod);
+            }
+        }
+        toRemove.forEach(delta::removeModification);
+    }
+
+    private static boolean isUnder(List<String> path, List<List<String>> prefixes) {
+        for (List<String> prefix : prefixes) {
+            if (path.size() >= prefix.size() && path.subList(0, prefix.size()).equals(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** An item path as its bare local names, ids stripped — the form the path buckets and rules match on. */
+    private static List<String> localNames(ItemPath path) {
+        List<String> names = new ArrayList<>();
+        for (Object segment : path.removeIds().getSegments()) {
+            if (ItemPath.isName(segment)) {
+                names.add(ItemPath.toName(segment).getLocalPart());
+            }
+        }
+        return names;
+    }
+
+    /** An item path as {@code a/b/c}, for a message. */
+    private static String pathText(ItemPath path) {
+        return String.join("/", localNames(path));
     }
 
     /**
@@ -713,10 +872,21 @@ public final class DiffEngine {
             // be DELETED"), which understates what is about to go: an operator reasonably concludes one entry
             // is being kept.
             int matched = liveContainer.getValues().size() - unmatched;
+            // What to advise depends on whether the key is usable here. Naming equivalence=natural-keys
+            // unconditionally was fine when real-value was the default; under auto it is bad advice for
+            // exactly the containers auto declines — pinning it would widen natural-key pairing to the whole
+            // object and mispair the values whose key nothing fills in, which is what auto exists to avoid.
+            boolean keyUsable = keyInPlay;
+            for (PrismContainerValue<?> value : desiredContainer.getValues()) {
+                keyUsable = keyUsable && carriesKey(naturalKey, value);
+            }
             warnings.add("'" + path + "': desired matches " + matched + " of "
                     + liveContainer.getValues().size() + " live value(s), and this path is on "
                     + "multivalue=replace, so the other " + unmatched + " will be DELETED. Set '" + path
-                    + " multivalue=merge' (with equivalence=natural-keys) to update just the entries you list.");
+                    + " multivalue=merge' to update just the entries you list."
+                    + (keyUsable ? "" : " Their natural key (" + keyNames(desiredContainer)
+                            + ") is not filled in on every value, so they can only be matched by content — "
+                            + "fill it in to have them updated individually."));
         }
     }
 
@@ -848,16 +1018,28 @@ public final class DiffEngine {
         private final List<String> accruedInPlaceEditPaths;
         private final List<String> inputWarnings;
         private final List<String> smartReferencePaths;
+        private final List<String> equivalenceChoices;
 
         DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths,
                 List<String> protectedSkippedPaths, List<String> accruedInPlaceEditPaths,
-                List<String> inputWarnings, List<String> smartReferencePaths) {
+                List<String> inputWarnings, List<String> smartReferencePaths,
+                List<String> equivalenceChoices) {
             this.delta = delta;
             this.mergeFallbackPaths = List.copyOf(mergeFallbackPaths);
             this.protectedSkippedPaths = List.copyOf(protectedSkippedPaths);
             this.accruedInPlaceEditPaths = List.copyOf(accruedInPlaceEditPaths);
             this.inputWarnings = List.copyOf(inputWarnings);
             this.smartReferencePaths = List.copyOf(smartReferencePaths);
+            this.equivalenceChoices = List.copyOf(equivalenceChoices);
+        }
+
+        /**
+         * What {@code --equivalence auto} decided for this object, one entry per multi-valued container it
+         * considered, each naming the chosen strategy and — where it declined {@code natural-keys} — why.
+         * Empty when the operator named a strategy outright.
+         */
+        public List<String> equivalenceChoices() {
+            return equivalenceChoices;
         }
 
         /**
@@ -1038,16 +1220,6 @@ public final class DiffEngine {
                 }
             }
             return false;
-        }
-
-        private static List<String> localNames(ItemPath path) {
-            List<String> names = new ArrayList<>();
-            for (Object segment : path.removeIds().getSegments()) {
-                if (ItemPath.isName(segment)) {
-                    names.add(ItemPath.toName(segment).getLocalPart());
-                }
-            }
-            return names;
         }
     }
 }

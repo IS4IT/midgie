@@ -546,6 +546,190 @@ class DiffCommandTest {
 
     // --- helpers ---
 
+    // ---- --equivalence auto -------------------------------------------------------------------------
+
+    @Test
+    void autoPairsTheKeyedContainerWhileLeavingAssignmentsAlone(@TempDir Path dir) throws Exception {
+        // The case the whole feature exists for. One object, two answers: objectDetailsPage/panel fill in
+        // their declared keys, so natural-keys pairs them and edits the panel in place, keeping the live
+        // container ids and the metadata hanging off them. assignment declares identifier and does not carry
+        // one, and prism's DefaultNaturalKeyDefinitionImpl treats a constituent absent from BOTH sides as
+        // matching — so under an object-wide natural-keys the leftover live assignment would pair
+        // positionally with the desired one and be edited into it. Auto must not let that happen.
+        File live = write(dir, "live.xml", userWithPanels("84",
+                assignment("1", "role-1") + assignment("2", "role-2"),
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml", userWithPanels(null,
+                assignment(null, "role-1") + assignment(null, "role-3"),
+                panel(null, "basic", null), panel(null, "aielcm-delimited-values", 16)));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+
+        // The panel change is expressed in place, under the live page's container id — not as a wholesale
+        // replace of objectDetailsPage, which is what real-value alone would have produced.
+        assertTrue(paths(result).stream().anyMatch(p -> p.contains("displayOrder")),
+                "the panel edit must be a deep in-place delta: " + paths(result));
+        assertTrue(paths(result).stream().anyMatch(p -> p.contains("84")),
+                "the in-place edit must run through the live container id: " + paths(result));
+
+        // The assignment change stays a whole-value add/delete: no deep edit reaching into an assignment.
+        assertFalse(paths(result).stream().anyMatch(p -> p.contains("assignment/") && p.contains("targetRef")),
+                "assignments must not be paired and deep-edited: " + paths(result));
+
+        assertTrue(result.equivalenceChoices().stream()
+                        .anyMatch(c -> c.startsWith("assignment=real-value") && c.contains("identifier")),
+                "auto must say it declined natural-keys for assignment, and why: " + result.equivalenceChoices());
+        assertTrue(result.equivalenceChoices().stream()
+                        .anyMatch(c -> c.contains("objectDetailsPage=natural-keys")),
+                "auto must say it chose natural-keys for the keyed page: " + result.equivalenceChoices());
+
+        // And the hazard is real, not hypothetical: the same object under an OBJECT-WIDE natural-keys does
+        // reach into an assignment and edit it in place. Without this the test above could pass vacuously.
+        DiffEngine.DiffResult objectWide = engine().diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
+        assertTrue(paths(objectWide).stream().anyMatch(p -> p.contains("assignment/") && p.contains("targetRef")),
+                "object-wide natural-keys is expected to deep-edit an assignment: " + paths(objectWide));
+    }
+
+    @Test
+    void autoIsExactlyRealValueWhenNothingCarriesAKey(@TempDir Path dir) throws Exception {
+        // Graceful fallback, and the common case: an object whose containers declare no usable key must
+        // diff byte-for-byte as it did before auto existed. Plain properties never consult natural keys at
+        // all (prism reads isConsideringNaturalKeys only in PrismContainerValueImpl), and an unkeyed
+        // container drops to plain id equality, which an id-free desired file never satisfies.
+        File live = write(dir, "live.xml", user(assignment("1", "role-1"), assignment("2", "role-2")));
+        File desired = write(dir, "desired.xml", user(assignment(null, "role-1"), assignment(null, "role-3")));
+
+        DiffEngine.DiffResult auto = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+        DiffEngine.DiffResult realValue = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
+
+        assertEquals(paths(realValue), paths(auto), "auto must degrade to exactly real-value here");
+        assertEquals(realValue.removedValueCount(), auto.removedValueCount(), "same blast radius");
+    }
+
+    @Test
+    void autoRunsASinglePassWhenEveryContainerIsKeyed(@TempDir Path dir) throws Exception {
+        // The other single-pass shortcut: nothing needs protecting, so there is no second diff to combine
+        // and the result must equal a plain natural-keys diff. A sysconfig whose only multi-valued
+        // containers are the keyed page and its panels is exactly that shape.
+        File live = write(dir, "live.xml", sysconfigPanels("84",
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml", sysconfigPanels(null,
+                panel(null, "basic", null), panel(null, "aielcm-delimited-values", 16)));
+
+        DiffEngine.DiffResult auto = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+        DiffEngine.DiffResult naturalKeys = engine().diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
+
+        assertEquals(paths(naturalKeys), paths(auto), "auto must equal a plain natural-keys diff here");
+        assertTrue(auto.equivalenceChoices().stream().allMatch(c -> c.contains("natural-keys")),
+                "every container must have been accepted: " + auto.equivalenceChoices());
+    }
+
+    @Test
+    void aNestedUnfilledKeyDisqualifiesTheWholeSubtree(@TempDir Path dir) throws Exception {
+        // Ancestry closure. A bucket may never cut inside a multi-valued container, because the two passes
+        // express a change there at different depths: natural-keys emits objectDetailsPage/84/panel,
+        // real-value a whole-value add/delete at objectDetailsPage. So the verdict has to be taken for a
+        // whole subtree at once — here objectDetailsPage fills in its own key (type) perfectly well, but one
+        // of the panels below it has no <identifier>, and that one panel would pair vacuously. The page must
+        // fall to real-value with it rather than pair the sound part and leave the unsound part mispaired.
+        File live = write(dir, "live.xml", userWithPanels("84", assignment("1", "role-1"),
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml", userWithPanels(null, assignment(null, "role-1"),
+                panel(null, "basic", null), "        <panel><displayOrder>16</displayOrder></panel>\n"));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+
+        assertTrue(result.equivalenceChoices().stream()
+                        .anyMatch(c -> c.contains("objectDetailsPage=real-value") && c.contains("panel")
+                                && c.contains("identifier")),
+                "the page must be rejected, naming the nested panel and its key: " + result.equivalenceChoices());
+        assertTrue(result.equivalenceChoices().stream().noneMatch(c -> c.contains("natural-keys")),
+                "nothing in this object may claim a natural-keys bucket: " + result.equivalenceChoices());
+        assertNoOverlappingPaths(result);
+    }
+
+    @Test
+    void autoCombinesTwoPassesWithoutOverlappingOrLosingDeltas(@TempDir Path dir) throws Exception {
+        // The invariant that a bad partition breaks: midPoint's own TestParseDiffPatch round trip. Applying
+        // the combined delta to a clone of live must yield desired exactly — which fails if a modification
+        // was dropped by both passes, or kept by both and merged into nonsense.
+        PrismObject<? extends Objectable> live = prismContext.parseObject(write(dir, "live.xml",
+                userWithPanels("84", assignment("1", "role-1") + assignment("2", "role-2"),
+                        panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15))));
+        PrismObject<? extends Objectable> desired = prismContext.parseObject(write(dir, "desired.xml",
+                userWithPanels("84", assignment("1", "role-1") + assignment("3", "role-3"),
+                        panel("283", "basic", null), panel("284", "aielcm-delimited-values", 16))));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+        assertNoOverlappingPaths(result);
+
+        PrismObject<? extends Objectable> patched = live.clone();
+        ((ObjectDelta) result.delta()).applyTo(patched);
+        assertTrue(patched.equivalent(desired),
+                "the combined delta must reconcile live to desired:\n" + patched.debugDump());
+    }
+
+    @Test
+    void autoKeepsTheDeepEditUnderScopePresent(@TempDir Path dir) throws Exception {
+        // Auto produces deltas below a multi-valued container far more often than real-value did, and
+        // scope=present judges a delta at its id-free prefix (the path truncated at the first container id).
+        // So the panel edit is judged at adminGuiConfiguration/objectDetails/objectDetailsPage, which the
+        // desired object declares — it must survive rather than be dropped as an unmanaged item.
+        File live = write(dir, "live.xml", userWithPanels("84", assignment("1", "role-1"),
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml", userWithPanels(null, assignment(null, "role-1"),
+                panel(null, "basic", null), panel(null, "aielcm-delimited-values", 16)));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+
+        assertTrue(result.hasDrift(), "the displayOrder change must survive scope=present");
+        assertTrue(paths(result).stream().anyMatch(p -> p.contains("displayOrder")),
+                "expected the deep displayOrder delta: " + paths(result));
+    }
+
+    @Test
+    void autoDoesNotChurnOnADesiredFileThatCarriesContainerIds(@TempDir Path dir) throws Exception {
+        // natural-keys is not real-value plus keys: prism builds it from REAL_VALUE_CONSIDER_DIFFERENT_IDS,
+        // so the natural-keys bucket also requires that container ids do not contradict. A tree exported
+        // from a server carries ids, so check the ids auto inherits do not turn an unchanged object into
+        // drift — the one way the two buckets differ for a reason other than pairing.
+        String body = assignment("1", "role-1");
+        File live = write(dir, "live.xml", userWithPanels("84", body,
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+        File desired = write(dir, "desired.xml", userWithPanels("84", body,
+                panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+
+        assertFalse(result.hasDrift(), "an identical id-carrying object must diff empty: " + paths(result));
+    }
+
+    /** No two modifications may target the same path: that is what a mis-partitioned two-pass diff looks like. */
+    private static void assertNoOverlappingPaths(DiffEngine.DiffResult result) {
+        List<String> paths = paths(result);
+        assertEquals(paths.size(), paths.stream().distinct().count(),
+                "the two passes must not both contribute a delta at one path: " + paths);
+    }
+
     private static DiffEngine engine() {
         return new DiffEngine(prismContext);
     }
@@ -889,6 +1073,27 @@ class DiffCommandTest {
                 + " oid=\"22222222-2222-2222-2222-222222222222\">\n"
                 + "  <name>jack</name>\n"
                 + String.join("", assignments)
+                + "</user>";
+    }
+
+    /**
+     * A user carrying both kinds of multi-valued container at once — the shape {@code --equivalence auto}
+     * exists for. {@code objectDetailsPage} and {@code panel} declare natural keys this fills in, so pairing
+     * is safe; {@code assignment} declares {@code identifier} and (like real configuration) does not fill it
+     * in, so pairing there would match vacuously.
+     */
+    private static String userWithPanels(String pageId, String assignments, String... panels) {
+        return "<user xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"22222222-2222-2222-2222-222222222222\">\n"
+                + "  <name>jack</name>\n"
+                + assignments
+                + "  <adminGuiConfiguration><objectDetails>\n"
+                + "      <objectDetailsPage" + (pageId != null ? " id=\"" + pageId + "\"" : "") + ">\n"
+                + "        <type>c:UserType</type>\n"
+                + String.join("", panels)
+                + "      </objectDetailsPage>\n"
+                + "  </objectDetails></adminGuiConfiguration>\n"
                 + "</user>";
     }
 

@@ -444,18 +444,19 @@ public class InitCommand implements Callable<Integer> {
                 .append("# 'multivalue=merge' on such a path updates just the entries your files list and leaves\n")
                 .append("# the rest alone; under the default (replace) every entry you did not list is deleted.\n")
                 .append("#\n")
-                .append("# The merge rules are deliberately scoped to those paths rather than to the whole object.\n")
-                .append("# 'equivalence' cannot be: prism takes one equivalence for the whole object diff, so the\n")
-                .append("# natural-keys line below applies to every container of that object — including ones whose\n")
-                .append("# key nothing fills in (an assignment usually has no <identifier>). Keeping merge narrow is\n")
-                .append("# what stops that from mattering, since the accrued-value guard only applies where merge is.\n")
+                .append("# No 'equivalence' rules are needed: the default '--equivalence auto' already matches\n")
+                .append("# entries by natural key wherever the key is filled in, deciding it per container from\n")
+                .append("# the same evidence this file was seeded from. Pinning 'equivalence=natural-keys' here\n")
+                .append("# would be a step backwards — prism takes one equivalence for a whole-object diff, so it\n")
+                .append("# would apply to every container of that object, including ones whose key nothing fills\n")
+                .append("# in (an assignment usually has no <identifier>), which pairs unrelated entries.\n")
                 .append("#\n# These are suggestions — review them, and delete any rule whose container your files\n")
                 .append("# are meant to be authoritative for.\n");
         if (keyedByObject.isEmpty()) {
             out.append("\n# Nothing in this tree addresses a keyed multi-valued container, so no rules are needed.\n");
         }
         for (Map.Entry<String, Map<String, String>> entry : keyedByObject.entrySet()) {
-            out.append('\n').append(quoteIfNeeded(entry.getKey())).append("  equivalence=natural-keys\n");
+            out.append("\n# ").append(entry.getKey()).append('\n');
             for (Map.Entry<String, String> keyed : entry.getValue().entrySet()) {
                 out.append("#   key: ").append(keyed.getValue()).append('\n')
                         .append(quoteIfNeeded(entry.getKey() + "/" + keyed.getKey()))

@@ -170,7 +170,8 @@ class RollbackPlanTest {
     private static Reconciler.Outcome createOutcome(String oid) throws Exception {
         return new Reconciler(prismContext, null, true, false)
                 .planAgainst(prismContext.parseObject(role(oid, "new")), null,
-                        new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT, EquivalenceStrategy.REAL_VALUE,
+                        new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
+                                DiffEngine.EquivalencePlan.of(EquivalenceStrategy.REAL_VALUE),
                                 DiffEngine.MultiValueStrategy.replaceAll(), false));
     }
 

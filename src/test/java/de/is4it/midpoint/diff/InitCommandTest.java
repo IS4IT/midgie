@@ -133,6 +133,14 @@ class InitCommandTest {
         assertTrue(resolved.multiValue.isMerge(
                         com.evolveum.midpoint.prism.path.ItemPath.fromString("schemaHandling/objectType")),
                 "and the rule applies to the object it was written for:\n" + content);
+
+        // The seeded file must not pin equivalence. '--equivalence auto' already matches by natural key
+        // per container, from the same evidence this file was seeded from; an object-wide
+        // 'equivalence=natural-keys' line here would widen that to containers whose key nothing fills in.
+        assertFalse(content.lines().anyMatch(l -> !l.startsWith("#") && l.contains("equivalence=")),
+                "the seeded policy must leave equivalence to the auto default:\n" + content);
+        assertTrue(resolved.equivalence.isAuto(),
+                "so an object it names still resolves to auto:\n" + content);
     }
 
     @Test
@@ -399,7 +407,7 @@ class InitCommandTest {
 
     private static StrategyOptions.Resolved baseline() {
         return new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
-                com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.EquivalencePlan.auto(), // the CLI default the seeded policy is layered over
                 DiffEngine.MultiValueStrategy.replaceAll(), false);
     }
 

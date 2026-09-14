@@ -13,6 +13,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -26,6 +28,7 @@ import picocli.CommandLine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -79,6 +82,45 @@ class LiveIntegrationTest {
             deleteTestUser();
             deleteDeployObjects();
         }
+    }
+
+    @Test
+    void autoUpdatesAKeyedEntryInPlaceAndMidpointKeepsItsContainerIds(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteTestUser();
+
+        // The claim --equivalence auto is built on, against a real server: editing one entry of a keyed
+        // multi-valued container must produce a deep in-place PATCH that midPoint accepts, leaving the
+        // repository-assigned container ids — and everything hanging off them, metadata included — alone.
+        File created = writeKeyedPanels(dir, "v1", 20);
+        assertEquals(0, run("apply", created.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--create-if-absent", "--yes").exit);
+        List<String> idsBefore = containerIds(client.getObject("users", TEST_OID));
+        assertEquals(3, idsBefore.size(), "expected the page and its two panels to carry ids: " + idsBefore);
+
+        File edited = writeKeyedPanels(dir, "v2", 25);
+        CliResult diff = run("diff", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--format", "summary");
+        assertEquals(1, diff.exit, diff.err);
+        assertTrue(diff.out.contains("panel/") && diff.out.contains("displayOrder"),
+                "auto must reach the panel in place rather than replace the page, got: " + diff.out);
+
+        assertEquals(0, run("apply", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes").exit);
+        String after = client.getObject("users", TEST_OID);
+        assertEquals(idsBefore, containerIds(after), "midPoint must keep the container ids across the edit");
+        assertTrue(after.contains("<displayOrder>25</displayOrder>"), "and hold the new value:\n" + after);
+
+        // Re-running must settle: a deep PATCH that did not fully apply would show as drift here.
+        assertEquals(0, run("diff", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--format", "summary").exit, "the applied delta must leave the object in sync");
+
+        // The contrast that makes the above worth asserting: under the previous default the same edit
+        // replaces the whole page, so midPoint assigns fresh ids to it and to both panels.
+        File again = writeKeyedPanels(dir, "v3", 30);
+        assertEquals(0, run("apply", again.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--equivalence", "real-value", "--yes").exit);
+        assertNotEquals(idsBefore, containerIds(client.getObject("users", TEST_OID)),
+                "real-value is expected to churn the container ids — that is what auto avoids");
     }
 
     @Test
@@ -457,6 +499,35 @@ class LiveIntegrationTest {
                         + "  <assignment><targetRef oid=\"" + DEPLOY_ROLE_OID + "\" type=\"c:RoleType\"/></assignment>\n"
                         + "</user>",
                 StandardCharsets.UTF_8);
+    }
+
+    /** A user whose {@code adminGuiConfiguration} holds two panels keyed by {@code identifier}. */
+    private static File writeKeyedPanels(Path dir, String tag, int assignmentsOrder) throws IOException {
+        String xml = "<user xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\" oid=\"" + TEST_OID + "\">\n"
+                + "  <name>zz-it-user</name>\n"
+                + "  <adminGuiConfiguration><objectDetails>\n"
+                + "    <objectDetailsPage>\n"
+                + "      <type>c:UserType</type>\n"
+                + "      <panel><identifier>basic</identifier><displayOrder>10</displayOrder></panel>\n"
+                + "      <panel><identifier>assignments</identifier><displayOrder>"
+                + assignmentsOrder + "</displayOrder></panel>\n"
+                + "    </objectDetailsPage>\n"
+                + "  </objectDetails></adminGuiConfiguration>\n"
+                + "</user>";
+        Path path = dir.resolve("panels-" + tag + ".xml");
+        Files.writeString(path, xml, StandardCharsets.UTF_8);
+        return path.toFile();
+    }
+
+    /** The container ids midPoint assigned, in document order — what an in-place update has to preserve. */
+    private static List<String> containerIds(String xml) {
+        List<String> ids = new ArrayList<>();
+        java.util.regex.Matcher m =
+                java.util.regex.Pattern.compile("<(?:objectDetailsPage|panel) id=\"(\\d+)\"").matcher(xml);
+        while (m.find()) {
+            ids.add(m.group(1));
+        }
+        return ids;
     }
 
     private static String role(String oid, String name, String description) {

@@ -44,7 +44,8 @@ class PolicyTest {
     }
 
     private static StrategyOptions.Resolved baseline() {
-        return new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT, EquivalenceStrategy.REAL_VALUE,
+        return new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
+                DiffEngine.EquivalencePlan.of(EquivalenceStrategy.REAL_VALUE),
                 DiffEngine.MultiValueStrategy.replaceAll(), false);
     }
 
@@ -60,6 +61,23 @@ class PolicyTest {
         assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("RoleType", "Manager", OID, baseline()).scope);
         assertEquals(DiffEngine.Scope.PRESENT, policy.resolveFor("RoleType", "Other", OID, baseline()).scope);
         assertEquals(DiffEngine.Scope.PRESENT, policy.resolveFor("UserType", "Manager", OID, baseline()).scope);
+    }
+
+    @Test
+    void anEquivalenceRuleActuallyChangesTheResolvedStrategy(@TempDir Path dir) throws Exception {
+        // Only scope and multivalue layering were covered; equivalence was validated on load and then never
+        // asserted to reach the engine, so a policy file could name a strategy that was quietly ignored.
+        Policy policy = load(dir,
+                "RoleType/Manager equivalence=literal",
+                "RoleType/Auto equivalence=auto");
+
+        assertEquals(EquivalenceStrategy.LITERAL,
+                policy.resolveFor("RoleType", "Manager", OID, baseline()).equivalence.fixedStrategy());
+        assertTrue(policy.resolveFor("RoleType", "Auto", OID, baseline()).equivalence.isAuto(),
+                "'equivalence=auto' must resolve to the auto plan, not a fixed strategy");
+        assertEquals(EquivalenceStrategy.REAL_VALUE,
+                policy.resolveFor("RoleType", "Other", OID, baseline()).equivalence.fixedStrategy(),
+                "an unmatched object keeps the CLI baseline");
     }
 
     @Test
@@ -146,7 +164,7 @@ class PolicyTest {
         // README calls the CLI flags the baseline the policy is layered over. For item-level multivalue the
         // layering was inverted: ties break on list position, and the baseline was seeded first.
         StrategyOptions.Resolved cliReplace = new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
-                EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.EquivalencePlan.of(EquivalenceStrategy.REAL_VALUE),
                 DiffEngine.MultiValueStrategy.of(false, java.util.List.of(
                         new DiffEngine.MultiValueStrategy.PathRule(ItemPath.fromString("assignment"), false))),
                 false);

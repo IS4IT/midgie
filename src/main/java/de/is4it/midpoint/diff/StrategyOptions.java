@@ -37,9 +37,10 @@ public final class StrategyOptions {
     String[] pathStrategies;
 
     @Option(names = "--equivalence",
-            paramLabel = "real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal",
-            defaultValue = "real-value",
-            description = "Value-equivalence strategy, loosest to strictest. See parseEquivalence() for what each considers.")
+            paramLabel = "auto|real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal",
+            defaultValue = "auto",
+            description = "Value-equivalence strategy; 'auto' (the default) picks per container. "
+                    + "The rest are listed loosest to strictest. See parseEquivalence() for what each considers.")
     String equivalence;
 
     @Option(names = "--smart-refs", paramLabel = "accept|verify|resolve", defaultValue = "accept",
@@ -62,17 +63,17 @@ public final class StrategyOptions {
 
     public static final class Resolved {
         final DiffEngine.Scope scope;
-        final ParameterizedEquivalenceStrategy equivalence;
+        final DiffEngine.EquivalencePlan equivalence;
         final DiffEngine.MultiValueStrategy multiValue;
         final boolean allowInplaceMerge;
         final SmartRefs smartRefs;
 
-        Resolved(DiffEngine.Scope scope, ParameterizedEquivalenceStrategy equivalence,
+        Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge) {
             this(scope, equivalence, multiValue, allowInplaceMerge, SmartRefs.ACCEPT);
         }
 
-        Resolved(DiffEngine.Scope scope, ParameterizedEquivalenceStrategy equivalence,
+        Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge, SmartRefs smartRefs) {
             this.scope = scope;
             this.equivalence = equivalence;
@@ -99,7 +100,7 @@ public final class StrategyOptions {
         if (scopeValue == null) {
             return null;
         }
-        ParameterizedEquivalenceStrategy strategy = parseEquivalence();
+        DiffEngine.EquivalencePlan strategy = parseEquivalence();
         if (strategy == null) {
             return null;
         }
@@ -165,7 +166,9 @@ public final class StrategyOptions {
      * <pre>
      *   CLI value               prism preset                                    ignores / considers
      *   ----------------------  ----------------------------------------------  --------------------------------
-     *   real-value (default)    REAL_VALUE                                      ignores container ids, metadata,
+     *   auto (default)          per container: REAL_VALUE or the natural-key     see DiffEngine.EquivalencePlan
+     *                           preset below, from whether the key is filled
+     *   real-value              REAL_VALUE                                      ignores container ids, metadata,
      *                                                                           operational, element names, ns
      *                                                                           prefixes, ref filters/options
      *   consider-different-ids  REAL_VALUE_CONSIDER_DIFFERENT_IDS               as real-value, but PCV ids must
@@ -185,24 +188,44 @@ public final class StrategyOptions {
      * and only warns for the rest. {@code natural-keys} is prism-{@code @Experimental} (the pair-and-edit
      * matching is the merge footgun described in {@link DiffEngine}); it is exposed for exploration against
      * a real server and prints an experimental note when selected.
+     *
+     * <p>{@code auto} is the default and is deliberately absent from the strictness ordering: it is not a
+     * strategy of its own but a decision taken per multi-valued container, between {@code real-value} and
+     * {@code natural-keys}, from whether the schema's key is actually filled in. See
+     * {@link DiffEngine.EquivalencePlan} for why those two are the only candidates.
      */
-    private ParameterizedEquivalenceStrategy parseEquivalence() {
-        ParameterizedEquivalenceStrategy strategy = equivalenceByName(equivalence);
-        if (strategy == null) {
+    private DiffEngine.EquivalencePlan parseEquivalence() {
+        DiffEngine.EquivalencePlan plan = equivalencePlanByName(equivalence);
+        if (plan == null) {
             System.err.println("midgie: --equivalence must be "
-                    + "real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal, got: "
+                    + "auto|real-value|consider-different-ids|natural-keys|ignore-metadata|data|literal, got: "
                     + equivalence);
             return null;
         }
-        if (strategy == EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) {
+        // Only for an explicit choice: under auto the note would fire on most objects and say nothing the
+        // operator can act on, since auto only picks natural-keys where the key is filled in and pairing is
+        // therefore well-defined. What auto chose is reported per object instead.
+        if (plan.fixedStrategy() == EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) {
             System.err.println("midgie: note: --equivalence natural-keys "
                     + "(REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) is prism-experimental; "
                     + "container-value matching by natural key may behave unexpectedly.");
         }
-        return strategy;
+        return plan;
     }
 
-    /** Map an {@code --equivalence} name to a prism strategy, or {@code null} if unrecognised. Shared with {@link Policy}. */
+    /**
+     * Map an {@code --equivalence} name to a plan — {@code auto}, or one fixed prism strategy — or
+     * {@code null} if unrecognised. Shared with {@link Policy}, which validates against it.
+     */
+    static DiffEngine.EquivalencePlan equivalencePlanByName(String value) {
+        if ("auto".equalsIgnoreCase(value)) {
+            return DiffEngine.EquivalencePlan.auto();
+        }
+        ParameterizedEquivalenceStrategy strategy = equivalenceByName(value);
+        return (strategy != null) ? DiffEngine.EquivalencePlan.of(strategy) : null;
+    }
+
+    /** Map an {@code --equivalence} name to a prism strategy, or {@code null} if unrecognised ({@code auto} included). */
     static ParameterizedEquivalenceStrategy equivalenceByName(String value) {
         switch (value.toLowerCase()) {
             case "real-value":

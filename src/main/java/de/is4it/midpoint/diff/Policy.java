@@ -19,7 +19,6 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
 
 /**
  * Per-object / per-item diff-strategy overrides for {@code deploy}, loaded from a central policy file
@@ -202,7 +201,7 @@ final class Policy {
             case "scope":
                 return StrategyOptions.scopeByName(value) != null;
             case "equivalence":
-                return StrategyOptions.equivalenceByName(value) != null;
+                return StrategyOptions.equivalencePlanByName(value) != null;
             case "multivalue":
                 return mergeByName(value) != null;
             case "allow-inplace-merge":
@@ -237,7 +236,7 @@ final class Policy {
         }
 
         DiffEngine.Scope scope = baseline.scope;
-        ParameterizedEquivalenceStrategy equivalence = baseline.equivalence;
+        DiffEngine.EquivalencePlan equivalence = baseline.equivalence;
         boolean allowInplace = baseline.allowInplaceMerge;
         StrategyOptions.SmartRefs smartRefs = baseline.smartRefs;
         boolean globalMerge = baseline.multiValue.isGlobalMerge();
@@ -275,7 +274,7 @@ final class Policy {
             }
             if (rule.settings.containsKey("equivalence")
                     && (equivalenceRule == null || moreSpecific(rule, equivalenceRule))) {
-                equivalence = StrategyOptions.equivalenceByName(rule.settings.get("equivalence"));
+                equivalence = StrategyOptions.equivalencePlanByName(rule.settings.get("equivalence"));
                 equivalenceRule = rule;
             }
             if (rule.settings.containsKey("allow-inplace-merge")

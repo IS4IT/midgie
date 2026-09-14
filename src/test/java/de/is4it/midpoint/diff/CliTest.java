@@ -55,7 +55,20 @@ class CliTest {
 
     @Test
     void badEquivalenceExitsTwo() {
-        assertEquals(2, run("diff", A, B, "--equivalence", "nope").exit);
+        Result r = run("diff", A, B, "--equivalence", "nope");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("auto|real-value"), "the message must list auto as a value: " + r.err);
+    }
+
+    @Test
+    void equivalenceAutoIsAcceptedAndIsTheDefault() {
+        // a.xml vs b.xml differ in <description> only, so both runs are the same one-line drift; what is
+        // being pinned is that 'auto' parses and that omitting --equivalence means exactly it.
+        Result explicit = run("diff", A, B, "--equivalence", "auto");
+        assertEquals(1, explicit.exit, explicit.err);
+        assertEquals(explicit.out, run("diff", A, B).out, "the default must be --equivalence auto");
+        assertFalse(explicit.err.contains("prism-experimental"),
+                "auto must not carry natural-keys' experimental note: " + explicit.err);
     }
 
     @Test
