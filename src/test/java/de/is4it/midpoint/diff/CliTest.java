@@ -72,6 +72,21 @@ class CliTest {
     }
 
     @Test
+    void theOptOutFlagsAreOfferedAndTheOldPositiveOnesStillParse() {
+        // Creating and name-matching default on, so help offers the --no-… forms; the positive spellings
+        // are kept parsing (hidden, inert) because scripts and docs written before the flip pass them.
+        Result help = run("diff", "--help");
+        assertEquals(0, help.exit);
+        assertTrue(help.out.contains("--no-match-by-name"), "the opt-out must be documented: " + help.out);
+
+        for (String spelling : new String[] {"--match-by-name", "-m"}) {
+            Result r = run("diff", A, B, spelling);
+            assertEquals(1, r.exit, spelling + " must still parse (a.xml vs b.xml differ): " + r.err);
+            assertFalse(r.err.contains("Unknown option"), r.err);
+        }
+    }
+
+    @Test
     void badMultivalueExitsTwo() {
         assertEquals(2, run("diff", A, B, "--multivalue", "nope").exit);
     }

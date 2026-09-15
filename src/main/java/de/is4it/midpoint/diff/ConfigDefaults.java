@@ -109,6 +109,16 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     private static final Set<String> REFUSED = Set.of("yes", "prune");
 
     /**
+     * Keys that named a flag which has since become the default. The option still parses on the command
+     * line so that existing scripts keep working, which is exactly why a file setting it must be refused
+     * rather than ignored: it would sit there meaning the opposite of what its author intended, and this
+     * class exists to stop a setting that silently does nothing.
+     */
+    private static final Map<String, String> NOW_DEFAULT = Map.of(
+            "create-if-absent", "no-create-if-absent",
+            "match-by-name", "no-match-by-name");
+
+    /**
      * The only options a <b>tree-local</b> file may set.
      *
      * <p>An allowlist, not an extension of {@link #REFUSED}, and the difference matters. The site and user
@@ -131,7 +141,7 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      */
     static final Set<String> TREE_ALLOWED = Set.of(
             "rollback-plan", "policy", "scope", "multivalue", "equivalence", "path", "app",
-            "schema", "schema-dir", "match-by-name", "create-if-absent", "retry", "smart-refs",
+            "schema", "schema-dir", "no-match-by-name", "no-create-if-absent", "retry", "smart-refs",
             "allow-inplace-merge", "no-live-schema");
 
     /**
@@ -329,6 +339,12 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
             if (REFUSED.contains(option)) {
                 throw new IOException(origin.get(key) + " sets '" + key + "', which has to be given on the command "
                         + "line: it decides whether a run writes without asking (yes) or deletes (prune).");
+            }
+            String replacement = NOW_DEFAULT.get(option);
+            if (replacement != null) {
+                throw new IOException(origin.get(key) + " sets '" + key + "', which no longer decides "
+                        + "anything: " + option + " is the default now. Remove it, or set '" + replacement
+                        + " = true' to turn that behaviour off.");
             }
             if (!known.contains(key)) {
                 throw new IOException(origin.get(key) + " sets '" + key + "', which is not a midgie option. Keys are "

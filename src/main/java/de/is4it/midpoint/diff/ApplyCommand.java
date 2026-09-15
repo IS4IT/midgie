@@ -25,8 +25,9 @@ import picocli.CommandLine.Parameters;
 /**
  * The {@code apply} subcommand: reconcile a running midPoint object to the desired state. It fetches the
  * current object over REST, computes the minimal itemDelta (same engine as {@code diff}), prints what
- * would change, and — after confirmation — {@code PATCH}es it. With {@code --create-if-absent}, a missing
- * object is created via {@code POST} (operational/metadata items stripped first).
+ * would change, and — after confirmation — {@code PATCH}es it. A missing object is created via {@code POST}
+ * (operational/metadata items stripped first) unless {@code --no-create-if-absent} says otherwise, and an
+ * OID-less one is resolved by type+name unless {@code --no-match-by-name} says otherwise.
  *
  * <p>Because {@code apply} mutates a live server, it confirms before writing: it prompts interactively,
  * or, in a non-interactive session, refuses unless {@code --yes} is given. Idempotent: when the object
@@ -64,14 +65,30 @@ public class ApplyCommand implements Callable<Integer> {
     @Mixin
     SchemaOptions schemaOptions;
 
-    @Option(names = {"--create-if-absent", "-c"},
-            description = "If the object does not exist, POST the whole desired object to create it.")
-    boolean createIfAbsent;
+    // Creating and name-matching are the defaults; these opt out, following the same shape as
+    // --no-rollback-plan and --no-live-schema. picocli's `negatable = true` looks like the tidier way to
+    // express it and is not: a negatable flag flips *away from* its declared default
+    // (CommandLine.applyValueToSingleValuedField, "#712 flip the default value"), so with defaultValue
+    // "true" both spellings inverted — plain --create-if-absent turned creation OFF.
+    @Option(names = "--no-create-if-absent",
+            description = "Fail on an object that does not exist instead of creating it. Creating is "
+                    + "otherwise the default.")
+    boolean noCreateIfAbsent;
 
-    @Option(names = {"--match-by-name", "-m"},
-            description = "If the object has no oid, find it on the server by type+name (a single match) "
-                    + "instead of failing; combine with --create-if-absent to create it when there is no match.")
-    boolean matchByName;
+    @Option(names = "--no-match-by-name",
+            description = "Require an oid. An OID-less object is otherwise resolved on the server by "
+                    + "type+name (a single match), which is the default.")
+    boolean noMatchByName;
+
+    // Accepted so that scripts, docs and container invocations written before these became the default keep
+    // parsing. Hidden rather than removed, and inert: the behaviour they asked for is what now happens.
+    @Option(names = {"--create-if-absent", "-c"}, hidden = true,
+            description = "Accepted for compatibility; creating is the default. No effect.")
+    boolean createIfAbsentLegacy;
+
+    @Option(names = {"--match-by-name", "-m"}, hidden = true,
+            description = "Accepted for compatibility; matching by name is the default. No effect.")
+    boolean matchByNameLegacy;
 
     @Option(names = "--dry-run",
             description = "Compute and print the delta but do not send it. Exits 1 if it would change anything.")
@@ -103,6 +120,14 @@ public class ApplyCommand implements Callable<Integer> {
     @Option(names = {"--output", "-o"}, paramLabel = "FILE",
             description = "Write the dry-run delta to FILE instead of stdout.")
     File output;
+
+    boolean createIfAbsent() {
+        return !noCreateIfAbsent;
+    }
+
+    boolean matchByName() {
+        return !noMatchByName;
+    }
 
     @Override
     public Integer call() {
@@ -137,7 +162,7 @@ public class ApplyCommand implements Callable<Integer> {
             }
             PrismObject<? extends Objectable> desired = Io.parseObject(prismContext, desiredFile);
             LiveLookup.Target resolved =
-                    LiveLookup.resolveCurrent(prismContext, client, desired, connectionOptions.oid, matchByName);
+                    LiveLookup.resolveCurrent(prismContext, client, desired, connectionOptions.oid, matchByName());
             LiveTarget target = LiveTarget.of(resolved.restType, resolved.oid);
             LOG.debug("apply: {} → {}", target.restType + "/" + (target.oid != null ? target.oid : "(by name)"),
                     resolved.current == null ? "absent (create path)" : "present (patch path)");
@@ -157,8 +182,9 @@ public class ApplyCommand implements Callable<Integer> {
             PrismObject<? extends Objectable> desired) throws Exception {
         String address = (target.oid != null) ? target.restType + "/" + target.oid
                 : target.restType + " '" + LiveLookup.nameOf(desired) + "'";
-        if (!createIfAbsent) {
-            System.err.println("midgie: " + address + " does not exist. Pass --create-if-absent to create it.");
+        if (!createIfAbsent()) {
+            System.err.println("midgie: " + address + " does not exist, and --no-create-if-absent rules out "
+                    + "creating it.");
             return EXIT_ERROR;
         }
         note("midgie: " + address + " does not exist; will create it from " + desiredFile.getName() + ".");

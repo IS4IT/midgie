@@ -5,6 +5,18 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Creating a missing object and matching an OID-less one by name are now the defaults.** Both were opt-in, and the effect was that a normal tree did nothing useful out of the box: `deploy` **skipped** every file that carried no OID — the ordinary way to write one — and **failed** on a declared OID the server did not have, while `diff --url` and `apply` refused to start at all with `No OID to address`. You had to know to pass `--create-if-absent` and `--match-by-name` before the tool would do the obvious thing. It now does the obvious thing, and `--no-create-if-absent` / `--no-match-by-name` opt out. The two were already entangled — `--create-if-absent` has run the by-name search since 0.4.0, because creating without first asking "does it exist?" re-POSTed the object on every run and midPoint answered 409 — so flipping them together is the coherent move.
+
+  **To keep the old behaviour, pass `--no-create-if-absent --no-match-by-name`.** Existing invocations do not break: `--create-if-absent`, `--match-by-name` and the `-c`/`-m` aliases still parse and still mean what they said, they are simply what happens anyway. They are hidden from `--help`, which now documents the `--no-…` forms instead. In a properties file the old keys are **refused** rather than ignored, naming the key that does work now — a file saying `create-if-absent = false` meant the opposite of what its author intended, and a setting that silently does nothing is the failure that layer exists to prevent. Tree-local files may set the `no-…` keys: opting out moves in the conservative direction, so the allowlist rule about safety gates is not in play.
+
+  One genuinely new failure: an OID-less object whose name matches **two** live objects. That was silently skipped before, because nothing searched; it is now a refused ambiguous match, which is the honest answer. And a pinned OID that the server does not have is now created rather than failing — that is what the flag says, and it is how a tree with stable OIDs seeds a fresh environment. The guard against "pointed at the wrong server" is where it already was: `deploy`'s confirmation prompt, `--dry-run`, and the plan files all list every create before anything is written.
+
+  Worth recording for whoever touches this next: picocli's `negatable = true` looks like the way to express "default on with a `--no-` form" and is not. A negatable flag flips *away from* its declared default, so with `defaultValue = "true"` both spellings invert — plain `--create-if-absent` turned creation **off**. These are separate `--no-…` options instead, which is also the shape `--no-rollback-plan` and `--no-live-schema` already use.
+
 ## [0.11.2] - 2026-09-14
 
 ### Fixed

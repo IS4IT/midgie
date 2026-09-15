@@ -167,15 +167,16 @@ final class Reconciler {
                     null, ApplyCommand.createBody(prismContext, desired), null, List.of());
         }
         if (oid != null && !oid.isBlank()) {
-            return fail(restType, oid, "does not exist (pass --create-if-absent to create it)");
+            return fail(restType, oid, "does not exist, and --no-create-if-absent rules out creating it");
         }
         if (matchByName) {
-            // The search already ran and found nothing, so telling them to pass --match-by-name — which they
-            // did — reads as if the flag were being ignored.
+            // The search already ran and found nothing, so pointing at --match-by-name — which is on —
+            // would read as if the flag were being ignored.
             return skip(restType, null, "no object named '" + LiveLookup.nameOf(desired)
-                    + "' on the server; pass --create-if-absent to create it");
+                    + "' on the server, and --no-create-if-absent rules out creating it");
         }
-        return skip(restType, null, "no oid; pass --create-if-absent to create, or --match-by-name to match by name");
+        return skip(restType, null, "no oid, and --no-create-if-absent/--no-match-by-name rule out both "
+                + "creating it and matching it by name");
     }
 
     /** Execute a planned {@code CREATE}/{@code PATCH}. Returns the affected OID (created OID for a POST). */

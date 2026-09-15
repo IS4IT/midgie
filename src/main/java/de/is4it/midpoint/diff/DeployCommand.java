@@ -93,13 +93,34 @@ public class DeployCommand implements Callable<Integer> {
             description = "Prompt before each individual change (per itemDelta) instead of once for the whole tree.")
     boolean confirmEachApply;
 
-    @Option(names = {"--create-if-absent", "-c"},
-            description = "POST objects that do not exist yet (otherwise a missing object fails; an OID-less one is skipped).")
-    boolean createIfAbsent;
+    // Creating and name-matching are the defaults; these opt out. See the note on ApplyCommand's copy for
+    // why these are separate --no-x options rather than picocli's `negatable`.
+    @Option(names = "--no-create-if-absent",
+            description = "Fail on an object that does not exist instead of creating it, and skip an "
+                    + "OID-less one. Creating is otherwise the default.")
+    boolean noCreateIfAbsent;
 
-    @Option(names = {"--match-by-name", "-m"},
-            description = "For an OID-less object, search the server by type+name and PATCH the single match (else skip/create).")
-    boolean matchByName;
+    @Option(names = "--no-match-by-name",
+            description = "Skip an OID-less object instead of searching the server by type+name and "
+                    + "patching the single match, which is the default.")
+    boolean noMatchByName;
+
+    // Accepted so that invocations written before these became the default keep parsing; inert.
+    @Option(names = {"--create-if-absent", "-c"}, hidden = true,
+            description = "Accepted for compatibility; creating is the default. No effect.")
+    boolean createIfAbsentLegacy;
+
+    @Option(names = {"--match-by-name", "-m"}, hidden = true,
+            description = "Accepted for compatibility; matching by name is the default. No effect.")
+    boolean matchByNameLegacy;
+
+    boolean createIfAbsent() {
+        return !noCreateIfAbsent;
+    }
+
+    boolean matchByName() {
+        return !noMatchByName;
+    }
 
     @Option(names = "--retry",
             description = "After the apply pass, re-apply the failed units until a round makes no progress (catches by-name refs).")
@@ -206,13 +227,16 @@ public class DeployCommand implements Callable<Integer> {
         }
         boolean live = connectionOptions.isLive();
         LOG.debug("deploy: live={}, dryRun={}, createIfAbsent={}, matchByName={}, retry={}, plan={}, "
-                + "applyPlan={}, policy={}", live, dryRun, createIfAbsent, matchByName, retry,
+                + "applyPlan={}, policy={}", live, dryRun, createIfAbsent(), matchByName(), retry,
                 planDir, applyPlanDir, policyFile);
-        boolean writeFlags = dryRun || assumeYes || confirmEachApply || createIfAbsent || matchByName
+        // --create-if-absent and --match-by-name are deliberately absent here: they default ON, so their
+        // value no longer says the operator asked for anything, and including them would make every offline
+        // 'deploy <tree>' — which only prints the plan — fail for needing --url.
+        boolean writeFlags = dryRun || assumeYes || confirmEachApply
                 || retry || prune || planDir != null || applyPlanDir != null || policyFile != null;
         if (!live && writeFlags) {
-            System.err.println("midgie: --dry-run/--yes/--create-if-absent/--match-by-name/--retry/--prune/"
-                    + "--plan/--apply-plan/--policy need --url; without it, deploy only prints the plan.");
+            System.err.println("midgie: --dry-run/--yes/--retry/--prune/--plan/--apply-plan/--policy need "
+                    + "--url; without it, deploy only prints the plan.");
             return EXIT_ERROR;
         }
         if (applyPlanDir == null && (paths == null || paths.isEmpty())) {
@@ -230,11 +254,14 @@ public class DeployCommand implements Callable<Integer> {
             if (policyFile != null) {
                 ignored.add("--policy");
             }
-            if (createIfAbsent) {
-                ignored.add("--create-if-absent");
+            // Asked of the spellings the operator can type, not of the effective value: creating and
+            // name-matching default on, so testing createIfAbsent() would report them ignored on every
+            // --apply-plan run. Only a flag actually given is worth saying will be ignored — either form.
+            if (createIfAbsentLegacy || noCreateIfAbsent) {
+                ignored.add(noCreateIfAbsent ? "--no-create-if-absent" : "--create-if-absent");
             }
-            if (matchByName) {
-                ignored.add("--match-by-name");
+            if (matchByNameLegacy || noMatchByName) {
+                ignored.add(noMatchByName ? "--no-match-by-name" : "--match-by-name");
             }
             if (paths != null && !paths.isEmpty()) {
                 ignored.add("PATH");
@@ -361,7 +388,7 @@ public class DeployCommand implements Callable<Integer> {
             }
 
             emitWarnings(localSchemas, schemaOrder, objectOrder, warnings);
-            Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent, matchByName);
+            Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent(), matchByName());
             List<DeployObject> units = flatten(schemaOrder, objectOrder);
             LOG.debug("{} apply unit(s); mode={}", units.size(), planDir != null ? "plan" : "apply");
 
@@ -672,7 +699,7 @@ public class DeployCommand implements Callable<Integer> {
         if (removal.oid != null && !removal.oid.isBlank()) {
             return removal.oid;
         }
-        if (!matchByName || removal.objectName == null) {
+        if (!matchByName() || removal.objectName == null) {
             return null;
         }
         List<PrismObject<? extends Objectable>> matches = LiveLookup.byName(

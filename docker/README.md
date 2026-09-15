@@ -66,9 +66,9 @@ Point the live modes straight at the rig — they GET/PATCH over REST for you:
 java -jar target/midgie.jar diff desired.xml \
   --url http://localhost:12080/midpoint -u administrator -p T3stPw890uio
 
-# reconcile it (PATCH; create if absent)
+# reconcile it (PATCH, or POST to create it if it is not there — the default)
 java -jar target/midgie.jar apply desired.xml \
-  --url http://localhost:12080/midpoint -u administrator -p T3stPw890uio --create-if-absent
+  --url http://localhost:12080/midpoint -u administrator -p T3stPw890uio
 ```
 
 Or diff two local files offline (no server): `java -jar target/midgie.jar diff desired.xml live.xml`.

@@ -31,7 +31,10 @@ final class PropertiesTemplate {
     /** Never worth a default: they answer "what is this run doing", not "how is this machine set up". */
     private static final Set<String> SKIPPED = Set.of("help", "version", "debug", "trace", "dry-run", "yes",
             "prune", "confirm-each-apply", "write-policy", "write-properties", "write-cacert", "create-state",
-            "plan", "apply-plan");
+            "plan", "apply-plan",
+            // Parse for compatibility but do nothing; offering them here would generate a file that
+            // ConfigDefaults then refuses. The '--no-…' forms carry the setting instead.
+            "create-if-absent", "match-by-name");
 
     private PropertiesTemplate() {
     }

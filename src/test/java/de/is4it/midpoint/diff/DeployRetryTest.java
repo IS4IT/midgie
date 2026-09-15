@@ -204,10 +204,12 @@ class DeployRetryTest {
     }
 
     /**
-     * The object the stub "server" holds. Never swallows a failure: an empty result means "absent", and
-     * without --create-if-absent an absent object fails the unit — the very outcome
-     * {@code withoutRetryAFlakyUnitFailsTheRun} asserts. A broken stub would have disguised itself as the
-     * expected failure and the test would have passed having exercised nothing.
+     * The object the stub "server" holds. Never swallows a failure, and since creating became the default
+     * it cannot disguise one either: the flakiness is injected on PATCH, so a stub that wrongly returned an
+     * empty result would make the unit a CREATE, the POST would succeed, and
+     * {@code withoutRetryAFlakyUnitFailsTheRun} would fail its {@code exit == 2} rather than pass having
+     * exercised nothing. (Before the default flipped, an absent object failed the unit by itself, which is
+     * exactly the disguise this note used to warn about.)
      */
     private static String searchResult(String oid) throws IOException {
         try {

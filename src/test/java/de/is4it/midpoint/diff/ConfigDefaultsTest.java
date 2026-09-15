@@ -215,6 +215,33 @@ class ConfigDefaultsTest {
     }
 
     @Test
+    void aKeyThatBecameTheDefaultIsRefusedRatherThanIgnored(@TempDir Path dir) throws Exception {
+        // 'create-if-absent' still parses on the command line so old scripts keep working, which is exactly
+        // why a file setting it must be refused: it would sit there meaning the opposite of what its author
+        // intended, and a setting that silently does nothing is what this class exists to prevent.
+        Path user = write(dir, "user.properties", "create-if-absent = false");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), user.toFile(), null);
+
+        IOException failure = assertThrows(IOException.class, () -> defaults.validate(Main.commandLine()));
+        assertTrue(failure.getMessage().contains("no-create-if-absent"),
+                "and it must name the key that does work now: " + failure.getMessage());
+    }
+
+    @Test
+    void aTreeMayStillTurnCreatingOff(@TempDir Path dir) throws Exception {
+        // The opt-out moves in the conservative direction, so a tree-local file may set it — the allowlist
+        // rule is about safety gates, and refusing to create is not switching one off.
+        Path tree = write(dir, "tree.properties", "no-create-if-absent = true");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+
+        defaults.validate(Main.commandLine());   // must not throw
+    }
+
+    @Test
     void theOperatorsOwnFileOutranksTheTree(@TempDir Path dir) throws Exception {
         Path user = write(dir, "user.properties", "scope = full");
         Path tree = write(dir, "tree.properties", "scope = present");

@@ -85,8 +85,8 @@ final class LiveLookup {
             return new Target(restType, oid, current);
         }
         if (!matchByName) {
-            throw new SchemaException("No OID to address: pass --oid, include an oid in the object, "
-                    + "or --match-by-name to resolve it by type+name.");
+            throw new SchemaException("No OID to address, and --no-match-by-name rules out resolving it by "
+                    + "type+name: pass --oid, include an oid in the object, or drop --no-match-by-name.");
         }
         String name = nameOf(desired);
         List<PrismObject<? extends Objectable>> matches = byName(prismContext, client, clazz, restType, name);

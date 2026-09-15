@@ -237,18 +237,34 @@ class DeployCliTest {
 
     @Test
     void applyFlagsWithoutHostAreAnError() {
-        Result r = run("deploy", TREE, "--create-if-absent");
+        Result r = run("deploy", TREE, "--dry-run");
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("--url"), r.err);
     }
 
     @Test
-    void shortCreateAndMatchFlagsAreRecognized() {
-        // -c/-m are shorthands for --create-if-absent/--match-by-name: without --url they hit the
-        // write-flags guard (not an "unknown option" error), which proves they parsed as those flags.
-        Result r = run("deploy", TREE, "-c", "-m");
-        assertEquals(2, r.exit);
-        assertTrue(r.err.contains("--url"), r.err);
+    void creatingAndNameMatchingAreNoLongerWriteFlags() {
+        // They default on, so their value says nothing about what the operator asked for. Leaving them in
+        // the write-flags guard would have made every offline 'deploy <tree>' — which only prints the
+        // apply order — fail for needing --url.
+        Result byDefault = run("deploy", TREE);
+        assertEquals(0, byDefault.exit, byDefault.err);
+
+        Result optedOut = run("deploy", TREE, "--no-create-if-absent", "--no-match-by-name");
+        assertEquals(0, optedOut.exit, "opting out is not a write flag either: " + optedOut.err);
+        assertTrue(optedOut.out.contains("Apply order"), optedOut.out);
+    }
+
+    @Test
+    void theOldPositiveFlagsStillParse() {
+        // --create-if-absent/--match-by-name and their -c/-m aliases are in scripts, docs and the container
+        // README. They are inert now, but they must not become "Unknown option" and break those runs.
+        for (String[] spelling : new String[][] {{"-c", "-m"}, {"--create-if-absent", "--match-by-name"}}) {
+            Result r = run("deploy", TREE, spelling[0], spelling[1]);
+            assertEquals(0, r.exit, spelling[0] + "/" + spelling[1] + " must still parse: " + r.err);
+            assertFalse(r.err.contains("Unknown option"), r.err);
+            assertTrue(r.out.contains("Apply order"), r.out);
+        }
     }
 
     @Test
@@ -311,6 +327,29 @@ class DeployCliTest {
         Result r = run("deploy", TREE, "--plan", "out", "--apply-plan", "in");
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("not both"), r.err);
+    }
+
+    @Test
+    void applyPlanOnlyReportsTheReconcileFlagsTheOperatorActuallyTyped(@TempDir Path dir) throws Exception {
+        // The "would have no effect" note is driven by the spellings that can be typed, not by the effective
+        // value: creating and name-matching default on, so keying it off those would have fired the note —
+        // and failed the run — on every --apply-plan invocation.
+        Path plan = dir.resolve("plan");
+        Files.createDirectories(plan);
+
+        Result silent = run("deploy", "--apply-plan", plan.toString(), "--url", "http://localhost:1");
+        assertFalse(silent.err.contains("would have no effect"),
+                "a default must not be reported as ignored: " + silent.err);
+
+        Result typed = run("deploy", "--apply-plan", plan.toString(), "--url", "http://localhost:1",
+                "--create-if-absent");
+        assertEquals(2, typed.exit);
+        assertTrue(typed.err.contains("--create-if-absent would have no effect"), typed.err);
+
+        Result optedOut = run("deploy", "--apply-plan", plan.toString(), "--url", "http://localhost:1",
+                "--no-match-by-name");
+        assertEquals(2, optedOut.exit);
+        assertTrue(optedOut.err.contains("--no-match-by-name would have no effect"), optedOut.err);
     }
 
     @Test

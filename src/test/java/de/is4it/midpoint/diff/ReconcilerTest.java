@@ -88,15 +88,18 @@ class ReconcilerTest {
         assertEquals(Reconciler.Action.CREATE, outcome.action);
     }
 
+    // The two below are the opted-out states (--no-create-if-absent, --no-match-by-name), not defaults:
+    // creating and name-matching are what happens unless the operator turns them off.
+
     @Test
-    void absentWithoutCreateIfAbsentFails() throws Exception {
+    void absentUnderNoCreateIfAbsentFails() throws Exception {
         Reconciler.Outcome outcome = plan(false, false, role(OID, "Manager", "x"));
         assertEquals(Reconciler.Action.FAIL, outcome.action);
-        assertTrue(outcome.detail.contains("create-if-absent"), outcome.detail);
+        assertTrue(outcome.detail.contains("no-create-if-absent"), outcome.detail);
     }
 
     @Test
-    void oidlessDefaultsToSkip() throws Exception {
+    void oidlessUnderBothOptOutsIsSkipped() throws Exception {
         Reconciler.Outcome outcome = plan(false, false, role(null, "Manager", "x"));
         assertEquals(Reconciler.Action.SKIP, outcome.action);
         assertTrue(outcome.detail.contains("no oid"), outcome.detail);

@@ -422,16 +422,23 @@ class LiveIntegrationTest {
         File oidless = dir.resolve("oidless.xml").toFile();
         Files.writeString(oidless.toPath(), role(null, "IT Deploy Role", "changed"), StandardCharsets.UTF_8);
 
-        // Without --match-by-name there is no OID to address -> error.
-        CliResult noFlag = run("diff", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD);
-        assertEquals(2, noFlag.exit);
-        assertTrue(noFlag.err.contains("match-by-name"), noFlag.err);
-
-        // With --match-by-name it resolves by name and sees the drift.
+        // Name-matching is the default, so a bare diff resolves it and sees the drift.
         CliResult matched = run("diff", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
-                "--match-by-name", "--format", "summary");
+                "--format", "summary");
         assertEquals(1, matched.exit, matched.err);
         assertTrue(matched.out.contains("replace description"), matched.out);
+
+        // --no-match-by-name opts out, and then there is no OID to address.
+        CliResult optedOut = run("diff", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--no-match-by-name");
+        assertEquals(2, optedOut.exit);
+        assertTrue(optedOut.err.contains("No OID to address"), optedOut.err);
+
+        // The old spelling still parses and still means "match by name" — scripts predate the default.
+        CliResult legacy = run("diff", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--match-by-name", "--format", "summary");
+        assertEquals(1, legacy.exit, legacy.err);
+        assertTrue(legacy.out.contains("replace description"), legacy.out);
     }
 
     @Test

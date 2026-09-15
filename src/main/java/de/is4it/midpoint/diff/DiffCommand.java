@@ -87,10 +87,21 @@ public class DiffCommand implements Callable<Integer> {
                     + "and the prism/framework logs.")
     boolean trace;
 
-    @Option(names = {"--match-by-name", "-m"},
-            description = "In live mode, if the object has no oid, find it on the server by type+name "
-                    + "(a single match) instead of failing.")
-    boolean matchByName;
+    // Name-matching is the default; this opts out. See the note on ApplyCommand's copy for why this is a
+    // separate --no-x option rather than picocli's `negatable`.
+    @Option(names = "--no-match-by-name",
+            description = "Require an oid. In live mode an OID-less object is otherwise resolved on the "
+                    + "server by type+name (a single match), which is the default.")
+    boolean noMatchByName;
+
+    // Accepted so that invocations written before this became the default keep parsing; inert.
+    @Option(names = {"--match-by-name", "-m"}, hidden = true,
+            description = "Accepted for compatibility; matching by name is the default. No effect.")
+    boolean matchByNameLegacy;
+
+    boolean matchByName() {
+        return !noMatchByName;
+    }
 
     @Override
     public Integer call() {
@@ -218,7 +229,7 @@ public class DiffCommand implements Callable<Integer> {
             PrismContext prismContext, MidpointRestClient client, PrismObject<? extends Objectable> desired)
             throws Exception {
         LiveLookup.Target target =
-                LiveLookup.resolveCurrent(prismContext, client, desired, connectionOptions.oid, matchByName);
+                LiveLookup.resolveCurrent(prismContext, client, desired, connectionOptions.oid, matchByName());
         if (target.current == null) {
             String where = (target.oid != null) ? "Object " + target.restType + "/" + target.oid
                     : "A " + target.restType + " named '" + LiveLookup.nameOf(desired) + "'";

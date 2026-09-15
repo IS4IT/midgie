@@ -165,8 +165,8 @@ the midPoint source tree.
 - `midgie diff <desired.xml> <live.xml>` → itemDelta XML on stdout. No REST, no server.
 - `midgie diff <desired.xml> --url <url> --user <u> --password <p> [--oid <oid>]` → GET the
   current object (type + OID read from the desired file if not given), diff, emit itemDelta.
-- `midgie apply <desired.xml> --url … [--create-if-absent]` → diff then
-  `PATCH /ws/rest/{type}/{oid}`; when the search finds nothing and `--create-if-absent` is set, `POST /ws/rest/{type}` the whole
+- `midgie apply <desired.xml> --url … [--no-create-if-absent]` → diff then
+  `PATCH /ws/rest/{type}/{oid}`; when the search finds nothing, `POST /ws/rest/{type}` the whole
   object (operational/metadata items stripped first). This is the reconciler. Because it writes, it shows
   the pending change and confirms first: it prompts interactively, or refuses in a non-interactive session
   unless `--yes`/`-y` is given. `--dry-run` prints the delta and changes nothing.
@@ -308,7 +308,7 @@ That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — app
 1. **Offline `diff` core** — engine + two-layer schema loading + `--scope`/`--multivalue`/`--equivalence`
    + `ObjectModificationType`/`summary` output + exit codes. Independently testable and useful.
 2. **Live fetch** — `--url` GET of the current object, then diff.
-3. **`apply`** — `PATCH`, plus `--create-if-absent` → `POST`.
+3. **`apply`** — `PATCH`, and `POST` when the object is absent (`--no-create-if-absent` fails instead).
 
 ## Verification
 
@@ -324,7 +324,7 @@ That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — app
    `--schema-dir`/`--schema`, and falls back to raw handling without it (document the fallback).
 5. *Live/apply (increment 2+3):* against a running midPoint, `apply` a one-field change to
    `administrator` → only `fullName` changes, assignments/metadata intact; re-run → no-op (idempotent).
-   `--create-if-absent` on a fresh OID creates once, then no-ops.
+   a fresh OID creates once, then no-ops.
 
 ## deploy — apply a folder tree
 
@@ -345,7 +345,7 @@ The plan prints one line per apply unit — that is, per object (`seq  type  oid
 
 ### Increment 2 (built): the apply loop + `--dry-run`
 
-3. **Apply in order.** With `--url`, reconcile each unit — one per **object** — in the sorted order: resolve the current object via a `POST {type}/search` (by OID, or by type+name when `--match-by-name` is set — a search so a missing object is an empty result, not a 404 that makes midPoint log an `ObjectNotFoundException`), diff the combined desired object (`--scope present`), then PATCH — or POST to create with `--create-if-absent`, else a missing OID object fails and a missing OID-less object is skipped. One request per object, so a create is atomic (the whole object is POSTed, not a partial one patched into shape afterwards) and there is no window in which half of it is applied. Sequential, so each unit sees prior writes (a role is created before the user that references it). Writing is gated: a single up-front confirmation by default (`--yes` bypasses, `--confirm-each-apply` prompts per change, `--dry-run` previews without writing; a non-interactive session without `--yes` refuses). Per-unit result lines (created/patched/in-sync/skipped/failed) + a summary; `--quiet` keeps only errors and the exit code. Exit `0`/`2` on apply, `0` in-sync / `1` would-change / `2` on `--dry-run`. A transport/auth failure aborts; a per-object rejection is recorded and the run continues (best-effort). The `Reconciler` reuses `DiffEngine`, `ApplyCommand.createBody`, `LiveTarget`, and the new `MidpointRestClient.searchObjects`.
+3. **Apply in order.** With `--url`, reconcile each unit — one per **object** — in the sorted order: resolve the current object via a `POST {type}/search` (by OID, or by type+name when it has none, unless `--no-match-by-name` — a search so a missing object is an empty result, not a 404 that makes midPoint log an `ObjectNotFoundException`), diff the combined desired object (`--scope present`), then PATCH — or POST to create it, which is the default; under `--no-create-if-absent` a missing OID object fails and a missing OID-less object is skipped instead. One request per object, so a create is atomic (the whole object is POSTed, not a partial one patched into shape afterwards) and there is no window in which half of it is applied. Sequential, so each unit sees prior writes (a role is created before the user that references it). Writing is gated: a single up-front confirmation by default (`--yes` bypasses, `--confirm-each-apply` prompts per change, `--dry-run` previews without writing; a non-interactive session without `--yes` refuses). Per-unit result lines (created/patched/in-sync/skipped/failed) + a summary; `--quiet` keeps only errors and the exit code. Exit `0`/`2` on apply, `0` in-sync / `1` would-change / `2` on `--dry-run`. A transport/auth failure aborts; a per-object rejection is recorded and the run continues (best-effort). The `Reconciler` reuses `DiffEngine`, `ApplyCommand.createBody`, `LiveTarget`, and the new `MidpointRestClient.searchObjects`.
 
 ### Increment 3 (built): retry, saved plans, and the strategy policy
 
