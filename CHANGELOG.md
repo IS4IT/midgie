@@ -17,6 +17,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   Worth recording for whoever touches this next: picocli's `negatable = true` looks like the way to express "default on with a `--no-` form" and is not. A negatable flag flips *away from* its declared default, so with `defaultValue = "true"` both spellings invert — plain `--create-if-absent` turned creation **off**. These are separate `--no-…` options instead, which is also the shape `--no-rollback-plan` and `--no-live-schema` already use.
 
+### Fixed
+
+- **A JAR built anywhere but the release workflow no longer misreports its version.** `--version` answered `midgie 0.1.0-SNAPSHOT` from every local and CI build, whatever commit it came from — a version that was never released. The tag was the single source of truth, but only the release workflow read it, by rewriting the pom with `versions:set` before building; the pom itself stays on a placeholder and is never bumped. Every other build stamped that placeholder into the JAR, so a bug report could not be tied to a build, and two JARs from different commits claimed to be the same thing.
+
+  The build now derives the version the same way the release does: from the tag, read with `git describe` at `validate` time and filtered into `build-info.properties`. On a release tag it is the release version (`0.11.2`); past one it says so (`0.11.2-1-g4c278ae-dirty` — one commit on, working tree modified), which is what makes a development build recognisable as one. Where git cannot name a tag — a source archive with no `.git`, a shallow clone — it falls back to the pom version, and that is also what keeps the release honest: `versions:set` has already made the pom version the tag by then, so the released JAR is correctly labelled even if `git describe` says nothing. The workflows now check out with `fetch-depth: 0` so the tags are actually there to read.
+
 ## [0.11.2] - 2026-09-14
 
 ### Fixed

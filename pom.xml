@@ -67,8 +67,9 @@
         <finalName>midgie</finalName>
 
         <!-- Filter build-info.properties only, so ${midpoint.version} is embedded for the runtime
-             version check; everything else (e.g. logback.xml, which contains its own ${} tokens)
-             is copied verbatim. -->
+             version check and ${midgie.version} (derived from the git tag by the antrun execution
+             below) for the version the CLI reports; everything else (e.g. logback.xml, which contains
+             its own ${} tokens) is copied verbatim. -->
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
@@ -175,13 +176,16 @@
                 </configuration>
             </plugin>
 
-            <!-- Fail the build if docker/.env's MP_VER drifts from <midpoint.version>. The compile-time
-                 schema jar and the rig's server image must share a major line (see docker/README.md). -->
+            <!-- Two validate-phase chores: the midPoint version guard, and the version stamped into the
+                 build. Both export their Ant properties, which is how MP_PORT reaches surefire above and
+                 midgie.version reaches the filtered build-info.properties. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-antrun-plugin</artifactId>
                 <version>3.1.0</version>
                 <executions>
+                    <!-- Fail the build if docker/.env's MP_VER drifts from <midpoint.version>. The compile-time
+                         schema jar and the rig's server image must share a major line (see docker/README.md). -->
                     <execution>
                         <id>check-midpoint-version-sync</id>
                         <phase>validate</phase>
@@ -197,6 +201,58 @@
                                         <not><equals arg1="${MP_VER}" arg2="${midpoint.version}"/></not>
                                     </condition>
                                 </fail>
+                            </target>
+                        </configuration>
+                    </execution>
+
+                    <!-- Derive the version to stamp into build-info.properties from the git tag, so any build
+                         reports what it was built from. The tag is the release version (release.yml applies it
+                         with versions:set and the pom stays on -SNAPSHOT), and without this a local or CI build
+                         reported the pom's placeholder - a version that was never released. -->
+                    <execution>
+                        <id>stamp-version-from-git</id>
+                        <phase>validate</phase>
+                        <goals><goal>run</goal></goals>
+                        <configuration>
+                            <exportAntProperties>true</exportAntProperties>
+                            <target>
+                                <!-- failifexecutionfails covers git not being installed, failonerror covers git
+                                     having nothing to say (no .git, or a shallow clone with no tag). The match
+                                     pattern keeps a tag that is not a version from hijacking the build.
+                                     errorproperty is not optional: without it Ant merges stderr into
+                                     outputproperty, and git's "fatal: not a git repository" became the version. -->
+                                <exec executable="git" outputproperty="git.describe"
+                                      errorproperty="git.error" resultproperty="git.result"
+                                      failifexecutionfails="false" failonerror="false">
+                                    <arg value="describe"/>
+                                    <arg value="--tags"/>
+                                    <arg value="--dirty"/>
+                                    <arg value="--match=v[0-9]*"/>
+                                </exec>
+                                <!-- Take the output only from a git that ran and succeeded; <exec> sets
+                                     outputproperty to the empty string rather than leaving it unset, so a bare
+                                     write-once fallback would not fire on its own. The fallback is the pom
+                                     version, which is the right answer in the release job: versions:set has
+                                     already rewritten it to the tag. A build that has to fall back also carries
+                                     Ant's own '[ERROR] [exec] Result: 128' in the log - that line is git saying
+                                     it has no tag to name, not a failure; the build goes on. -->
+                                <condition property="midgie.describe" value="${git.describe}">
+                                    <and>
+                                        <equals arg1="${git.result}" arg2="0"/>
+                                        <isset property="git.describe"/>
+                                        <not><equals arg1="${git.describe}" arg2=""/></not>
+                                    </and>
+                                </condition>
+                                <property name="midgie.describe" value="${project.version}"/>
+                                <!-- Tags are v-prefixed, versions are not: v0.11.2-1-gabc1234-dirty -> 0.11.2-1-gabc1234-dirty. -->
+                                <loadresource property="midgie.version">
+                                    <propertyresource name="midgie.describe"/>
+                                    <filterchain>
+                                        <tokenfilter>
+                                            <replaceregex pattern="^v" replace=""/>
+                                        </tokenfilter>
+                                    </filterchain>
+                                </loadresource>
                             </target>
                         </configuration>
                     </execution>

@@ -7,6 +7,10 @@
 # attached and notes taken from CHANGELOG.md. The pom stays on -SNAPSHOT; the tag is the single source of
 # truth for the release version, applied with versions:set.
 #
+# Every other build reads the same tag for itself, with 'git describe' (see pom.xml, stamp-version-from-git),
+# and falls back to the pom version when git cannot name one — which is why versions:set stays here: it makes
+# that fallback the tag as well, so a release cannot be mislabelled even if the checkout has no usable tag.
+#
 # The image push needs two repository secrets: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access
 # token with Read/Write on is4it/midgie).
 #
@@ -64,6 +68,9 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.TAG }}
+          # With the tags present, the build's own 'git describe' arrives at the same version versions:set
+          # stamps below, so the two cannot disagree about what this JAR is.
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4

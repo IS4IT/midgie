@@ -37,10 +37,12 @@ class VersionSupportTest {
     }
 
     @Test
-    void projectVersionIsFilteredIntoTheJar() {
-        String version = VersionSupport.projectVersion();
+    void toolVersionIsFilteredIntoTheJar() {
+        String version = VersionSupport.toolVersion();
         assertNotNull(version, "build-info.properties must be on the classpath");
-        assertFalse(version.contains("$"), "the ${project.version} token must be filtered, got: " + version);
+        assertFalse(version.contains("$"), "the ${midgie.version} token must be filtered, got: " + version);
+        // Whether it came from the git tag or the pom fallback, the 'v' prefix is stripped and a version
+        // number leads: 0.11.2, 0.11.2-1-gabc1234-dirty, 0.1.0-SNAPSHOT.
         assertTrue(version.matches("\\d+\\.\\d+.*"), "should look like a version, got: " + version);
     }
 }

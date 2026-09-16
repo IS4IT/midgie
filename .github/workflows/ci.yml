@@ -31,6 +31,10 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Tags, not just the tip: the build stamps the version into the JAR with 'git describe', and a
+          # shallow checkout has no tag to describe — the JAR would claim the pom's placeholder version.
+          fetch-depth: 0
 
       - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
@@ -50,6 +54,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0   # same reason as the build job: 'git describe' needs the tags
 
       - name: Set up JDK 17
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4

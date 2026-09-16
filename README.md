@@ -40,6 +40,8 @@ java -jar target/midgie.jar --help   # or run the JAR directly
 Requires **JDK 17+**. Dependencies (midPoint schema + prism) resolve from Evolveum's Nexus, configured in
 `pom.xml`. The first build downloads the midPoint schema and prism dependencies, so it is sizeable.
 
+The build takes its version from the git tag (`git describe`), so `--version` says what the JAR was built from: `0.11.2` on a release tag, `0.11.2-1-g4c278ae-dirty` one commit past it with a modified working tree. Building outside a git checkout — a source archive, say — falls back to the placeholder version in `pom.xml`.
+
 The `bin/midgie` launcher finds the JAR (override with `MIDGIE_JAR`) and, on **JDK 23+**,
 adds `--sun-misc-unsafe-memory-access=allow` to silence the JEP 498 `sun.misc.Unsafe` warnings that
 classgraph (a transitive prism dependency) prints during startup. Those warnings go straight to the native
@@ -578,8 +580,8 @@ Two layers (full detail in [`DESIGN.md`](DESIGN.md#schema-two-layers-two-knobs))
 
 The bundled base schema is version-specific. To target a different midPoint major line, bump
 `<midpoint.version>` in `pom.xml` (default **4.10.3**) **and** `MP_VER` in `docker/.env`, then rebuild. A
-build-time check fails if those two drift apart. `bin/midgie --version` prints the tool version and
-the bundled schema line.
+build-time check fails if those two drift apart. `bin/midgie --version` prints the tool version (from the
+git tag the build was cut from) and the bundled schema line.
 
 ## Testing
 

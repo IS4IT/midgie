@@ -35,9 +35,13 @@ final class VersionSupport {
         return buildProperty("midpoint.version");
     }
 
-    /** This tool's own version (the pom {@code project.version}), embedded via build-info.properties. */
-    static String projectVersion() {
-        return buildProperty("project.version");
+    /**
+     * This tool's own version, embedded via build-info.properties: the git tag the build was cut from
+     * ({@code 0.11.2}, or {@code 0.11.2-1-gabc1234-dirty} past one), or the pom version when git could
+     * not say — which in the release job is the tag, stamped by {@code versions:set}.
+     */
+    static String toolVersion() {
+        return buildProperty("midgie.version");
     }
 
     private static String buildProperty(String key) {

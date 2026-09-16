@@ -9,15 +9,15 @@ import picocli.CommandLine.IVersionProvider;
 
 /**
  * Supplies {@code --version} dynamically from the Maven-filtered {@code build-info.properties}, so the
- * tool version tracks the pom and the bundled midPoint schema line is shown (it must match the target
- * server — see {@link VersionSupport}).
+ * tool version tracks the git tag the build was cut from and the bundled midPoint schema line is shown
+ * (it must match the target server — see {@link VersionSupport}).
  */
 final class VersionProvider implements IVersionProvider {
 
     @Override
     public String[] getVersion() {
         return new String[] {
-                "midgie " + orUnknown(VersionSupport.projectVersion()),
+                "midgie " + orUnknown(VersionSupport.toolVersion()),
                 "bundled midPoint schema " + orUnknown(VersionSupport.compileTimeVersion()),
         };
     }
