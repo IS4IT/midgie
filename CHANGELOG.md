@@ -5,9 +5,23 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-09-23
+
+### Added
+
+- **`apply=on-create` in the policy file: items set when an object is created, then left alone.** Some items belong in the tree only so an object is created right, and are owned by midPoint or its operators from then on. A task's `executionState` is the everyday case: deploy it suspended, someone resumes it, and every later deploy flipped it back. A per-item rule such as `TaskType/*/executionState  apply=on-create` keeps the item in the POST that creates the object and leaves it alone on every later PATCH — not changed, not deleted under `--scope full`, and not removed by `--prune` when it drops out of the file. An `on-create` item inside a container being added to an existing object is stripped from the added value; replacing a container whose server copy holds such an item is refused for that object rather than overwriting it. A more specific `apply=always` rule carves an exception out of a broader one, and `apply` on an object-level selector is refused at load. An object matched by name that someone else created counts as existing.
+
+- **`apply=if-absent`: write an item only while the server holds no value for it.** midPoint's weak mapping strength, per item: the value from the file is filled in whenever the item is missing on the server and never overwritten or removed once it is there — by a PATCH, under `--scope full`, or by `--prune`. It differs from `on-create` only once someone clears the item: `if-absent` fills it in again on the next deploy, `on-create` leaves it empty. A rule on a container is judged per child, so each missing child is filled in and the present ones are left alone.
+
+- **`--dry-run` and `--plan` name what the policy holds back.** An object whose only differences are held back reports `in-sync`, with a note such as `left alone by the policy: executionState (apply=on-create)`, so a state that plainly differs on the server is not mistaken for a diff that missed it.
+
+- **`init --write-policy` suggests `apply=on-create` rules, commented out.** For the object types a tree holds, the seeded file now offers a task's `executionState` and `schedulingState`, a user's `credentials` (initial password, `forceChange`) and `activation/administrativeStatus`, a resource's `administrativeOperationalState` (maintenance mode) and its cached connector `schema` — each with the reason and how many of the tree's files declare it, and a pointer to `if-absent` as the alternative. They are written as comments, so a seeded file behaves exactly as before until a rule is adopted.
 
 ### Changed
+
+- **Without `--prune`, pending removals are reported as a count.** `deploy` listed every value the tree no longer declares even when it was not going to remove any of them, which buried the rest of the output on a tree with many. It now prints the summary line alone and points to `--prune` with `--dry-run` or `--plan` for details; with `--prune` the per-value list is unchanged.
+
+- **Revisions in `deploy` messages are shown in git's short form.** A full 40-character sha wrapped the line it was in. Seven characters, keeping a `-dirty` marker, are shown instead; what is recorded and compared is still the full sha.
 
 - **Creating a missing object and matching an OID-less one by name are now the defaults.** Both were opt-in, and the effect was that a normal tree did nothing useful out of the box: `deploy` **skipped** every file that carried no OID — the ordinary way to write one — and **failed** on a declared OID the server did not have, while `diff --url` and `apply` refused to start at all with `No OID to address`. You had to know to pass `--create-if-absent` and `--match-by-name` before the tool would do the obvious thing. It now does the obvious thing, and `--no-create-if-absent` / `--no-match-by-name` opt out. The two were already entangled — `--create-if-absent` has run the by-name search since 0.4.0, because creating without first asking "does it exist?" re-POSTed the object on every run and midPoint answered 409 — so flipping them together is the coherent move.
 
@@ -377,7 +391,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/IS4IT/midgie/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/IS4IT/midgie/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/IS4IT/midgie/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/IS4IT/midgie/compare/v0.10.2...v0.11.0
