@@ -45,7 +45,7 @@ final class Reconciler {
         final String createBody;      // POST body
         final ObjectDelta<? extends Objectable> delta; // the computed delta for a PATCH (for projection)
         final List<String> warnings;  // input advisories + blast radius, for the caller to report
-        final List<String> heldBack;  // item paths that differ but are left alone (policy apply=on-create)
+        final List<String> heldBack;  // item paths that differ but the policy's apply= rules leave alone
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
@@ -141,15 +141,16 @@ final class Reconciler {
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
                 .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
                         smartReferenceCheck(strategy));
-        // The object exists, so an item the policy applies only on create is not this PATCH's business.
-        // Before the in-place check, so a change that is not going to be sent cannot refuse the object.
+        // The object exists, so an item the policy applies only on create — or only while it is absent — may
+        // not be this PATCH's business. Before the in-place check, so a change that is not going to be sent
+        // cannot refuse the object.
         ApplyRules.HoldBack held = strategy.apply.holdBack(result.delta(), current);
         if (held.conflict != null) {
             return fail(restType, targetOid, held.conflict);
         }
         List<String> accruedInPlace = new ArrayList<>();
         for (String path : result.accruedInPlaceEditPaths()) {
-            if (!strategy.apply.isOnCreate(path)) {
+            if (strategy.apply.modeOf(path) == ApplyRules.Mode.ALWAYS) {
                 accruedInPlace.add(path);
             }
         }
@@ -160,7 +161,7 @@ final class Reconciler {
         }
         if (!result.hasDrift()) {
             LOG.debug("{} {}: IN_SYNC{}", restType, targetOid,
-                    held.paths.isEmpty() ? "" : ", left alone (apply=on-create): " + held.paths);
+                    held.paths.isEmpty() ? "" : ", left alone: " + held.paths);
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null, null,
                     result.inputWarnings(), held.paths);
         }

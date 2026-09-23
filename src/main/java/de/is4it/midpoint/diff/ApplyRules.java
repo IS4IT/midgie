@@ -21,9 +21,12 @@ import com.evolveum.midpoint.prism.path.ItemPath;
 
 /**
  * When midgie may write an item, from the {@code --policy} file's {@code apply} knob: {@code always} (the
- * default) or {@code on-create} — written in the POST that creates the object, and never touched by a later
- * PATCH. The motivating item is {@code TaskType/executionState}: a task is deployed suspended or runnable,
- * and from then on operators and midPoint's task manager own it, so a redeploy must not flip it back.
+ * default); {@code on-create} — written in the POST that creates the object, and never touched by a later
+ * PATCH; or {@code if-absent} — written whenever the server holds no value for it, and never overwritten or
+ * removed, like a midPoint mapping of weak strength. The motivating item for {@code on-create} is
+ * {@code TaskType/executionState}: a task is deployed suspended or runnable, and from then on operators and
+ * midPoint's task manager own it, so a redeploy must not flip it back. {@code if-absent} differs only once
+ * someone clears the item: it is filled in again on the next deploy.
  *
  * <p>Rules are identity-scoped globs like the {@code multivalue} path rules: each is matched against the
  * object's identity ({@code Type/Name}, or {@code oid:X}) followed by the item's local names. A rule covers
@@ -33,7 +36,8 @@ final class ApplyRules {
 
     enum Mode {
         ALWAYS("always"),
-        ON_CREATE("on-create");
+        ON_CREATE("on-create"),
+        IF_ABSENT("if-absent");
 
         final String keyword;
 
@@ -64,8 +68,9 @@ final class ApplyRules {
     }
 
     /**
-     * What {@link #holdBack} took out of a delta: the item paths it left alone, or — when the change could not
-     * be made without overwriting such an item — the reason the object cannot be patched.
+     * What {@link #holdBack} took out of a delta: the item paths it left alone, each naming the rule that held
+     * it back, or — when the change could not be made without overwriting such an item — the reason the object
+     * cannot be patched.
      */
     static final class HoldBack {
         final List<String> paths;
@@ -101,16 +106,16 @@ final class ApplyRules {
         return rules.isEmpty();
     }
 
-    /** Whether the item at {@code path} is written only when the object is created. */
-    boolean isOnCreate(ItemPath path) {
-        return modeAt(localNames(path)) == Mode.ON_CREATE;
+    /** The mode for the item at {@code path}: {@link Mode#ALWAYS} unless a rule says otherwise. */
+    Mode modeOf(ItemPath path) {
+        return modeAt(localNames(path));
     }
 
     /**
-     * As {@link #isOnCreate(ItemPath)}, for a path already rendered as text ({@code a/1/b}): container ids
-     * and namespace prefixes are dropped, so the rendered form of a delta path matches like the path itself.
+     * As {@link #modeOf(ItemPath)}, for a path already rendered as text ({@code a/1/b}): container ids and
+     * namespace prefixes are dropped, so the rendered form of a delta path matches like the path itself.
      */
-    boolean isOnCreate(String path) {
+    Mode modeOf(String path) {
         List<String> names = new ArrayList<>();
         for (String segment : path.split("/")) {
             String name = segment.strip();
@@ -120,28 +125,31 @@ final class ApplyRules {
                 names.add(name);
             }
         }
-        return modeAt(names) == Mode.ON_CREATE;
+        return modeAt(names);
     }
 
     /**
-     * Take out of {@code delta} every change to an {@code on-create} item, since the object already exists.
+     * Take out of {@code delta} every change the policy does not allow on an object that already exists.
      *
-     * <p>A change at or beneath such an item is dropped whole. A change <em>above</em> one — adding a
-     * container that holds it — keeps the container and strips the item from the added value, so a new
-     * {@code activation} does not bring an {@code on-create} {@code administrativeStatus} with it. The same
-     * goes for replacing such a container, unless the server already holds the item beneath it: the replace
-     * would overwrite that whatever the new value carries, so it is reported as a conflict for the caller to
-     * refuse.
+     * <p>A change at or beneath an {@code on-create} item is dropped whole. A change at or beneath an
+     * {@code if-absent} item is dropped when the server holds a value for that item, and kept (filling it in)
+     * when it holds none — so an {@code if-absent} item is never overwritten and never removed.
      *
-     * @param live the object as the server holds it, to tell whether a replace would overwrite anything
+     * <p>A change <em>above</em> such an item needs more care. Adding a container keeps the container and
+     * strips {@code on-create} items from the added value, so a new {@code activation} does not bring an
+     * {@code on-create} {@code administrativeStatus} with it; {@code if-absent} items stay, since nothing on the
+     * server can be under a container that is only now being added. Replacing a container is the same unless
+     * the server already holds a restricted item beneath it: the replace would overwrite that whatever the new
+     * value carries, so it is reported as a conflict for the caller to refuse.
+     *
+     * @param live the object as the server holds it, to tell what is absent and what a replace would overwrite
      */
     HoldBack holdBack(ObjectDelta<? extends Objectable> delta, PrismObject<? extends Objectable> live) {
         List<String> held = new ArrayList<>();
         if (rules.isEmpty() || delta == null || delta.isEmpty()) {
             return new HoldBack(held, null);
         }
-        boolean anyOnCreate = rules.stream().anyMatch(rule -> rule.mode == Mode.ON_CREATE);
-        if (!anyOnCreate) {
+        if (rules.stream().allMatch(rule -> rule.mode == Mode.ALWAYS)) {
             return new HoldBack(held, null);
         }
 
@@ -149,12 +157,13 @@ final class ApplyRules {
         boolean changed = false;
         for (ItemDelta<?, ?> mod : new ArrayList<ItemDelta<?, ?>>(delta.getModifications())) {
             List<String> names = localNames(mod.getPath());
-            if (modeAt(names) == Mode.ON_CREATE) {
-                addOnce(held, String.join("/", names));
+            Mode mode = modeAt(names);
+            if (mode == Mode.ON_CREATE || (mode == Mode.IF_ABSENT && holdsValue(live, mod.getPath()))) {
+                addOnce(held, label(names, mode));
                 changed = true;
                 continue;
             }
-            if (!couldReachOnCreateBelow(names)) {
+            if (mode == Mode.IF_ABSENT || !couldReachBelow(names, false)) {
                 kept.add(mod);
                 continue;
             }
@@ -162,16 +171,17 @@ final class ApplyRules {
             List<String> stripped = new ArrayList<>();
             if (mod.isReplace()) {
                 // A replace sets the container to exactly the new value, so whatever the server holds
-                // beneath it goes — including an on-create item, whether or not the new value carries one.
+                // beneath it goes — including a restricted item, whether or not the new value carries one.
                 // Stripping the item from the new value cannot prevent that, so refuse the object instead.
                 List<String> onServer = new ArrayList<>();
                 Item<?, ?> liveItem = (live != null) ? live.findItem(mod.getPath()) : null;
                 if (liveItem != null) {
-                    collectOnCreate(liveItem.getValues(), names, onServer);
+                    collectRestricted(liveItem.getValues(), names, onServer);
                 }
                 if (!onServer.isEmpty()) {
                     return new HoldBack(held, "replacing " + String.join("/", names) + " would overwrite "
-                            + String.join(", ", onServer) + ", which the policy applies only on create");
+                            + String.join(", ", onServer) + ", which the policy does not let a deploy "
+                            + "overwrite");
                 }
                 stripOnCreate(copy.getValuesToReplace(), names, stripped);
             } else {
@@ -198,6 +208,17 @@ final class ApplyRules {
             delta.addModifications(kept);
         }
         return new HoldBack(held, null);
+    }
+
+    /** Whether the server holds at least one value at {@code path}. */
+    private static boolean holdsValue(PrismObject<? extends Objectable> live, ItemPath path) {
+        Item<?, ?> item = (live != null) ? live.findItem(path) : null;
+        return item != null && item.hasAnyValue();
+    }
+
+    /** A held-back path as the report shows it, naming the rule that held it back. */
+    private static String label(List<String> names, Mode mode) {
+        return String.join("/", names) + " (apply=" + mode.keyword + ")";
     }
 
     /**
@@ -242,15 +263,15 @@ final class ApplyRules {
             List<String> names = child(prefix, item);
             if (modeAt(names) == Mode.ON_CREATE) {
                 container.remove(item);
-                addOnce(stripped, String.join("/", names));
-            } else if (item instanceof PrismContainer<?> && couldReachOnCreateBelow(names)) {
+                addOnce(stripped, label(names, Mode.ON_CREATE));
+            } else if (item instanceof PrismContainer<?> && couldReachBelow(names, true)) {
                 stripOnCreate(item.getValues(), names, stripped);
             }
         }
     }
 
-    /** Find {@code on-create} items inside container values without changing them. */
-    private void collectOnCreate(Collection<? extends PrismValue> values, List<String> prefix,
+    /** Find items under a restricting rule inside container values, without changing them. */
+    private void collectRestricted(Collection<? extends PrismValue> values, List<String> prefix,
             List<String> found) {
         if (values == null) {
             return;
@@ -261,10 +282,11 @@ final class ApplyRules {
             }
             for (Item<?, ?> item : container.getItems()) {
                 List<String> names = child(prefix, item);
-                if (modeAt(names) == Mode.ON_CREATE) {
+                Mode mode = modeAt(names);
+                if (mode != Mode.ALWAYS && item.hasAnyValue()) {
                     addOnce(found, String.join("/", names));
-                } else if (item instanceof PrismContainer<?> && couldReachOnCreateBelow(names)) {
-                    collectOnCreate(item.getValues(), names, found);
+                } else if (item instanceof PrismContainer<?> && couldReachBelow(names, false)) {
+                    collectRestricted(item.getValues(), names, found);
                 }
             }
         }
@@ -285,10 +307,13 @@ final class ApplyRules {
         return (best != null) ? best.mode : Mode.ALWAYS;
     }
 
-    /** Whether an {@code on-create} rule could match something strictly beneath {@code itemNames}. */
-    private boolean couldReachOnCreateBelow(List<String> itemNames) {
+    /**
+     * Whether a restricting rule could match something strictly beneath {@code itemNames} — only an
+     * {@code on-create} one when {@code onCreateOnly}, since only those are stripped from added values.
+     */
+    private boolean couldReachBelow(List<String> itemNames, boolean onCreateOnly) {
         for (Rule rule : rules) {
-            if (rule.mode != Mode.ON_CREATE) {
+            if (rule.mode == Mode.ALWAYS || (onCreateOnly && rule.mode != Mode.ON_CREATE)) {
                 continue;
             }
             for (List<String> prefix : identityPrefixes) {

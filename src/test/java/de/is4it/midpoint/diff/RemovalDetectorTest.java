@@ -280,11 +280,33 @@ class RemovalDetectorTest {
         StrategyOptions.Resolved baseline = new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
                 DiffEngine.EquivalencePlan.auto(), DiffEngine.MultiValueStrategy.replaceAll(), false);
         List<RemovalDetector.Removal> kept =
-                DeployCommand.withoutOnCreate(Policy.load(policyFile.toFile()), baseline, removals);
+                DeployCommand.withoutRestricted(Policy.load(policyFile.toFile()), baseline, removals);
 
         assertFalse(kept.stream().anyMatch(r -> r.path.contains("executionState")), "kept: " + kept);
         assertTrue(kept.stream().anyMatch(r -> r.path.contains("description")),
                 "an ordinary item is still pruned: " + kept);
+    }
+
+    @Test
+    void aValueDroppedFromAnIfAbsentItemIsNotARemoval(@TempDir Path dir) throws Exception {
+        // if-absent never removes what the server holds, so pruning it would break the same promise.
+        Path file = dir.resolve("task.xml");
+        Files.writeString(file, task("<description>d</description>\n  <executionState>suspended</executionState>"),
+                StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, task(""), StandardCharsets.UTF_8);
+        Path policyFile = dir.resolve("midgie.policy");
+        Files.writeString(policyFile, "TaskType/*/description apply=if-absent\n", StandardCharsets.UTF_8);
+
+        StrategyOptions.Resolved baseline = new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
+                DiffEngine.EquivalencePlan.auto(), DiffEngine.MultiValueStrategy.replaceAll(), false);
+        List<RemovalDetector.Removal> kept = DeployCommand.withoutRestricted(
+                Policy.load(policyFile.toFile()), baseline, detect(dir, first, file));
+
+        assertFalse(kept.stream().anyMatch(r -> r.path.contains("description")), "kept: " + kept);
+        assertTrue(kept.stream().anyMatch(r -> r.path.contains("executionState")),
+                "an item without a rule is still pruned: " + kept);
     }
 
     private static List<RemovalDetector.Removal> detect(Path dir, String revision, Path... present)

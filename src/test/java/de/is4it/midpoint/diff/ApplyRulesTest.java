@@ -54,18 +54,20 @@ class ApplyRulesTest {
         Policy policy = load(dir, "TaskType/*/executionState apply=on-create");
         ApplyRules apply = policy.resolveFor("TaskType", "Recompute", TASK_OID, baseline(DiffEngine.Scope.PRESENT)).apply;
 
-        assertTrue(apply.isOnCreate(ItemPath.create(new QName(NS, "executionState"))));
-        assertFalse(apply.isOnCreate(ItemPath.create(new QName(NS, "description"))));
-        assertFalse(policy.resolveFor("RoleType", "Recompute", TASK_OID, baseline(DiffEngine.Scope.PRESENT))
-                .apply.isOnCreate("executionState"));
+        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf(ItemPath.create(new QName(NS, "executionState"))));
+        assertEquals(ApplyRules.Mode.ALWAYS, apply.modeOf(ItemPath.create(new QName(NS, "description"))));
+        assertEquals(ApplyRules.Mode.ALWAYS,
+                policy.resolveFor("RoleType", "Recompute", TASK_OID, baseline(DiffEngine.Scope.PRESENT))
+                        .apply.modeOf("executionState"));
     }
 
     @Test
     void theDoubleSlashFormReadsLikeTheSingleOne(@TempDir Path dir) throws Exception {
         // Blank segments are dropped by the selector parser, so 'TaskType/*//executionState' is the same rule.
         Policy policy = load(dir, "TaskType/*//executionState apply=on-create");
-        assertTrue(policy.resolveFor("TaskType", "Recompute", TASK_OID, baseline(DiffEngine.Scope.PRESENT))
-                .apply.isOnCreate("executionState"));
+        assertEquals(ApplyRules.Mode.ON_CREATE,
+                policy.resolveFor("TaskType", "Recompute", TASK_OID, baseline(DiffEngine.Scope.PRESENT))
+                        .apply.modeOf("executionState"));
     }
 
     @Test
@@ -92,9 +94,9 @@ class ApplyRulesTest {
     void renderedDeltaPathsMatchWithIdsAndPrefixesDropped(@TempDir Path dir) throws Exception {
         Policy policy = load(dir, "UserType/*/assignment/activation apply=on-create");
         ApplyRules apply = policy.resolveFor("UserType", "jdoe", USER_OID, baseline(DiffEngine.Scope.PRESENT)).apply;
-        assertTrue(apply.isOnCreate("assignment/3/activation/administrativeStatus"));
-        assertTrue(apply.isOnCreate("c:assignment/3/c:activation"));
-        assertFalse(apply.isOnCreate("assignment/3/targetRef"));
+        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("assignment/3/activation/administrativeStatus"));
+        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("c:assignment/3/c:activation"));
+        assertEquals(ApplyRules.Mode.ALWAYS, apply.modeOf("assignment/3/targetRef"));
     }
 
     // --- planning ---
@@ -109,7 +111,7 @@ class ApplyRulesTest {
         assertEquals(1, outcome.changes, outcome.detail);
         assertFalse(outcome.modificationXml.contains("executionState"), outcome.modificationXml);
         assertTrue(outcome.modificationXml.contains("new description"), outcome.modificationXml);
-        assertEquals(List.of("executionState"), outcome.heldBack);
+        assertEquals(List.of("executionState (apply=on-create)"), outcome.heldBack);
     }
 
     @Test
@@ -119,7 +121,7 @@ class ApplyRulesTest {
                 task("same", "runnable"), task("same", "suspended"));
 
         assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
-        assertEquals(List.of("executionState"), outcome.heldBack);
+        assertEquals(List.of("executionState (apply=on-create)"), outcome.heldBack);
     }
 
     @Test
@@ -139,7 +141,7 @@ class ApplyRulesTest {
                 task("same", null), task("same", "suspended"));
 
         assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
-        assertEquals(List.of("executionState"), outcome.heldBack);
+        assertEquals(List.of("executionState (apply=on-create)"), outcome.heldBack);
     }
 
     @Test
@@ -166,7 +168,7 @@ class ApplyRulesTest {
         assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
         assertTrue(outcome.modificationXml.contains("validTo"), outcome.modificationXml);
         assertFalse(outcome.modificationXml.contains("administrativeStatus"), outcome.modificationXml);
-        assertEquals(List.of("activation/administrativeStatus"), outcome.heldBack);
+        assertEquals(List.of("activation/administrativeStatus (apply=on-create)"), outcome.heldBack);
         assertNotNull(desired.findItem(ItemPath.create(new QName(NS, "activation"),
                 new QName(NS, "administrativeStatus"))),
                 "the desired object itself must not be edited — the create body and prune read it too");
@@ -180,7 +182,76 @@ class ApplyRulesTest {
                 parse(user("")));
 
         assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
-        assertEquals(List.of("activation/administrativeStatus"), outcome.heldBack);
+        assertEquals(List.of("activation/administrativeStatus (apply=on-create)"), outcome.heldBack);
+    }
+
+    // --- if-absent ---
+
+    @Test
+    void ifAbsentLoadsAndResolves(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/description apply=if-absent");
+        assertEquals(ApplyRules.Mode.IF_ABSENT, policy.resolveFor("UserType", "jdoe", USER_OID,
+                baseline(DiffEngine.Scope.PRESENT)).apply.modeOf("description"));
+    }
+
+    @Test
+    void ifAbsentFillsInAnItemTheServerLacks(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/description apply=if-absent");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<description>from the file</description>")), parse(user("")));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("from the file"), outcome.modificationXml);
+        assertTrue(outcome.heldBack.isEmpty(), outcome.heldBack.toString());
+    }
+
+    @Test
+    void ifAbsentNeverOverwritesAValueTheServerHolds(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/description apply=if-absent");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<description>from the file</description>")),
+                parse(user("<description>changed by an operator</description>")));
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertEquals(List.of("description (apply=if-absent)"), outcome.heldBack);
+    }
+
+    @Test
+    void ifAbsentIsNotDeletedUnderFullScope(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/description apply=if-absent");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.FULL,
+                parse(user("")), parse(user("<description>set on the server</description>")));
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertEquals(List.of("description (apply=if-absent)"), outcome.heldBack);
+    }
+
+    @Test
+    void anAddedContainerKeepsItsIfAbsentItem(@TempDir Path dir) throws Exception {
+        // Nothing on the server can sit under a container that is only now being added, so the item is absent
+        // by definition and goes along — unlike an on-create item, which is stripped.
+        Policy policy = load(dir, "UserType/*/activation/administrativeStatus apply=if-absent");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<activation><administrativeStatus>disabled</administrativeStatus></activation>")),
+                parse(user("")));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("administrativeStatus"), outcome.modificationXml);
+        assertTrue(outcome.heldBack.isEmpty(), outcome.heldBack.toString());
+    }
+
+    @Test
+    void anIfAbsentItemInsideAnExistingContainerIsLeftAlone(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/activation/administrativeStatus apply=if-absent");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<activation><administrativeStatus>enabled</administrativeStatus>"
+                        + "<validTo>2030-01-01T00:00:00Z</validTo></activation>")),
+                parse(user("<activation><administrativeStatus>disabled</administrativeStatus></activation>")));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("validTo"), outcome.modificationXml);
+        assertFalse(outcome.modificationXml.contains("administrativeStatus"), outcome.modificationXml);
+        assertEquals(List.of("activation/administrativeStatus (apply=if-absent)"), outcome.heldBack);
     }
 
     // --- helpers ---

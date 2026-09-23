@@ -565,7 +565,9 @@ public class InitCommand implements Callable<Integer> {
                 .append("# These are commented out, so they change nothing as they stand. Uncomment one to adopt it:\n")
                 .append("# the item then goes into the request that creates the object and is never touched again —\n")
                 .append("# not patched, not deleted under --scope full, not removed by --prune. A narrower\n")
-                .append("# '<Type>/<Name>/<item>  apply=always' line carves an exception out for one object.\n");
+                .append("# '<Type>/<Name>/<item>  apply=always' line carves an exception out for one object.\n")
+                .append("# To have an item filled in again whenever the server holds no value (and never overwritten),\n")
+                .append("# use 'apply=if-absent' instead: the weak mapping strength in midPoint terms.\n");
         for (OnCreateSuggestion suggestion : relevant) {
             int files = filesByType.get(suggestion.type());
             int declaring = declaredBy.getOrDefault(suggestion, 0);

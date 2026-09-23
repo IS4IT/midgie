@@ -31,8 +31,8 @@ import org.slf4j.LoggerFactory;
  * <p>A selector that stops at the object identity sets object-level knobs ({@code scope}, {@code equivalence},
  * {@code allow-inplace-merge}, and a default {@code multivalue}); a selector that reaches an item sets
  * {@code multivalue} for that container and {@code apply} for that item ({@code on-create}: written only when
- * the object is created). An object-only knob on an item-path selector is rejected, as is {@code apply} on an
- * object. When
+ * the object is created; {@code if-absent}: written only while the server holds no value). An object-only knob
+ * on an item-path selector is rejected, as is {@code apply} on an object. When
  * several rules set the same knob for the same target, the <b>most-specific</b> selector wins (more literal
  * segments, then fewer {@code **}, then a longer literal prefix; ties fall to the earlier line). The CLI flags
  * are the baseline every matching knob is layered onto. The object XML stays pure midPoint XML — strategy

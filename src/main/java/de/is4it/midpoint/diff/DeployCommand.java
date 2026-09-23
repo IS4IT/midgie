@@ -557,7 +557,7 @@ public class DeployCommand implements Callable<Integer> {
             return List.of();
         }
         RemovalDetector detector = new RemovalDetector(prismContext, git, base);
-        List<RemovalDetector.Removal> removals = withoutOnCreate(policy, globalStrategy, detector.detect(units));
+        List<RemovalDetector.Removal> removals = withoutRestricted(policy, globalStrategy, detector.detect(units));
         for (RemovalDetector.Orphan orphan : detector.orphaned()) {
             // The whole object left the tree. midgie does not delete objects, and taking one apart value by
             // value would strip its name, so say it plainly and leave the decision to the operator.
@@ -568,11 +568,11 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     /**
-     * Drop the removals under items the policy applies only on create. Once the object exists midgie does not
-     * write such an item at all, and pruning a value from it is a write like any other — so a value dropped
-     * from the tree there stays on the server, exactly as a changed one would.
+     * Drop the removals under items the policy's {@code apply} rules restrict. Once the object exists midgie
+     * does not write an {@code on-create} item at all, and never removes an {@code if-absent} one — and
+     * pruning a value is a removal like any other, so a value dropped from the tree there stays on the server.
      */
-    static List<RemovalDetector.Removal> withoutOnCreate(Policy policy, StrategyOptions.Resolved baseline,
+    static List<RemovalDetector.Removal> withoutRestricted(Policy policy, StrategyOptions.Resolved baseline,
             List<RemovalDetector.Removal> removals) {
         if (policy == null || removals.isEmpty()) {
             return removals;
@@ -581,10 +581,10 @@ public class DeployCommand implements Callable<Integer> {
         for (RemovalDetector.Removal removal : removals) {
             String type = (removal.objectClass != null) ? removal.objectClass.getSimpleName() : "?";
             ApplyRules apply = policy.resolveFor(type, removal.objectName, removal.oid, baseline).apply;
-            boolean onCreate = (removal.itemPath != null) ? apply.isOnCreate(removal.itemPath)
-                    : apply.isOnCreate(removal.path);
-            if (onCreate) {
-                LOG.debug("not a removal: {} {} is applied only on create", removal.objectLabel, removal.path);
+            ApplyRules.Mode mode = (removal.itemPath != null) ? apply.modeOf(removal.itemPath)
+                    : apply.modeOf(removal.path);
+            if (mode != ApplyRules.Mode.ALWAYS) {
+                LOG.debug("not a removal: {} {} is apply={}", removal.objectLabel, removal.path, mode.keyword);
             } else {
                 kept.add(removal);
             }
@@ -613,13 +613,13 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     /**
-     * Say which differences a preview is not going to send because the policy applies them only on create —
-     * otherwise a task shown as {@code in-sync} while its {@code executionState} plainly differs reads as a
-     * diff that missed something.
+     * Say which differences a preview is not going to send because a policy {@code apply} rule holds them
+     * back — otherwise a task shown as {@code in-sync} while its {@code executionState} plainly differs reads
+     * as a diff that missed something. Each path names the rule that held it back.
      */
     private void reportHeldBack(DeployObject unit, Reconciler.Outcome outcome) {
         if (!outcome.heldBack.isEmpty()) {
-            note("note: " + unit.objectPath() + ": left alone (apply=on-create): "
+            note("note: " + unit.objectPath() + ": left alone by the policy: "
                     + String.join(", ", outcome.heldBack));
         }
     }

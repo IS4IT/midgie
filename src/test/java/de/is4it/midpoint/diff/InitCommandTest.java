@@ -424,19 +424,23 @@ class InitCommandTest {
         assertTrue(content.contains("\n#TaskType/*/schedulingState  apply=on-create\n"), content);
         assertTrue(content.contains("\n#ResourceType/*/administrativeOperationalState  apply=on-create\n"), content);
         assertTrue(content.contains("Declared in 1 of 1 TaskType file(s)"), content);
+        assertTrue(content.contains("'apply=if-absent'"), "the alternative is named, so people know it exists:\n"
+                + content);
         assertFalse(content.contains("UserType/"), "no user in the tree, so no user suggestions:\n" + content);
         assertTrue(content.indexOf("apply=on-create") < content.indexOf("# --- end midgie suggestions"),
                 "the suggestions live inside the regenerated block:\n" + content);
 
         // As written they are comments, so deploy behaves exactly as it did without them.
-        assertFalse(Policy.load(policy.toFile()).resolveFor("TaskType", "Recompute", null, baseline())
-                .apply.isOnCreate("executionState"), content);
+        assertEquals(ApplyRules.Mode.ALWAYS, Policy.load(policy.toFile())
+                .resolveFor("TaskType", "Recompute", null, baseline()).apply.modeOf("executionState"), content);
 
         // And each one is a rule Policy.load accepts once uncommented — the round trip init promises.
         Files.writeString(policy, content.replaceAll("(?m)^#(\\w+Type/\\*/)", "$1"), StandardCharsets.UTF_8);
         Policy adopted = Policy.load(policy.toFile());
-        assertTrue(adopted.resolveFor("TaskType", "Recompute", null, baseline()).apply.isOnCreate("executionState"));
-        assertTrue(adopted.resolveFor("ResourceType", "Prod", null, baseline()).apply.isOnCreate("schema"));
+        assertEquals(ApplyRules.Mode.ON_CREATE,
+                adopted.resolveFor("TaskType", "Recompute", null, baseline()).apply.modeOf("executionState"));
+        assertEquals(ApplyRules.Mode.ON_CREATE,
+                adopted.resolveFor("ResourceType", "Prod", null, baseline()).apply.modeOf("schema"));
     }
 
     @Test
