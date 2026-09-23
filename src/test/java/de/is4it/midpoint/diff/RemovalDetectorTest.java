@@ -260,6 +260,33 @@ class RemovalDetectorTest {
     // --- helpers ---
 
     /** Run detection for the files currently present, comparing against {@code revision}. */
+    @Test
+    void aValueDroppedFromAnOnCreateItemIsNotARemoval(@TempDir Path dir) throws Exception {
+        // Once the object exists midgie does not write an on-create item at all, and pruning is a write: a
+        // task whose file stops declaring executionState must keep the state operators gave it.
+        Path file = dir.resolve("task.xml");
+        Files.writeString(file, task("<description>d</description>\n  <executionState>suspended</executionState>"),
+                StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, task(""), StandardCharsets.UTF_8);
+        Path policyFile = dir.resolve("midgie.policy");
+        Files.writeString(policyFile, "TaskType/*/executionState apply=on-create\n", StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+        assertTrue(removals.stream().anyMatch(r -> r.path.contains("executionState")),
+                "detection itself still sees the dropped value: " + removals);
+
+        StrategyOptions.Resolved baseline = new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
+                DiffEngine.EquivalencePlan.auto(), DiffEngine.MultiValueStrategy.replaceAll(), false);
+        List<RemovalDetector.Removal> kept =
+                DeployCommand.withoutOnCreate(Policy.load(policyFile.toFile()), baseline, removals);
+
+        assertFalse(kept.stream().anyMatch(r -> r.path.contains("executionState")), "kept: " + kept);
+        assertTrue(kept.stream().anyMatch(r -> r.path.contains("description")),
+                "an ordinary item is still pruned: " + kept);
+    }
+
     private static List<RemovalDetector.Removal> detect(Path dir, String revision, Path... present)
             throws Exception {
         java.util.List<Fragment> fragments = new java.util.ArrayList<>();
@@ -275,6 +302,11 @@ class RemovalDetectorTest {
     private static String role(String body) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
                 + "  <name>Removal Probe</name>\n  " + body + "\n</role>";
+    }
+
+    private static String task(String body) {
+        return "<task xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
+                + "  <name>Removal Probe Task</name>\n  " + body + "\n</task>";
     }
 
     private static String sysconfig(String body) {

@@ -271,6 +271,8 @@ bin/midgie init config/ --url … --write-policy midgie.policy
 
 It walks the tree and, for each object that declares a multi-valued container the schema gives a natural key **and whose values actually carry the whole key**, writes a per-container line (`<Type>/<Name>/<container>  multivalue=merge`) under a comment naming the object and the key that prompted it. It deliberately writes **no** `equivalence` rules: the default `--equivalence auto` already matches entries by natural key wherever the key is filled in, deciding it per container from the same evidence this file is seeded from. That "actually carry it" condition matters: `assignment` and `inducement` declare an `identifier` that real config usually omits, and a composite key like `kind + intent` is often written with only the `kind` — pinning key matching for the whole object in either case would be actively wrong, since prism then pairs unrelated values and the accrued-value guard refuses the result. The file is a starting point to review, not a finished policy.
 
+After those it offers **`apply=on-create`** suggestions for the object types the tree holds — a task's `executionState` and `schedulingState`, a user's `credentials` (initial password, `forceChange`) and `activation/administrativeStatus`, a resource's `administrativeOperationalState` (maintenance mode) and cached connector `schema` — each with a line saying why and how many of the tree's files declare it. They are written **commented out**, so a seeded file behaves exactly like one without them; uncomment the ones that fit (see [`apply=on-create`](#deploy--reconcile-a-folder-tree) below).
+
 Re-running it on an existing file **refreshes only its marked block**, so you can add objects to the tree and pick up their suggestions without losing anything you wrote:
 
 ```
@@ -297,6 +299,14 @@ Three more flags round it out: **`--retry`** re-applies the failed units until t
 Two details worth knowing when an object name is awkward: quote the selector if the name contains `=` (`"OrgType/ou=people"  scope=full`), and escape a `/` inside a name (`RoleType/App \/ Admin`), since the selector is itself a `/`-separated path. `init --write-policy` writes both forms itself. `deploy` names any policy line that matched no object, so a typo is not mistaken for a rule that ran.
 
 A wildcard is always a *whole* segment: there is no matching inside a segment (`RoleType/App-*` is not "roles starting with App-"), and one selector is one glob (`RoleType/* **/assignment` is not shorthand for two rules). Both are refused when the file loads, with the line number — as written they used to read as a literal segment no name can equal, so the rule quietly matched nothing and the objects it was meant for kept the CLI strategy. Write `\*` for a name that really contains an asterisk.
+
+Some items belong in the file only so the object is **created** right, and are owned by midPoint or its operators from then on. A task's `executionState` is the everyday case: deploy it suspended, and a redeploy must not flip it back after someone resumed it. **`apply=on-create`** says exactly that:
+
+```
+TaskType/*/executionState  apply=on-create
+```
+
+The item goes into the POST that creates the object and is left alone by every later PATCH: not changed, not deleted under `--scope full`, and not removed by `--prune` when it drops out of the file. A rule covers everything beneath its path, and when a new container is added to an existing object (a new `activation`, say) an `on-create` item inside it is stripped from what is sent. `--dry-run` and `--plan` name each difference held back, so an object shown `in-sync` while its state plainly differs is not a mystery. `apply` is per-item only; `always` is the default, and a more specific `apply=always` rule carves an exception out of a broader one. An object matched by name that someone else created counts as existing — midgie never writes the item there.
 
 ## Exit codes
 

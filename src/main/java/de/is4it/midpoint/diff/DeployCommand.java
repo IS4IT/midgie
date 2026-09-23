@@ -557,7 +557,7 @@ public class DeployCommand implements Callable<Integer> {
             return List.of();
         }
         RemovalDetector detector = new RemovalDetector(prismContext, git, base);
-        List<RemovalDetector.Removal> removals = detector.detect(units);
+        List<RemovalDetector.Removal> removals = withoutOnCreate(policy, globalStrategy, detector.detect(units));
         for (RemovalDetector.Orphan orphan : detector.orphaned()) {
             // The whole object left the tree. midgie does not delete objects, and taking one apart value by
             // value would strip its name, so say it plainly and leave the decision to the operator.
@@ -565,6 +565,31 @@ public class DeployCommand implements Callable<Integer> {
                     + " was removed); its object is left untouched — delete it yourself if that is intended.");
         }
         return removals;
+    }
+
+    /**
+     * Drop the removals under items the policy applies only on create. Once the object exists midgie does not
+     * write such an item at all, and pruning a value from it is a write like any other — so a value dropped
+     * from the tree there stays on the server, exactly as a changed one would.
+     */
+    static List<RemovalDetector.Removal> withoutOnCreate(Policy policy, StrategyOptions.Resolved baseline,
+            List<RemovalDetector.Removal> removals) {
+        if (policy == null || removals.isEmpty()) {
+            return removals;
+        }
+        List<RemovalDetector.Removal> kept = new ArrayList<>();
+        for (RemovalDetector.Removal removal : removals) {
+            String type = (removal.objectClass != null) ? removal.objectClass.getSimpleName() : "?";
+            ApplyRules apply = policy.resolveFor(type, removal.objectName, removal.oid, baseline).apply;
+            boolean onCreate = (removal.itemPath != null) ? apply.isOnCreate(removal.itemPath)
+                    : apply.isOnCreate(removal.path);
+            if (onCreate) {
+                LOG.debug("not a removal: {} {} is applied only on create", removal.objectLabel, removal.path);
+            } else {
+                kept.add(removal);
+            }
+        }
+        return kept;
     }
 
     /**
@@ -584,6 +609,18 @@ public class DeployCommand implements Callable<Integer> {
         note(summary + removalDisposition() + ":");
         for (RemovalDetector.Removal removal : removals) {
             note("  " + removal.objectLabel + "  " + removal);
+        }
+    }
+
+    /**
+     * Say which differences a preview is not going to send because the policy applies them only on create —
+     * otherwise a task shown as {@code in-sync} while its {@code executionState} plainly differs reads as a
+     * diff that missed something.
+     */
+    private void reportHeldBack(DeployObject unit, Reconciler.Outcome outcome) {
+        if (!outcome.heldBack.isEmpty()) {
+            note("note: " + unit.objectPath() + ": left alone (apply=on-create): "
+                    + String.join(", ", outcome.heldBack));
         }
     }
 
@@ -906,6 +943,9 @@ public class DeployCommand implements Callable<Integer> {
         for (String warning : outcome.warnings) {
             note("warning: " + unit.objectPath() + ": " + warning);
         }
+        if (preview) {
+            reportHeldBack(unit, outcome);
+        }
         switch (action) {
             case CREATE:
                 tally.created++;
@@ -1030,6 +1070,7 @@ public class DeployCommand implements Callable<Integer> {
                 // fragment of a to-be-created object became a patch rather than a second create — has
                 // nothing left to answer for now that an object's files are reconciled together.
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
+                reportHeldBack(unit, outcome);
 
                 switch (outcome.action) {
                     case CREATE:

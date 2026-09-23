@@ -30,7 +30,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>A selector that stops at the object identity sets object-level knobs ({@code scope}, {@code equivalence},
  * {@code allow-inplace-merge}, and a default {@code multivalue}); a selector that reaches an item sets
- * {@code multivalue} for that container (an object-only knob on an item-path selector is rejected). When
+ * {@code multivalue} for that container and {@code apply} for that item ({@code on-create}: written only when
+ * the object is created). An object-only knob on an item-path selector is rejected, as is {@code apply} on an
+ * object. When
  * several rules set the same knob for the same target, the <b>most-specific</b> selector wins (more literal
  * segments, then fewer {@code **}, then a longer literal prefix; ties fall to the earlier line). The CLI flags
  * are the baseline every matching knob is layered onto. The object XML stays pure midPoint XML — strategy
@@ -40,10 +42,13 @@ final class Policy {
 
     private static final Logger LOG = LoggerFactory.getLogger(Policy.class);
 
-    private static final Set<String> KNOWN_KNOBS =
-            Set.of("scope", "multivalue", "equivalence", "allow-inplace-merge", "smart-refs");
+    /** In the order the messages list them. */
+    private static final List<String> KNOB_NAMES =
+            List.of("scope", "multivalue", "equivalence", "allow-inplace-merge", "smart-refs", "apply");
+    private static final Set<String> KNOWN_KNOBS = Set.copyOf(KNOB_NAMES);
     private static final Set<String> OBJECT_ONLY_KNOBS =
             Set.of("scope", "equivalence", "allow-inplace-merge", "smart-refs");
+    private static final Set<String> ITEM_ONLY_KNOBS = Set.of("apply");
 
     private static final class Rule {
         final GlobPath selector;
@@ -129,7 +134,7 @@ final class Policy {
             }
             if (firstSetting <= 0) {
                 throw new IOException("policy line " + lineNumber + " must be '<selector> <key=value>…' with "
-                        + "a known knob (scope, multivalue, equivalence, allow-inplace-merge); quote the "
+                        + "a known knob (" + String.join(", ", KNOB_NAMES) + "); quote the "
                         + "selector if the object name contains '=' or '/': " + line);
             }
             // The selector is everything before the first setting, so an object name may contain spaces.
@@ -167,11 +172,17 @@ final class Policy {
             String value = token.substring(eq + 1);
             if (!KNOWN_KNOBS.contains(key)) {
                 throw new IOException("policy line " + lineNumber + " unknown knob '" + key
-                        + "' (known: scope, multivalue, equivalence, allow-inplace-merge)");
+                        + "' (known: " + String.join(", ", KNOB_NAMES) + ")");
             }
             if (itemLevel && OBJECT_ONLY_KNOBS.contains(key)) {
                 throw new IOException("policy line " + lineNumber + " sets object-only knob '" + key
-                        + "' on an item-path selector — only 'multivalue' is per-item.");
+                        + "' on an item-path selector — only 'multivalue' and 'apply' are per-item.");
+            }
+            if (!itemLevel && ITEM_ONLY_KNOBS.contains(key)) {
+                // An object has no "on create" of its own to hold back: the whole object is either created
+                // or patched, so the knob only means something for an item.
+                throw new IOException("policy line " + lineNumber + " sets '" + key + "' on an object — it is "
+                        + "per-item; name the item, e.g. 'TaskType/*/executionState apply=on-create'.");
             }
             if (!validValue(key, value)) {
                 throw new IOException("policy line " + lineNumber + " has an invalid value for '" + key
@@ -183,9 +194,9 @@ final class Policy {
     }
 
     /**
-     * A selector is item-level (can only set {@code multivalue}) when it reaches past the object identity: it
-     * contains {@code **}, or it is deeper than the identity (one segment for {@code oid:X}, else two for
-     * {@code Type/Name}).
+     * A selector is item-level (sets only {@code multivalue} and {@code apply}) when it reaches past the object
+     * identity: it contains {@code **}, or it is deeper than the identity (one segment for {@code oid:X}, else
+     * two for {@code Type/Name}).
      */
     private static boolean isItemLevel(String selectorText, GlobPath selector) {
         return selector.containsGlobstar() || selector.size() > identityDepth(selectorText);
@@ -208,6 +219,8 @@ final class Policy {
                 return "true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value);
             case "smart-refs":
                 return StrategyOptions.smartRefsByName(value) != null;
+            case "apply":
+                return ApplyRules.Mode.byName(value) != null;
             default:
                 return false;
         }
@@ -251,6 +264,7 @@ final class Policy {
         // lose to the flag it was written to override — inverting the documented "the CLI is the baseline"
         // layering, and replacing values the policy asked to merge.
         List<DiffEngine.MultiValueStrategy.PathRule> itemRules = new ArrayList<>();
+        List<ApplyRules.Rule> applyRules = new ArrayList<>();
 
         for (Rule rule : rules) {
             if (rule.itemLevel) {
@@ -258,9 +272,13 @@ final class Policy {
                 if (multivalue != null) {
                     itemRules.add(new DiffEngine.MultiValueStrategy.PathRule(
                             rule.selector, Boolean.TRUE.equals(mergeByName(multivalue)), true));
-                    if (couldMatchIdentity(rule.selector, identity)) {
-                        rule.matched = true;
-                    }
+                }
+                String apply = rule.settings.get("apply");
+                if (apply != null) {
+                    applyRules.add(new ApplyRules.Rule(rule.selector, ApplyRules.Mode.byName(apply)));
+                }
+                if (couldMatchIdentity(rule.selector, identity)) {
+                    rule.matched = true;
                 }
                 continue;
             }
@@ -298,7 +316,8 @@ final class Policy {
         DiffEngine.MultiValueStrategy multiValue =
                 DiffEngine.MultiValueStrategy.of(globalMerge, itemRules, identity);
         logApplied(type, name, scopeRule, equivalenceRule, allowInplaceRule, smartRefsRule, globalMergeRule);
-        return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace, smartRefs);
+        return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace, smartRefs,
+                ApplyRules.of(applyRules, identity));
     }
 
     /**

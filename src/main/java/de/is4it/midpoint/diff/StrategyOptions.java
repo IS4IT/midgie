@@ -67,6 +67,7 @@ public final class StrategyOptions {
         final DiffEngine.MultiValueStrategy multiValue;
         final boolean allowInplaceMerge;
         final SmartRefs smartRefs;
+        final ApplyRules apply;   // only a --policy file sets these; the CLI has no per-item flag for it
 
         Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge) {
@@ -75,11 +76,18 @@ public final class StrategyOptions {
 
         Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge, SmartRefs smartRefs) {
+            this(scope, equivalence, multiValue, allowInplaceMerge, smartRefs, ApplyRules.none());
+        }
+
+        Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
+                DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge, SmartRefs smartRefs,
+                ApplyRules apply) {
             this.scope = scope;
             this.equivalence = equivalence;
             this.multiValue = multiValue;
             this.allowInplaceMerge = allowInplaceMerge;
             this.smartRefs = smartRefs;
+            this.apply = apply;
         }
 
         /**

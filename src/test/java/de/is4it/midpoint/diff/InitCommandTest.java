@@ -405,6 +405,54 @@ class InitCommandTest {
                 "a rejected invocation must not have changed the server first: " + requests);
     }
 
+    @Test
+    void onCreateSuggestionsAreOfferedForTheTypesTheTreeHoldsAndChangeNothingAsWritten(@TempDir Path dir)
+            throws Exception {
+        Path tree = Files.createDirectories(dir.resolve("config"));
+        Files.writeString(tree.resolve("task.xml"), task("Recompute", "<executionState>suspended</executionState>"),
+                StandardCharsets.UTF_8);
+        Files.writeString(tree.resolve("resource.xml"), resource("Prod"), StandardCharsets.UTF_8);
+        Path policy = dir.resolve("midgie.policy");
+
+        Result result = run("init", tree.toString(), "--url", url, "-u", "administrator", "-p", "s3cret",
+                "--write-policy", policy.toString());
+
+        assertEquals(0, result.exit, result.err);
+        assertTrue(result.out.contains("commented-out apply=on-create"), result.out);
+        String content = Files.readString(policy, StandardCharsets.UTF_8);
+        assertTrue(content.contains("\n#TaskType/*/executionState  apply=on-create\n"), content);
+        assertTrue(content.contains("\n#TaskType/*/schedulingState  apply=on-create\n"), content);
+        assertTrue(content.contains("\n#ResourceType/*/administrativeOperationalState  apply=on-create\n"), content);
+        assertTrue(content.contains("Declared in 1 of 1 TaskType file(s)"), content);
+        assertFalse(content.contains("UserType/"), "no user in the tree, so no user suggestions:\n" + content);
+        assertTrue(content.indexOf("apply=on-create") < content.indexOf("# --- end midgie suggestions"),
+                "the suggestions live inside the regenerated block:\n" + content);
+
+        // As written they are comments, so deploy behaves exactly as it did without them.
+        assertFalse(Policy.load(policy.toFile()).resolveFor("TaskType", "Recompute", null, baseline())
+                .apply.isOnCreate("executionState"), content);
+
+        // And each one is a rule Policy.load accepts once uncommented — the round trip init promises.
+        Files.writeString(policy, content.replaceAll("(?m)^#(\\w+Type/\\*/)", "$1"), StandardCharsets.UTF_8);
+        Policy adopted = Policy.load(policy.toFile());
+        assertTrue(adopted.resolveFor("TaskType", "Recompute", null, baseline()).apply.isOnCreate("executionState"));
+        assertTrue(adopted.resolveFor("ResourceType", "Prod", null, baseline()).apply.isOnCreate("schema"));
+    }
+
+    @Test
+    void aTreeWithoutSuggestedTypesGetsNoOnCreateSection(@TempDir Path dir) throws Exception {
+        Path tree = Files.createDirectories(dir.resolve("config"));
+        Files.writeString(tree.resolve("org.xml"), org("people"), StandardCharsets.UTF_8);
+        Path policy = dir.resolve("midgie.policy");
+
+        Result result = run("init", tree.toString(), "--url", url, "-u", "administrator", "-p", "s3cret",
+                "--write-policy", policy.toString());
+
+        assertEquals(0, result.exit, result.err);
+        assertFalse(Files.readString(policy, StandardCharsets.UTF_8).contains("apply=on-create"));
+        assertTrue(result.out.contains("suggests no rules"), result.out);
+    }
+
     private static StrategyOptions.Resolved baseline() {
         return new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
                 DiffEngine.EquivalencePlan.auto(), // the CLI default the seeded policy is layered over
@@ -419,6 +467,11 @@ class InitCommandTest {
                 + "    <kind>account</kind><intent>default</intent>\n"
                 + "  </objectType></schemaHandling>\n"
                 + "</resource>";
+    }
+
+    private static String task(String name, String body) {
+        return "<task xmlns=\"" + NS + "\" oid=\"33333333-3333-3333-3333-333333333333\">\n"
+                + "  <name>" + name + "</name>\n  " + body + "\n</task>";
     }
 
     private static String org(String name) {

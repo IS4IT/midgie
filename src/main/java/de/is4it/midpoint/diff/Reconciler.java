@@ -45,10 +45,17 @@ final class Reconciler {
         final String createBody;      // POST body
         final ObjectDelta<? extends Objectable> delta; // the computed delta for a PATCH (for projection)
         final List<String> warnings;  // input advisories + blast radius, for the caller to report
+        final List<String> heldBack;  // item paths that differ but are left alone (policy apply=on-create)
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings) {
+            this(action, restType, oid, changes, detail, modificationXml, createBody, delta, warnings, List.of());
+        }
+
+        private Outcome(Action action, String restType, String oid, int changes, String detail,
+                String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
+                List<String> warnings, List<String> heldBack) {
             this.action = action;
             this.restType = restType;
             this.oid = oid;
@@ -58,6 +65,7 @@ final class Reconciler {
             this.createBody = createBody;
             this.delta = delta;
             this.warnings = List.copyOf(warnings);
+            this.heldBack = List.copyOf(heldBack);
         }
     }
 
@@ -133,15 +141,28 @@ final class Reconciler {
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
                 .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
                         smartReferenceCheck(strategy));
-        if (!result.accruedInPlaceEditPaths().isEmpty() && !strategy.allowInplaceMerge) {
+        // The object exists, so an item the policy applies only on create is not this PATCH's business.
+        // Before the in-place check, so a change that is not going to be sent cannot refuse the object.
+        ApplyRules.HoldBack held = strategy.apply.holdBack(result.delta(), current);
+        if (held.conflict != null) {
+            return fail(restType, targetOid, held.conflict);
+        }
+        List<String> accruedInPlace = new ArrayList<>();
+        for (String path : result.accruedInPlaceEditPaths()) {
+            if (!strategy.apply.isOnCreate(path)) {
+                accruedInPlace.add(path);
+            }
+        }
+        if (!accruedInPlace.isEmpty() && !strategy.allowInplaceMerge) {
             return fail(restType, targetOid, "merge would overwrite accrued value(s) in place at "
-                    + String.join(", ", result.accruedInPlaceEditPaths())
+                    + String.join(", ", accruedInPlace)
                     + " (use --equivalence real-value or --allow-inplace-merge)");
         }
         if (!result.hasDrift()) {
-            LOG.debug("{} {}: IN_SYNC", restType, targetOid);
+            LOG.debug("{} {}: IN_SYNC{}", restType, targetOid,
+                    held.paths.isEmpty() ? "" : ", left alone (apply=on-create): " + held.paths);
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null, null,
-                    result.inputWarnings());
+                    result.inputWarnings(), held.paths);
         }
         int changes = result.delta().getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
@@ -156,7 +177,7 @@ final class Reconciler {
         }
         LOG.debug("{} {}: PATCH, {} change(s): {}", restType, targetOid, changes, summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
-                result.delta(), warnings);
+                result.delta(), warnings, held.paths);
     }
 
     private Outcome planCreate(String restType, String oid, PrismObject<? extends Objectable> desired)
