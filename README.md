@@ -233,14 +233,13 @@ bin/midgie init --create-state --url https://mp.example/midpoint --user administ
 That creates a `midgie-state` lookup table which records, per tree, the revision last applied. `deploy` never creates it — until you run `init --create-state`, deploy behaves exactly as before and simply notes that detection is off. Afterwards each deploy records what it applied and reports what has since disappeared:
 
 ```
-midgie: 1 value(s) deployed at 2d58fd57e470… are no longer declared by the tree (reported only — pass --prune to remove them):
-midgie:   33333333-…-aaaa  subtype = beta (was in roles/manager.xml)
+midgie: 1 value(s) deployed at 2d58fd5 are no longer declared by the tree (reported only — pass --prune with --dry-run or --plan for details).
 ```
 
-By default it **reports only**. Add **`--prune`** to actually remove them:
+By default it **reports only**, and only the count. Add **`--prune`** to list and actually remove them:
 
 ```bash
-bin/midgie deploy config/ --url … --prune --dry-run   # preview: exits 1 if anything would go
+bin/midgie deploy config/ --url … --prune --dry-run   # preview: lists each value, exits 1 if anything would go
 bin/midgie deploy config/ --url … --prune --yes       # remove them
 ```
 

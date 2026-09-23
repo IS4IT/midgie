@@ -529,7 +529,7 @@ public class DeployCommand implements Callable<Integer> {
         String current = git.head();
         if (current != null && git.isDirty()) {
             current = current + "-dirty";
-            note("note: the tree has uncommitted changes; recording revision " + current
+            note("note: the tree has uncommitted changes; recording revision " + GitRevision.abbreviate(current)
                     + ", which does not describe exactly what was deployed.");
         }
         String last = SyncState.revisionOf(table, identity.key());
@@ -550,7 +550,7 @@ public class DeployCommand implements Callable<Integer> {
             // exist yet, so without this check the run would print nothing, look clean, and then record a new
             // baseline — turning "we cannot tell what was removed" into "nothing was removed", permanently.
             detectionBroken = true;
-            warn("the last deployed revision " + base + " is not in this repository (history rewritten, "
+            warn("the last deployed revision " + GitRevision.abbreviate(base) + " is not in this repository (history rewritten, "
                     + "squash-merged, or fetched shallow), so removals cannot be detected this run. "
                     + "Nothing will be removed and the recorded revision is left alone. To start over, "
                     + "delete the '" + tracking.identity.key() + "' row from " + SyncState.TABLE_NAME + ".");
@@ -567,14 +567,21 @@ public class DeployCommand implements Callable<Integer> {
         return removals;
     }
 
-    /** List what is no longer declared, saying plainly whether it will be removed or only reported. */
+    /**
+     * Say what is no longer declared, and whether it will be removed or only reported. Without
+     * {@code --prune} only the count is given; the per-value list belongs to a run that is about pruning.
+     */
     private void reportRemovals(List<RemovalDetector.Removal> removals, Tracking tracking) {
         if (removals.isEmpty()) {
             return;
         }
-        note(removals.size() + " value(s) deployed at " + tracking.lastRevision
-                + " are no longer declared by the tree"
-                + removalDisposition() + ":");
+        String summary = removals.size() + " value(s) deployed at " + GitRevision.abbreviate(tracking.lastRevision)
+                + " are no longer declared by the tree";
+        if (!prune) {
+            note(summary + " (reported only — pass --prune with --dry-run or --plan for details).");
+            return;
+        }
+        note(summary + removalDisposition() + ":");
         for (RemovalDetector.Removal removal : removals) {
             note("  " + removal.objectLabel + "  " + removal);
         }
@@ -592,9 +599,6 @@ public class DeployCommand implements Callable<Integer> {
 
     /** How this run will treat the removals it just listed — never claiming a deletion that cannot happen. */
     private String removalDisposition() {
-        if (!prune) {
-            return " (reported only — pass --prune to remove them)";
-        }
         if (planDir != null) {
             return " (reported only — --prune does not apply in plan mode)";
         }
@@ -715,7 +719,7 @@ public class DeployCommand implements Callable<Integer> {
         try {
             SyncState.record(prismContext, client, tracking.table, tracking.identity.key(),
                     tracking.currentRevision, tracking.identity.label());
-            status("Recorded revision " + tracking.currentRevision + " for " + tracking.identity.key() + ".");
+            status("Recorded revision " + GitRevision.abbreviate(tracking.currentRevision) + " for " + tracking.identity.key() + ".");
         } catch (Exception e) {
             // Bookkeeping must never fail a deploy that already succeeded.
             note("warning: could not record the deployed revision: " + safe(e.getMessage()));

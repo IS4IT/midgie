@@ -43,6 +43,9 @@ final class GitRevision {
     /** How long any single git invocation may take before it is abandoned. */
     private static final int TIMEOUT_SECONDS = 15;
 
+    /** How many characters of a sha to show in messages — git's own short form. */
+    private static final int SHORT_SHA_LENGTH = 7;
+
     /** Daemon threads that drain a subprocess's pipes, so a chatty git can never deadlock the caller. */
     private static final ExecutorService DRAIN = Executors.newCachedThreadPool(runnable -> {
         Thread thread = new Thread(runnable, "midgie-git-drain");
@@ -144,6 +147,19 @@ final class GitRevision {
         String repo = (top != null && !top.isBlank()) ? new File(top).getName() : "?";
         String prefix = prefix();
         return prefix.isBlank() ? repo : repo + "/" + trimTrailingSlash(prefix);
+    }
+
+    /**
+     * {@code revision} in git's short form for display, keeping a {@code -dirty} marker. Only for messages:
+     * what is recorded and compared stays the full sha.
+     */
+    static String abbreviate(String revision) {
+        if (revision == null) {
+            return null;
+        }
+        String dirty = revision.endsWith("-dirty") ? "-dirty" : "";
+        String sha = revision.substring(0, revision.length() - dirty.length());
+        return (sha.length() > SHORT_SHA_LENGTH ? sha.substring(0, SHORT_SHA_LENGTH) : sha) + dirty;
     }
 
     /**
