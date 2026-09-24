@@ -7,7 +7,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **A tracked tree owns only the nested items it deployed.** Inside a container value the tree declares — one `mapping` of an object template paired by its `name`, a `panel`, or a single-valued container such as `archetypePolicy/display` — anything the server's copy held beyond the file used to be deleted, whoever had put it there: an administrator's `lifecycleState` on ten mappings became ten deletes. On a tracked tree under `--scope present` such an item is now kept unless the tree deployed it and has dropped it since; one the server changed after the deploy is kept too, with a note. What is kept because the tree never deployed it is named in the per-object note, which now reads `keeps live value(s) the tree does not list: inducement ×1 (multivalue=merge; …); mapping/lifecycleState ×10 (inside values the tree declares; it never deployed them)`. The removal side compares item by item inside values paired by container id or natural key, so a mapping that lost one item yields a removal of that item from the server's copy of the mapping, which keeps its id — never a removal of the whole mapping. A mapping dropped entirely, and an edited list value without a key, are still removed whole. `--no-prune` withholds these removals like any other. Untracked trees, an offline `diff` and `--scope full` are unchanged.
+
 ### Fixed
+
+- **Adding an item inside a keyed container value no longer fails.** prism built the path of such an item from the file's value, which has no container id, so adding a `lifecycleState` to a mapping matched by its name came out as `mapping/lifecycleState` and the object failed with "Attempt to get segment without an ID from a multi-valued container mapping". The item is now addressed through the server's id of the mapping.
 
 - **No more "merge does not apply there" warnings for every changed field.** Since a tracked tree runs on merge, each changed single-valued item (`executionState`, `ownerRef`, …) was reported as having "diffs to a whole-value replace; merge does not apply there" — although one value leaves merge nothing to keep, so nothing was given up. And the list was taken before `--scope present`, so items the file never mentions were named too, even on an object that was `in-sync`. Only a multi-valued item that is really sent as a whole-value replace is reported now.
 
