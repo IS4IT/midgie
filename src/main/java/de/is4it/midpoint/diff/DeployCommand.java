@@ -150,11 +150,17 @@ public class DeployCommand implements Callable<Integer> {
                     + "most-specific selector wins.")
     File policyFile;
 
-    @Option(names = "--prune",
-            description = "Delete the values this tree deployed previously and no longer declares (needs "
-                    + "'midgie init --create-state'). Only ever removes values it applied itself, never "
-                    + "accrued state.")
-    boolean prune;
+    @Option(names = "--no-prune",
+            description = "Only report the values this tree deployed previously and no longer declares, instead "
+                    + "of removing them with each object's change — which is the default once the server "
+                    + "tracks the tree ('midgie init --create-state'). Removal only ever reaches values the "
+                    + "tree applied itself, never accrued state.")
+    boolean noPrune;
+
+    // Accepted so that invocations written before removal became the default keep parsing; inert.
+    @Option(names = "--prune", hidden = true,
+            description = "Accepted for compatibility; removing what the tree dropped is the default. No effect.")
+    boolean pruneLegacy;
 
     @Option(names = "--app", paramLabel = "NAME",
             description = "Track this tree under NAME instead of the identity derived from its git repository "
@@ -216,7 +222,7 @@ public class DeployCommand implements Callable<Integer> {
     /** The safety net being accumulated for this run; null when no writing pass will happen. */
     private RollbackPlan rollback;
 
-    /** Under --prune, each object's removals, which its own PATCH carries. */
+    /** Unless --no-prune, each object's removals, which its own PATCH carries. */
     private final Map<DeployObject, List<RemovalDetector.Removal>> removalsByUnit = new IdentityHashMap<>();
 
     /** Removals that cannot be turned into a delete; they fail the run so the revision stays put. */
@@ -271,9 +277,9 @@ public class DeployCommand implements Callable<Integer> {
         // value no longer says the operator asked for anything, and including them would make every offline
         // 'deploy <tree>' — which only prints the plan — fail for needing --url.
         boolean writeFlags = dryRun || assumeYes || confirmEachApply
-                || retry || prune || planDir != null || applyPlanDir != null || policyFile != null;
+                || retry || planDir != null || applyPlanDir != null || policyFile != null;
         if (!live && writeFlags) {
-            System.err.println("midgie: --dry-run/--yes/--retry/--prune/--plan/--apply-plan/--policy need "
+            System.err.println("midgie: --dry-run/--yes/--retry/--plan/--apply-plan/--policy need "
                     + "--url; without it, deploy only prints the plan.");
             return EXIT_ERROR;
         }
@@ -286,8 +292,8 @@ public class DeployCommand implements Callable<Integer> {
         // a removal, let alone made one.
         if (applyPlanDir != null) {
             List<String> ignored = new ArrayList<>();
-            if (prune) {
-                ignored.add("--prune");
+            if (noPrune || pruneLegacy) {
+                ignored.add(noPrune ? "--no-prune" : "--prune");
             }
             if (policyFile != null) {
                 ignored.add("--policy");
@@ -443,11 +449,9 @@ public class DeployCommand implements Callable<Integer> {
 
             Tracking tracking = resolveTracking(prismContext, client);
             List<RemovalDetector.Removal> removals = findRemovals(prismContext, tracking, units);
+            settleMultiValue(tracking);
             reportRemovals(removals, tracking);
-            if (prune && !tracking.canDetect()) {
-                note("warning: --prune has nothing to compare against, so nothing will be removed.");
-            }
-            if (prune) {
+            if (prune()) {
                 for (RemovalDetector.Removal removal : removals) {
                     if (!removal.isPrunable()) {
                         warn("cannot remove " + removal + " — no item definition for it.");
@@ -632,7 +636,7 @@ public class DeployCommand implements Callable<Integer> {
 
     /**
      * Say what is no longer declared, and whether it will be removed or only reported. Without
-     * {@code --prune} only the count is given; with it, each object names its own removals beside its change
+     * {@code --no-prune} only the count is given; otherwise each object names its own removals beside its change
      * ({@link #reportRemoving}), since that is where they are sent.
      */
     private void reportRemovals(List<RemovalDetector.Removal> removals, Tracking tracking) {
@@ -641,11 +645,23 @@ public class DeployCommand implements Callable<Integer> {
         }
         String summary = removals.size() + " value(s) deployed at " + GitRevision.abbreviate(tracking.lastRevision)
                 + " are no longer declared by the tree";
-        if (!prune) {
-            note(summary + " (reported only — pass --prune with --dry-run or --plan for details).");
+        if (!prune()) {
+            note(summary + " (reported only: --no-prune).");
             return;
         }
         note(summary + removalDisposition() + ".");
+    }
+
+    /**
+     * Name what merge keeps on the server beyond the tree, so an entry someone added to a list the tree means
+     * to own is visible. One line per object; the fix, when the tree should own the list, is a policy rule.
+     */
+    private void reportKept(DeployObject unit, Reconciler.Outcome outcome) {
+        if (!outcome.kept.isEmpty()) {
+            note("note: " + unit.objectPath() + ": keeps live value(s) the tree does not list (multivalue=merge): "
+                    + String.join(", ", outcome.kept) + ". A '<path>  multivalue=replace' policy rule makes the "
+                    + "tree own such a list.");
+        }
     }
 
     /** Name the dropped values an object's PATCH deletes, so the change being confirmed is the whole change. */
@@ -699,13 +715,41 @@ public class DeployCommand implements Callable<Integer> {
     /** How this run will treat the removals it just counted — never claiming a deletion that cannot happen. */
     private String removalDisposition() {
         if (planDir != null) {
-            return " (--prune: written into each object's plan file)";
+            return " (written into each object's plan file)";
         }
-        return dryRun ? " (--prune: each object's change would remove its own)"
-                : " (--prune: each object's change removes its own)";
+        return dryRun ? " (each object's change would remove its own)" : " (each object's change removes its own)";
     }
 
-    /** This object's removals under --prune, for its PATCH to carry. */
+    private boolean prune() {
+        return !noPrune;
+    }
+
+    /**
+     * Settle {@code --multivalue auto} for this run. {@code merge} keeps what the server holds beyond the tree —
+     * entries midPoint ships, an admin added, another tree owns — and is only safe where the removals of what
+     * the tree itself dropped are tracked; without them it could express neither a removal nor an edit of an
+     * entry without a natural key. So: merge when this run can track the tree, else replace, said out loud.
+     * {@code --no-prune} does not change the answer: it withholds the removals, and flipping the whole run to
+     * replace because of it would delete more, not less.
+     */
+    private void settleMultiValue(Tracking tracking) {
+        if (!globalStrategy.multiValueAuto) {
+            return;
+        }
+        // Several paths without --app are tracked under the first one only, so the rest would get merge's
+        // keeping without the removals that make it safe.
+        boolean singleIdentity = paths == null || paths.size() <= 1 || app != null;
+        boolean tracked = tracking.canRecord() && !detectionBroken && singleIdentity;
+        globalStrategy = globalStrategy.settleMultiValue(tracked);
+        if (tracked) {
+            LOG.debug("--multivalue auto: merge — removals are tracked for {}", tracking.identity.key());
+        } else {
+            trackingNote("note: removals are not tracked, so --multivalue auto means replace: live values a "
+                    + "multi-valued item holds beyond what the file lists are deleted.");
+        }
+    }
+
+    /** This object's removals, for its PATCH to carry (none under --no-prune). */
     private List<RemovalDetector.Removal> removalsFor(DeployObject unit) {
         return removalsByUnit.getOrDefault(unit, List.of());
     }
@@ -926,6 +970,7 @@ public class DeployCommand implements Callable<Integer> {
         // Once per run: in the preview when there is one, else in the pass that writes.
         if (preview || assumeYes || confirmEachApply) {
             reportRemoving(unit, outcome);
+            reportKept(unit, outcome);
         }
         if (preview) {
             reportHeldBack(unit, outcome);
@@ -1056,6 +1101,7 @@ public class DeployCommand implements Callable<Integer> {
                 // nothing left to answer for now that an object's files are reconciled together.
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit));
                 reportRemoving(unit, outcome);
+                reportKept(unit, outcome);
                 reportHeldBack(unit, outcome);
                 reportProtectedSkipped(unit, outcome);
 

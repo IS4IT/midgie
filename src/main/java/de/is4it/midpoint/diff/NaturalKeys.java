@@ -136,57 +136,8 @@ final class NaturalKeys {
     }
 
     /**
-     * Every keyed multi-valued container the object declares <em>and fills the key in for</em>, as
-     * {@code path -> key names}, in document order. These are the places where
-     * {@code equivalence=natural-keys} plus {@code multivalue=merge} lets individual entries be managed.
-     *
-     * <p>The "fills it in" part is what keeps this honest. Plenty of types declare a natural key that real
-     * configuration never carries — an {@code assignment} or {@code inducement} rarely has an
-     * {@code identifier} — and there natural-key matching does not help: prism pairs unrelated values and the
-     * accrued-value guard rightly refuses the result. Suggesting it for those would be actively bad advice.
-     */
-    static Map<String, String> keyedContainers(PrismObject<?> object) {
-        Map<String, String> found = new LinkedHashMap<>();
-        walk(object.getValue(), ItemPath.EMPTY_PATH, found);
-        return found;
-    }
-
-    private static void walk(PrismContainerValue<?> value, ItemPath prefix, Map<String, String> found) {
-        for (Item<?, ?> item : value.getItems()) {
-            if (!(item instanceof PrismContainer<?> container)) {
-                continue;
-            }
-            ItemDefinition<?> definition = container.getDefinition();
-            if (definition == null || definition.isOperational() || container.getValues().isEmpty()) {
-                continue;
-            }
-            ItemPath path = prefix.append(item.getElementName());
-            if (definition.isMultiValue()) {
-                NaturalKeyDefinition key = of(container);
-                if (key != null && anyCarries(key, container)) {
-                    found.put(pathText(path), names(container));
-                }
-            }
-            for (PrismContainerValue<?> child : container.getValues()) {
-                walk(child, path, found);
-            }
-        }
-    }
-
-    /** Whether at least one of the container's values actually carries the key. */
-    private static boolean anyCarries(NaturalKeyDefinition key, PrismContainer<?> container) {
-        for (PrismContainerValue<?> value : container.getValues()) {
-            if (carries(key, value)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
      * Whether <em>every</em> value of the container carries the full key — the test
-     * {@code --equivalence auto} needs, as opposed to {@link #anyCarries}, which answers the weaker
-     * question {@code init --write-policy} asks of a human.
+     * {@code --equivalence auto} needs.
      *
      * <p>One key-less value among keyed siblings is enough to do harm: prism's
      * {@code DefaultNaturalKeyDefinitionImpl.valuesMatch} treats a constituent that is absent from

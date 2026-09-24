@@ -226,17 +226,18 @@ Last-applied comes from **version control**: `git show <lastRev>:<file>` is the 
 bin/midgie init --create-state --url https://mp.example/midpoint --user administrator config/
 ```
 
-That creates a `midgie-state` lookup table which records, per tree, the revision last applied. `deploy` never creates it — until you run `init --create-state`, deploy behaves exactly as before and simply notes that detection is off. Afterwards each deploy records what it applied and reports what has since disappeared:
+That creates a `midgie-state` lookup table which records, per tree, the revision last applied. `deploy` never creates it — until you run `init --create-state`, the tree is untracked: deploy runs `--multivalue auto` as `replace` and notes that detection is off. Afterwards each deploy records what it applied, runs on `merge`, and **removes what the tree has dropped since** — with each object's change, behind the same confirmation:
 
 ```
-midgie: 1 value(s) deployed at 2d58fd5 are no longer declared by the tree (reported only — pass --prune with --dry-run or --plan for details).
+midgie: 1 value(s) deployed at 2d58fd5 are no longer declared by the tree (each object's change would remove its own).
+midgie: note: RoleType/Manager: removing 1 value(s) no longer declared by the tree:
+midgie:   subtype = legacy (was in roles/manager.xml)
 ```
-
-By default it **reports only**, and only the count. Add **`--prune`** to list and actually remove them:
 
 ```bash
-bin/midgie deploy config/ --url … --prune --dry-run   # preview: each object lists what it removes, exits 1 if anything would go
-bin/midgie deploy config/ --url … --prune --yes       # remove them
+bin/midgie deploy config/ --url … --dry-run          # preview: each object lists what it removes, exits 1 if anything would go
+bin/midgie deploy config/ --url … --yes              # apply, removals included
+bin/midgie deploy config/ --url … --no-prune --yes   # apply, and only report the count of dropped values
 ```
 
 **A removal travels in its object's own PATCH**, next to the object's other changes — one request, one confirmation, one entry in the plan and in the rollback plan. So midPoint applies the change and the removal together: an `inducement` retargeted under `multivalue=merge` is added and its old form deleted in the same request, and the role never holds both, not even between two requests — which a recompute could otherwise have provisioned from. `--plan` writes the removals into each object's plan file, and `--dry-run --format xml` shows them in the one PATCH body. It is structurally safe: a removal is built solely from a value that was in last-applied, and it is sent only while the server still holds that value exactly as it was deployed — one someone has since changed or removed is left alone with a note. A value the object's diff already takes care of (an entry edited in place, or deleted anyway under `replace`) is not deleted a second time; that is judged against the live object with the diff applied locally, so no second round trip is needed. The server's own copy of a container value is what gets deleted, id included, rather than a lookup by content.
@@ -265,9 +266,12 @@ bin/midgie init --write-properties ~/.midgie.properties
 bin/midgie init config/ --url … --write-policy midgie.policy
 ```
 
-It walks the tree and, for each object that declares a multi-valued container the schema gives a natural key **and whose values actually carry the whole key**, writes a per-container line (`<Type>/<Name>/<container>  multivalue=merge`) under a comment naming the object and the key that prompted it. It deliberately writes **no** `equivalence` rules: the default `--equivalence auto` already matches entries by natural key wherever the key is filled in, deciding it per container from the same evidence this file is seeded from. That "actually carry it" condition matters: `assignment` and `inducement` declare an `identifier` that real config usually omits, and a composite key like `kind + intent` is often written with only the `kind` — pinning key matching for the whole object in either case would be actively wrong, since prism then pairs unrelated values and the accrued-value guard refuses the result. The file is a starting point to review, not a finished policy.
+It suggests **only what the defaults leave open**, and says in its header what they already cover: `--equivalence auto` matches entries by natural key wherever the files fill it in (so no `equivalence` rules), `--scope present` leaves unmentioned items alone, and `--multivalue auto` merges on a tracked tree and replaces on an untracked one. What no default can decide is **who owns a list the server holds more of than the tree**, so that is what it looks for — by comparing each object with its live copy, not by guessing from the schema:
 
-After those it offers **`apply=on-create`** suggestions for the object types the tree holds — a task's `executionState` and `schedulingState`, a user's `credentials` (initial password, `forceChange`) and `activation/administrativeStatus`, a resource's `administrativeOperationalState` (maintenance mode) and cached connector `schema` — each with a line saying why and how many of the tree's files declare it. They are written **commented out**, so a seeded file behaves exactly like one without them; uncomment the ones that fit (see [`apply=on-create`](#deploy--reconcile-a-folder-tree) below).
+- **Tracked tree (deploy merges):** a list whose live copy holds values the tree does not list gets a **commented-out** `<Type>/<Name>/<path>  multivalue=replace`. Merge keeps those values; uncomment the rule if the tree should own the list, and deploy deletes them.
+- **Untracked tree (deploy replaces):** the same finding gets an **active** `multivalue=merge`, because replace would delete those values on the next deploy. Delete the rule if the tree owns the list and they should go.
+
+Each rule's comment names the object, the path and how many live values it is about. After them come the **`apply=on-create`** candidates the tree actually **declares** — a task's `executionState` and `schedulingState`, a user's `credentials` and `activation/administrativeStatus`, a resource's `administrativeOperationalState` and cached connector `schema` — commented out, with the reason and how many files declare it. (An item no file mentions is left alone under `--scope present` anyway, so it gets no line.) Last, **commented examples** of the knobs nothing above used — `scope=full` on the tree's first object, `multivalue=replace`/`merge` on a list, `apply=if-absent`, an `apply=always` carve-out, `smart-refs=verify`, and an `oid:` selector — each one a line `deploy --policy` accepts once uncommented. As written, a seeded file for a tracked tree changes nothing a deploy does.
 
 Re-running it on an existing file **refreshes only its marked block**, so you can add objects to the tree and pick up their suggestions without losing anything you wrote:
 
@@ -276,13 +280,14 @@ Re-running it on an existing file **refreshes only its marked block**, so you ca
 ResourceType/Prod LDAP/schemaHandling/objectType  multivalue=replace
 
 # --- begin midgie suggestions — regenerated by 'init --write-policy'; edits here are lost ---
-# ResourceType/Prod LDAP
-#   key: kind + intent
-ResourceType/Prod LDAP/schemaHandling/objectType  multivalue=merge
+# … header: what the defaults cover, and whether this tree is tracked …
+# ResourceType/Prod LDAP: 1 live value(s) at schemaHandling/objectType not in the tree
+#ResourceType/Prod LDAP/schemaHandling/objectType  multivalue=replace
+# … apply=on-create candidates, examples …
 # --- end midgie suggestions ---
 ```
 
-A container you drop from the tree loses its rule instead of lingering; a policy written before the block existed gets one appended once; a start marker with no end is refused rather than guessed at.
+A list that stops differing loses its rule instead of lingering; a policy written before the block existed gets one appended once; a start marker with no end is refused rather than guessed at.
 
 The state object describes and protects itself: it is `indestructible` (midPoint refuses to delete it — clear the flag first if you really mean to), carries a `description`/`documentation` explaining it to an admin who has never heard of midgie, and is marked `subtype=midgie`. To switch tracking off without deleting anything, set its `lifecycleState` to `archived`. Losing it is harmless — detection simply stops until `init --create-state` recreates it; midgie never deletes anything as a result.
 
@@ -302,9 +307,9 @@ Some items belong in the file only so the object is **created** right, and are o
 TaskType/*/executionState  apply=on-create
 ```
 
-The item goes into the POST that creates the object and is left alone by every later PATCH: not changed, not deleted under `--scope full`, and not removed by `--prune` when it drops out of the file. A rule covers everything beneath its path, and when a new container is added to an existing object (a new `activation`, say) an `on-create` item inside it is stripped from what is sent. `--dry-run` and `--plan` name each difference held back, so an object shown `in-sync` while its state plainly differs is not a mystery. `apply` is per-item only; `always` is the default, and a more specific `apply=always` rule carves an exception out of a broader one. An object matched by name that someone else created counts as existing — midgie never writes the item there.
+The item goes into the POST that creates the object and is left alone by every later PATCH: not changed, not deleted under `--scope full`, and not removed when it drops out of the file. A rule covers everything beneath its path, and when a new container is added to an existing object (a new `activation`, say) an `on-create` item inside it is stripped from what is sent. `--dry-run` and `--plan` name each difference held back, so an object shown `in-sync` while its state plainly differs is not a mystery. `apply` is per-item only; `always` is the default, and a more specific `apply=always` rule carves an exception out of a broader one. An object matched by name that someone else created counts as existing — midgie never writes the item there.
 
-**`apply=if-absent`** is the gentler sibling, midPoint's *weak* mapping strength: the item is written whenever the server holds **no value** for it and never overwritten or removed once it does — not by a PATCH, not under `--scope full`, not by `--prune`. It differs from `on-create` only once someone clears the item: `if-absent` fills it in again on the next deploy, `on-create` leaves it empty. It is judged per item, so a rule on a container fills in each missing child and leaves the present ones alone, and a newly added container carries its `if-absent` items along (nothing can be there yet). Held-back differences are named with their rule in the `--dry-run`/`--plan` note, e.g. `left alone by the policy: description (apply=if-absent)`.
+**`apply=if-absent`** is the gentler sibling, midPoint's *weak* mapping strength: the item is written whenever the server holds **no value** for it and never overwritten or removed once it does — not by a PATCH, not under `--scope full`, not when it drops out of the file. It differs from `on-create` only once someone clears the item: `if-absent` fills it in again on the next deploy, `on-create` leaves it empty. It is judged per item, so a rule on a container fills in each missing child and leaves the present ones alone, and a newly added container carries its `if-absent` items along (nothing can be there yet). Held-back differences are named with their rule in the `--dry-run`/`--plan` note, e.g. `left alone by the policy: description (apply=if-absent)`.
 
 ## Exit codes
 
@@ -325,7 +330,7 @@ The contract lets CI gate on drift without parsing output:
 | flag | default | meaning |
 |---|---|---|
 | `--scope present\|full` | `present` | *present*: only diff items present in `DESIRED` (unmanaged items are left alone → accrued state is preserved). *full*: full-replace (also removes items missing from desired). |
-| `--multivalue replace\|merge` | `replace` | Multi-valued container handling. *replace*: desired values are authoritative (live-only values removed). *merge*: union by content — add desired values, keep live-only ones. |
+| `--multivalue auto\|merge\|replace` | `auto` | Multi-valued container handling. *replace*: desired values are authoritative (live-only values removed). *merge*: add desired values, keep live-only ones. *auto*: merge when deploy tracks the tree (it then removes what the tree dropped itself), else replace. |
 | `--path <itemPath>=merge\|replace` | — | Per-path override of `--multivalue`. Repeatable (e.g. `--path assignment=merge`). |
 | `--equivalence <strategy>` | `auto` | What counts as "the same value". `auto` decides per container (see below); the rest, loosest to strictest, are `real-value` · `consider-different-ids` · `natural-keys` (prism-experimental) · `ignore-metadata` · `data` · `literal`. See [`DESIGN.md`](DESIGN.md#strategy-flags). |
 | `--smart-refs accept\|verify\|resolve` | `accept` | How a reference the file writes as a **search filter** is judged against the OID midPoint resolved it to. See below. |
@@ -343,12 +348,12 @@ natural key — is a managed update and is not refused (see below).
 
 Setting `--equivalence natural-keys` by hand is almost always worse than leaving it on `auto`: prism takes one equivalence for a whole-object diff, so it applies to *every* container of that object — including the many types that declare a key real config never fills in (an `assignment` rarely carries an `<identifier>`), where prism then pairs unrelated entries positionally and edits one into the other. `auto` avoids that by diffing the object under both strategies and keeping each change from the pass its path belongs to. The other strategies are for inspection, not reconciliation: `data` and `literal` compare operational data and metadata, so against a live server they never report "no differences" at all.
 
-**Multi-value handling still needs choosing.** The default `replace` makes a run **converge** and keeps **drift visible**. `merge` buys safety from accidental deletion, but it gives up both, so turn it on deliberately and per path rather than globally:
+**Multi-value handling mostly needs no choosing either.** The default `--multivalue auto` depends on whether the tree is **tracked** (in a full git clone, on a server with `init --create-state`):
 
-- **It cannot express an edit.** A content change reads as *old value gone, new value added*, and merge drops the deletion — so it keeps both. With live `subtype=[alpha]` and desired `[beta]` you get `[alpha, beta]`, not `[beta]`.
-- **It cannot express a removal.** Dropping an entry from your file no longer removes it from the server, and because the delta comes out empty `diff` reports `No differences.` and exits `0`. Drift detection and the CI exit-code gate stop seeing anything the file does not declare. `deploy` closes this for a version-controlled tree — it compares against what it last applied and reports the values you dropped (`--prune` removes them) — but `diff`, which does not read that history, still cannot see a removal at all.
+- **Tracked: `merge`.** Values a list holds on the server beyond your files — entries midPoint ships, an admin added, another tree owns — stay. What *your* tree dropped is still removed, because the three-way comparison against the last deployed revision finds it and each object's PATCH carries the delete; an entry edited without a natural key is added and its old form deleted in that same request. So merge's two weaknesses on its own — it can express neither a removal nor such an edit — do not apply. What merge keeps is named per object (`keeps live value(s) the tree does not list (multivalue=merge): inducement ×1`), so an entry someone added to a list the tree means to own does not go unseen; a `<path>  multivalue=replace` policy rule makes the tree own that list.
+- **Untracked: `replace`.** Without the history, merge could express neither a removal nor an edit (it would keep `[alpha, beta]` for live `[alpha]` and desired `[beta]`), so the tree is authoritative for every list it declares, and deploy says so in a note. A `multivalue=merge` rule, or `init --write-policy`'s suggestion, keeps a list open where the server holds more.
 
-Rule of thumb: keep a path on **replace** when your tree is authoritative for that list, and use **merge** where it is not — where the list also holds entries midPoint ships, an admin added live, or another team's tree owns. Note that *your own* tree splitting a list across several files is **not** one of those cases: `deploy` combines the files describing one object before diffing, so composition needs no merge and keeps removals working.
+`--multivalue merge|replace` on the command line (or in the policy, per object or path) overrides either. `--no-prune` withholds the removals but leaves the default alone: flipping the run to replace because of it would delete more, not less. Note that *your own* tree splitting a list across several files needs neither: `deploy` combines the files describing one object before diffing. `diff` reads the same history on a live run, so it shows the same change deploy would send; an offline `diff` of two files has none, and uses replace.
 
 #### Syncing an item nested inside a multi-valued container
 
@@ -367,8 +372,7 @@ What the recipe does still require is that your file fills the keys in: `<type>`
 and `<identifier>` on the `panel`, or `auto` will decline to match them and warn that it did.
 
 Scoped to the container that needs it rather than to the whole object — the same shape
-`init --write-policy` generates, and what the guidance above means by "turn it on deliberately and per
-path".
+`init --write-policy` generates. On a tracked tree merge is already the default and the line is not needed.
 
 The midPoint schema declares an `a:naturalKey` for these containers (`panel` → `identifier`,
 `objectDetailsPage` → `type`, and ~100 more), so prism matches your id-less fragment against the live values
@@ -471,7 +475,7 @@ midgie deploy config/ --url https://mp.example/midpoint \
 | `--dry-run` | *(deploy)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
 | `-y, --yes` | *(deploy)* Apply without the interactive confirmation prompt (required non-interactively). |
 
-`deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--policy <file>`, `--rollback-plan <dir>` / `--no-rollback-plan`, and `--confirm-each-apply` — described in the `deploy` section above.
+`deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--policy <file>`, `--rollback-plan <dir>` / `--no-rollback-plan`, `--no-prune`, and `--confirm-each-apply` — described in the `deploy` section above.
 
 ## Config file — `midgie.properties`
 
@@ -517,7 +521,7 @@ config: cacert <- /etc/midgie/midgie.properties
 config: url    <- /home/you/.midgie.properties
 ```
 
-Two things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. And **`yes` and `prune` are refused**: they decide whether a run writes without asking and whether it deletes, and a file on disk is not where a person confirms that — pass them on the command line.
+Two things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. And **`yes` is refused**: it decides whether a run writes without asking, and a file on disk is not where a person confirms that — pass it on the command line. (`no-prune` may be set anywhere: it only ever deletes less.)
 
 ### A `.midgie.properties` in the tree
 
@@ -536,7 +540,7 @@ bin/midgie init --write-properties - | diff - ~/.midgie.properties   # what did 
 
 The disallowed keys are **omitted rather than commented out** — uncommenting a line in a midgie template must always yield a file midgie accepts, and a commented-out `url` would break that and read as an invitation. The header names them and says where they belong instead.
 
-Because it travels with somebody else's repository, this layer is **allowlisted** rather than denylisted — cloning an unfamiliar repo and running even a read would otherwise authenticate to whatever server its file names. It may set `rollback-plan`, `policy`, `scope`, `multivalue`, `equivalence`, `path`, `app`, `schema`, `schema-dir`, `no-match-by-name`, `no-create-if-absent`, `retry`, `smart-refs`, `allow-inplace-merge` and `no-live-schema`. Anything else is an error naming the file — `url`, `user`, `password*`, `insecure` and `cacert` decide where credentials go, and `no-rollback-plan` would let a tree switch off its own safety net. A file may say *where* something goes, never *whether* a safety gate applies.
+Because it travels with somebody else's repository, this layer is **allowlisted** rather than denylisted — cloning an unfamiliar repo and running even a read would otherwise authenticate to whatever server its file names. It may set `rollback-plan`, `policy`, `scope`, `multivalue`, `equivalence`, `path`, `app`, `schema`, `schema-dir`, `no-match-by-name`, `no-create-if-absent`, `retry`, `smart-refs`, `allow-inplace-merge`, `no-live-schema` and `no-prune`. Anything else is an error naming the file — `url`, `user`, `password*`, `insecure` and `cacert` decide where credentials go, and `no-rollback-plan` would let a tree switch off its own safety net. A file may say *where* something goes, never *whether* a safety gate applies.
 
 A CA certificate is the case worth spelling out. With `cacert` in the file, TLS verifies properly for every command with nothing extra typed, so `--insecure` stops being the path of least resistance.
 

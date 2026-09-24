@@ -459,7 +459,8 @@ class LiveIntegrationTest {
     }
 
     @Test
-    void pruneRemovesDroppedValuesInTheSamePatchAsTheChangeAndRollsBack(@TempDir Path dir) throws Exception {
+    void aTrackedTreeMergesAndRemovesWhatItDroppedInTheSamePatchAndRollsBack(@TempDir Path dir)
+            throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteDeployObjects();
         assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
@@ -478,20 +479,23 @@ class LiveIntegrationTest {
         assertEquals(0, first.exit, first.err);
         assertTrue(first.out.contains("Recorded revision"), first.out);
 
-        // v2 drops 'beta' and retargets the inducement. Under merge the retarget is an add of the new entry
-        // (an inducement has no key to match on), so only the removal of the old one — in the same PATCH —
-        // keeps the role from holding both.
+        // v2 drops 'beta' and retargets the inducement. A tracked tree is on merge by default, where the
+        // retarget is an add of the new entry (an inducement has no key to match on), so only the removal of
+        // the old one — in the same PATCH, also the default — keeps the role from holding both.
         Files.writeString(file, trackedRole(List.of("alpha", "gamma"), END_USER_ROLE_OID), StandardCharsets.UTF_8);
         commit(tree, "v2");
         CliResult preview = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
-                "--multivalue", "merge", "--prune", "--dry-run", "--format", "xml");
+                "--dry-run", "--format", "xml");
         assertEquals(1, preview.exit, preview.err);
         assertTrue(preview.out.contains("beta") && preview.out.contains(SUPERUSER_ROLE_OID),
                 "the one PATCH body carries the removals too: " + preview.out);
         assertTrue(preview.err.contains("removing 2 value(s)"), preview.err);
 
+        CliResult diff = run("diff", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD);
+        assertEquals(preview.out, diff.out, "diff reads the same history and sends the same body");
+
         CliResult second = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
-                "--multivalue", "merge", "--prune", "--yes", "--rollback-plan", plans.toString());
+                "--yes", "--rollback-plan", plans.toString());
         assertEquals(0, second.exit, second.out + second.err);
         assertTrue(second.out.contains("1 patched"), second.out);
         String live = client.getObject("roles", DEPLOY_ROLE_OID);
@@ -500,8 +504,7 @@ class LiveIntegrationTest {
         assertEquals(1, live.split("<inducement").length - 1, "one inducement, not old and new:\n" + live);
         assertTrue(live.contains(END_USER_ROLE_OID) && !live.contains(SUPERUSER_ROLE_OID), live);
 
-        CliResult again = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
-                "--multivalue", "merge", "--prune", "--dry-run");
+        CliResult again = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
         assertEquals(0, again.exit, "settled after one run: " + again.out + again.err);
 
         // The rollback plan holds one inverse for the object, removals included.
@@ -512,6 +515,42 @@ class LiveIntegrationTest {
         assertTrue(restored.contains(">beta<") && restored.contains(SUPERUSER_ROLE_OID),
                 "rollback puts the removed values back:\n" + restored);
         assertFalse(restored.contains(">gamma<") || restored.contains(END_USER_ROLE_OID), restored);
+    }
+
+    @Test
+    void mergeKeepsWhatSomeoneElseAddedAndSaysSo(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
+
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path file = tree.resolve("role.xml");
+        Files.writeString(file, trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        git(tree, "config", "user.email", "test@example.invalid");
+        git(tree, "config", "user.name", "midgie test");
+        commit(tree, "v1");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        // Someone adds an inducement on the server — here through an untracked file on explicit merge.
+        Path elsewhere = Files.createDirectories(dir.resolve("elsewhere"));
+        Files.writeString(elsewhere.resolve("extra.xml"), "<role xmlns=\"" + NS + "\" oid=\"" + DEPLOY_ROLE_OID
+                + "\">\n  <name>IT Deploy Role</name>\n  <inducement>\n    <targetRef oid=\"" + END_USER_ROLE_OID
+                + "\" type=\"RoleType\"/>\n  </inducement>\n</role>", StandardCharsets.UTF_8);
+        assertEquals(0, run("deploy", elsewhere.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--multivalue", "merge", "--yes", "--no-rollback-plan").exit);
+
+        // The tracked tree keeps it (merge), and names it rather than passing over it in silence.
+        CliResult kept = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        assertEquals(0, kept.exit, kept.out + kept.err);
+        assertTrue(kept.err.contains("keeps live value(s) the tree does not list") && kept.err.contains("inducement ×1"),
+                kept.err);
+
+        // Owning the list is one flag (or policy rule) away, and then it is a change to preview.
+        CliResult owned = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run",
+                "--multivalue", "replace");
+        assertEquals(1, owned.exit, owned.out + owned.err);
     }
 
     // --- helpers ---

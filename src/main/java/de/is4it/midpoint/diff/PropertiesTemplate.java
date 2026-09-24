@@ -30,11 +30,11 @@ final class PropertiesTemplate {
 
     /** Never worth a default: they answer "what is this run doing", not "how is this machine set up". */
     private static final Set<String> SKIPPED = Set.of("help", "version", "debug", "trace", "dry-run", "yes",
-            "prune", "confirm-each-apply", "write-policy", "write-properties", "write-cacert", "create-state",
+            "confirm-each-apply", "format", "output", "write-policy", "write-properties", "write-cacert", "create-state",
             "plan", "apply-plan",
             // Parse for compatibility but do nothing; offering them here would generate a file that
             // ConfigDefaults then refuses. The '--no-…' forms carry the setting instead.
-            "create-if-absent", "match-by-name");
+            "create-if-absent", "match-by-name", "prune");
 
     private PropertiesTemplate() {
     }
@@ -129,8 +129,8 @@ final class PropertiesTemplate {
                 .append("# MIDPOINT_PASSWORD, then this file, then the built-in default. 'midgie <command> -v'\n")
                 .append("# names the file each setting came from.\n")
                 .append("#\n")
-                .append("# 'yes' and 'prune' cannot be set here: whether a run writes without asking, or\n")
-                .append("# deletes, is not something a file on disk gets to answer.\n");
+                .append("# 'yes' cannot be set here: whether a run writes without asking is not something a\n")
+                .append("# file on disk gets to answer.\n");
     }
 
     /**
@@ -157,7 +157,7 @@ final class PropertiesTemplate {
                 .append(", $MIDGIE_CONF, or the\n")
                 .append("#         MIDPOINT_URL / MIDPOINT_USER / MIDPOINT_PASSWORD / https_proxy\n")
                 .append("#         environment variables.\n")
-                .append("#   yes, prune, no-rollback-plan\n")
+                .append("#   yes, no-rollback-plan\n")
                 .append("#       — a file may say WHERE something goes, never WHETHER a safety gate applies:\n")
                 .append("#         pass them on the command line.\n")
                 .append("#\n")

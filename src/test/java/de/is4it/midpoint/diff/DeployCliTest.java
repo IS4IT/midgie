@@ -275,11 +275,10 @@ class DeployCliTest {
     }
 
     @Test
-    void pruneWithoutUrlIsAnError() {
-        // --prune deletes, so it must never be reachable in the offline plan-printing mode.
+    void theOldPruneFlagStillParsesAndChangesNothing() {
+        // Removing is the default now; scripts written before still pass --prune, which must not break them.
         Result r = run("deploy", TREE, "--prune");
-        assertEquals(2, r.exit);
-        assertTrue(r.err.contains("--url"), r.err);
+        assertEquals(0, r.exit, r.err);
     }
 
     @Test

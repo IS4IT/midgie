@@ -12,7 +12,9 @@ import java.util.Collections;
 import java.util.Collection;
 import java.util.Set;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import javax.xml.namespace.QName;
 
@@ -943,6 +945,70 @@ public final class DiffEngine {
      * equivalence. Content is the generous fallback that keeps this check quiet for keyless-in-practice
      * containers, where a fragment simply restates the values it manages verbatim.
      */
+    /** Live values of one multi-valued container that the desired object does not declare. */
+    record LiveOnly(ItemPath path, String pathText, int count) {
+    }
+
+    /**
+     * Per multi-valued container the desired object declares, how many values {@code live} holds that it does
+     * not — by container id, natural key, or content, the same test the partial-declaration warning uses.
+     * Under {@code replace} these are what a PATCH deletes; under {@code merge} they are what it keeps. Either
+     * way they are the entries the tree does not own, which is what makes them worth naming: an entry someone
+     * added on the server is invisible to a merge otherwise. Nested containers are followed into the matching
+     * live value, so a panel added inside a declared page counts under the panel's own path.
+     */
+    static List<LiveOnly> liveOnlyValues(PrismObject<?> desired, PrismObject<?> live) {
+        Map<String, LiveOnly> found = new LinkedHashMap<>();
+        if (live != null) {
+            collectLiveOnly(desired.getValue(), live.getValue(), ItemPath.EMPTY_PATH, found);
+        }
+        return new ArrayList<>(found.values());
+    }
+
+    private static void collectLiveOnly(PrismContainerValue<?> desiredValue, PrismContainerValue<?> liveValue,
+            ItemPath prefix, Map<String, LiveOnly> found) {
+        if (liveValue == null) {
+            return;
+        }
+        for (Item<?, ?> item : desiredValue.getItems()) {
+            if (!(item instanceof PrismContainer<?> desiredContainer)) {
+                continue;
+            }
+            ItemDefinition<?> definition = desiredContainer.getDefinition();
+            if (definition == null || definition.isOperational()) {
+                continue;
+            }
+            ItemPath path = prefix.append(item.getElementName());
+            PrismContainer<?> liveContainer = containerAt(liveValue, item.getElementName());
+            if (definition.isMultiValue()) {
+                NaturalKeyDefinition naturalKey = naturalKeyOf(desiredContainer);
+                if (liveContainer != null) {
+                    int undeclared = 0;
+                    for (PrismContainerValue<?> live : liveContainer.getValues()) {
+                        if (!declaredInDesired(desiredContainer, live, naturalKey)) {
+                            undeclared++;
+                        }
+                    }
+                    if (undeclared > 0) {
+                        String text = String.join("/", localNames(path));
+                        LiveOnly previous = found.get(text);
+                        found.put(text, new LiveOnly(path, text,
+                                undeclared + (previous != null ? previous.count() : 0)));
+                    }
+                }
+                for (PrismContainerValue<?> child : desiredContainer.getValues()) {
+                    collectLiveOnly(child, matchingLiveValue(liveContainer, child, naturalKey), path, found);
+                }
+            } else {
+                PrismContainerValue<?> liveChild = (liveContainer != null && !liveContainer.getValues().isEmpty())
+                        ? liveContainer.getValues().iterator().next() : null;
+                for (PrismContainerValue<?> child : desiredContainer.getValues()) {
+                    collectLiveOnly(child, liveChild, path, found);
+                }
+            }
+        }
+    }
+
     private static boolean declaredInDesired(PrismContainer<?> desiredContainer, PrismContainerValue<?> live,
             NaturalKeyDefinition naturalKey) {
         boolean keyed = naturalKey != null && carriesKey(naturalKey, live);

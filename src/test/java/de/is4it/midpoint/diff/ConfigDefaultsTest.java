@@ -307,12 +307,20 @@ class ConfigDefaultsTest {
 
     @Test
     void aKeyThatWouldWaiveAConfirmationIsRefused(@TempDir Path dir) throws Exception {
-        for (String key : new String[] {"yes = true", "midgie.deploy.prune = true"}) {
-            useConfig(dir, key);
-            Result result = run("deploy", dir.toString());
-            assertEquals(2, result.exit, result.out);
-            assertTrue(result.err.contains("command line"), key + " -> " + result.err);
-        }
+        useConfig(dir, "yes = true");
+        Result result = run("deploy", dir.toString());
+        assertEquals(2, result.exit, result.out);
+        assertTrue(result.err.contains("command line"), result.err);
+    }
+
+    @Test
+    void pruneInAFileIsRefusedAsNowTheDefault(@TempDir Path dir) throws Exception {
+        // Removing what a tracked tree dropped is the default now; a file still saying 'prune = true' was
+        // written for the opposite world, and must say so rather than sit there doing nothing.
+        useConfig(dir, "midgie.deploy.prune = true");
+        Result result = run("deploy", dir.toString());
+        assertEquals(2, result.exit, result.out);
+        assertTrue(result.err.contains("no-prune"), result.err);
     }
 
     @Test

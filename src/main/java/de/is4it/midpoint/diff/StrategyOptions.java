@@ -28,9 +28,15 @@ public final class StrategyOptions {
             description = "present: only diff items present in DESIRED (preserve the rest). full: full replace.")
     String scope;
 
-    @Option(names = "--multivalue", paramLabel = "replace|merge", defaultValue = "replace",
-            description = "How to treat multi-valued containers. Per-path overrides via --path.")
+    @Option(names = "--multivalue", paramLabel = "auto|merge|replace", defaultValue = "auto",
+            description = "How to treat live values a multi-valued item holds and the file does not list. "
+                    + "merge: keep them. replace: delete them. auto (the default): merge when deploy tracks "
+                    + "the tree — it then removes what the tree dropped by itself — else replace. "
+                    + "Per-path overrides via --path.")
     String multivalue;
+
+    /** Set when {@code --multivalue} was left on {@code auto}, which the live layer settles per run. */
+    private boolean multiValueAuto;
 
     @Option(names = "--path", paramLabel = "<itemPath>=merge|replace",
             description = "Per-path multi-value strategy override. Repeatable.")
@@ -68,6 +74,11 @@ public final class StrategyOptions {
         final boolean allowInplaceMerge;
         final SmartRefs smartRefs;
         final ApplyRules apply;   // only a --policy file sets these; the CLI has no per-item flag for it
+        /**
+         * {@code --multivalue auto}, not yet settled: {@link #multiValue} holds {@code replace} as the global
+         * default until {@link #settleMultiValue} learns whether this run can track removals.
+         */
+        final boolean multiValueAuto;
 
         Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge) {
@@ -82,12 +93,33 @@ public final class StrategyOptions {
         Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge, SmartRefs smartRefs,
                 ApplyRules apply) {
+            this(scope, equivalence, multiValue, allowInplaceMerge, smartRefs, apply, false);
+        }
+
+        Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
+                DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge, SmartRefs smartRefs,
+                ApplyRules apply, boolean multiValueAuto) {
+            this.multiValueAuto = multiValueAuto;
             this.scope = scope;
             this.equivalence = equivalence;
             this.multiValue = multiValue;
             this.allowInplaceMerge = allowInplaceMerge;
             this.smartRefs = smartRefs;
             this.apply = apply;
+        }
+
+        /**
+         * Settle {@code --multivalue auto}: {@code merge} when this run tracks removals, {@code replace} when it
+         * cannot. Merge alone cannot express a removal or an edit of an entry without a natural key — the old
+         * value is kept beside the new one — so it is only the default where the three-way comparison against
+         * the last deployed revision removes what the tree dropped. A choice made on the command line stays.
+         */
+        Resolved settleMultiValue(boolean tracked) {
+            if (!multiValueAuto) {
+                return this;
+            }
+            return new Resolved(scope, equivalence, DiffEngine.MultiValueStrategy.of(tracked, multiValue.pathRules()),
+                    allowInplaceMerge, smartRefs, apply, false);
         }
 
         /**
@@ -125,7 +157,8 @@ public final class StrategyOptions {
             System.err.println("midgie: --smart-refs must be 'accept', 'verify' or 'resolve', got: " + smartRefs);
             return null;
         }
-        return new Resolved(scopeValue, strategy, multiValue, allowInplaceMerge, smartRefsValue);
+        return new Resolved(scopeValue, strategy, multiValue, allowInplaceMerge, smartRefsValue, ApplyRules.none(),
+                multiValueAuto);
     }
 
     private DiffEngine.Scope parseScope() {
@@ -267,7 +300,14 @@ public final class StrategyOptions {
     /** Parse {@code --multivalue} plus any {@code --path <itemPath>=merge|replace} overrides. Null on error. */
     private DiffEngine.MultiValueStrategy parseMultiValue() {
         boolean globalMerge;
+        multiValueAuto = false;
         switch (multivalue.toLowerCase()) {
+            case "auto":
+                // Unsettled until the live layer knows whether removals are tracked; replace until then, which
+                // is also what every run that never asks (an offline diff) gets.
+                multiValueAuto = true;
+                globalMerge = false;
+                break;
             case "replace":
                 globalMerge = false;
                 break;
@@ -275,7 +315,7 @@ public final class StrategyOptions {
                 globalMerge = true;
                 break;
             default:
-                System.err.println("midgie: --multivalue must be 'replace' or 'merge', got: " + multivalue);
+                System.err.println("midgie: --multivalue must be 'auto', 'merge' or 'replace', got: " + multivalue);
                 return null;
         }
 

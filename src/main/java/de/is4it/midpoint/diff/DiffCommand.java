@@ -101,6 +101,11 @@ public class DiffCommand implements Callable<Integer> {
             description = "Accepted for compatibility; matching by name is the default. No effect.")
     boolean matchByNameLegacy;
 
+    @Option(names = "--no-prune",
+            description = "In live mode, leave out the removals of values the tracked tree no longer declares, "
+                    + "which deploy would send with the change.")
+    boolean noPrune;
+
     @Option(names = "--policy", paramLabel = "FILE",
             description = "Per-object/-item diff-strategy policy file, as deploy takes it (live mode only).")
     File policyFile;
@@ -182,6 +187,7 @@ public class DiffCommand implements Callable<Integer> {
         preview.format = format;
         preview.output = output;
         preview.policyFile = policyFile;
+        preview.noPrune = noPrune;
         preview.noMatchByName = noMatchByName;
         preview.quiet = quiet;
         preview.debug = debug;

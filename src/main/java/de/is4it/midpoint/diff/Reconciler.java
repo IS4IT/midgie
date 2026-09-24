@@ -54,6 +54,8 @@ final class Reconciler {
          * its revision then: the next run is the only one that can still see them.
          */
         final boolean removalsDeferred;
+        /** Multi-valued items on merge whose live values beyond the tree stay, e.g. {@code inducement ×2}. */
+        final List<String> kept;
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
@@ -66,13 +68,14 @@ final class Reconciler {
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings, List<String> heldBack, List<String> protectedSkipped) {
             this(action, restType, oid, changes, detail, modificationXml, createBody, delta, warnings, heldBack,
-                    protectedSkipped, List.of(), false);
+                    protectedSkipped, List.of(), false, List.of());
         }
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings, List<String> heldBack, List<String> protectedSkipped,
-                List<RemovalDetector.Removal> removing, boolean removalsDeferred) {
+                List<RemovalDetector.Removal> removing, boolean removalsDeferred, List<String> kept) {
+            this.kept = List.copyOf(kept);
             this.removing = List.copyOf(removing);
             this.removalsDeferred = removalsDeferred;
             this.action = action;
@@ -211,13 +214,14 @@ final class Reconciler {
                 }
             }
         }
+        List<String> kept = keptOnMerge(desired, current, delta, strategy);
         if (!result.hasDrift() && judged.removing.isEmpty()) {
             LOG.debug("{} {}: IN_SYNC{}", restType, targetOid,
                     held.paths.isEmpty() ? "" : ", left alone: " + held.paths);
             // The (empty) delta rides along so a caller rendering this one object — 'diff', or 'deploy
             // --dry-run --format xml' — writes an empty ObjectModificationType rather than nothing.
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null,
-                    delta, warnings, held.paths, result.protectedSkippedPaths(), List.of(), judged.deferred);
+                    delta, warnings, held.paths, result.protectedSkippedPaths(), List.of(), judged.deferred, kept);
         }
         int changes = delta.getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, delta);
@@ -230,7 +234,39 @@ final class Reconciler {
         LOG.debug("{} {}: PATCH, {} change(s) ({} removal(s) from the tree): {}", restType, targetOid, changes,
                 judged.removing.size(), summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
-                delta, warnings, held.paths, result.protectedSkippedPaths(), judged.removing, judged.deferred);
+                delta, warnings, held.paths, result.protectedSkippedPaths(), judged.removing, judged.deferred,
+                kept);
+    }
+
+    /**
+     * What a {@code merge} leaves standing that the tree does not declare, counted after this PATCH — so the
+     * values it removes are not among them. Replace would have deleted these; under merge they stay without a
+     * word unless someone says so, and an entry an administrator added to a list the tree means to own is
+     * exactly the drift that must not go unseen.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo is typed by the object class the delta was built for
+    private static List<String> keptOnMerge(PrismObject<? extends Objectable> desired,
+            PrismObject<? extends Objectable> current, ObjectDelta<? extends Objectable> delta,
+            StrategyOptions.Resolved strategy) {
+        if (!strategy.multiValue.isMergeActive()) {
+            return List.of();
+        }
+        PrismObject<? extends Objectable> after = current.clone();
+        try {
+            if (!delta.isEmpty()) {
+                ((ObjectDelta) delta).applyTo((PrismObject) after);
+            }
+        } catch (Exception e) {
+            LOG.trace("could not project the change to count what merge keeps on {}", current.getOid(), e);
+            return List.of();
+        }
+        List<String> kept = new ArrayList<>();
+        for (DiffEngine.LiveOnly liveOnly : DiffEngine.liveOnlyValues(desired, after)) {
+            if (strategy.multiValue.isMerge(liveOnly.path())) {
+                kept.add(liveOnly.pathText() + " ×" + liveOnly.count());
+            }
+        }
+        return kept;
     }
 
     /** Which of an object's removals its PATCH carries, and whether any had to be left for a later run. */

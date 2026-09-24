@@ -45,6 +45,9 @@ class InitCommandTest {
     /** Whether the state object already exists (drives the search response). */
     private volatile boolean stateExists;
 
+    /** Objects the stub holds, by REST type; a search returns those whose oid or name the query mentions. */
+    private final java.util.Map<String, List<String>> live = new java.util.concurrent.ConcurrentHashMap<>();
+
     @BeforeEach
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -52,6 +55,7 @@ class InitCommandTest {
         server.start();
         url = "http://127.0.0.1:" + server.getAddress().getPort() + "/midpoint";
         requests.clear();
+        live.clear();
         stateExists = false;
     }
 
@@ -114,8 +118,9 @@ class InitCommandTest {
         // file it writes and midgie then rejects would break the command line midgie itself suggested.
         // Object names here carry the characters the selector grammar gives its own meaning to.
         Path tree = Files.createDirectories(dir.resolve("config"));
-        Files.writeString(tree.resolve("resource.xml"), resource("Prod / LDAP *"), StandardCharsets.UTF_8);
         Files.writeString(tree.resolve("org.xml"), org("ou=people"), StandardCharsets.UTF_8);
+        Files.writeString(tree.resolve("resource.xml"), resource("Prod / LDAP *"), StandardCharsets.UTF_8);
+        serve("resources", liveResource("Prod / LDAP *"));
         Path policy = dir.resolve("midgie.policy");
 
         Result result = run("init", tree.toString(), "--url", url, "-u", "administrator", "-p", "s3cret",
@@ -124,12 +129,15 @@ class InitCommandTest {
         assertEquals(0, result.exit, result.err);
         assertTrue(Files.exists(policy), "the policy file must be written");
         String content = Files.readString(policy, StandardCharsets.UTF_8);
-        assertTrue(content.contains("schemaHandling/objectType"),
-                "a keyed container that carries its whole key is suggested:\n" + content);
+        // Untracked, so deploy replaces — and would delete the object type only the server holds. The
+        // suggestion is the rule that keeps it, active, and says why.
+        assertTrue(content.contains("\nResourceType/Prod \\/ LDAP \\*/schemaHandling/objectType  multivalue=merge\n"),
+                "a list whose live copy holds more is suggested:\n" + content);
+        assertTrue(content.contains("1 live value(s) at schemaHandling/objectType not in the tree"), content);
 
         Policy loaded = Policy.load(policy.toFile());
         StrategyOptions.Resolved resolved = loaded.resolveFor("ResourceType", "Prod / LDAP *",
-                "11111111-1111-1111-1111-111111111111", baseline());
+                resourceOid("Prod / LDAP *"), baseline());
         assertTrue(resolved.multiValue.isMerge(
                         com.evolveum.midpoint.prism.path.ItemPath.fromString("schemaHandling/objectType")),
                 "and the rule applies to the object it was written for:\n" + content);
@@ -141,6 +149,49 @@ class InitCommandTest {
                 "the seeded policy must leave equivalence to the auto default:\n" + content);
         assertTrue(resolved.equivalence.isAuto(),
                 "so an object it names still resolves to auto:\n" + content);
+
+        // And every example, uncommented, is a rule midgie accepts — including one built from the quoted
+        // name of the tree's first object.
+        assertTrue(content.contains("#\"OrgType/ou=people\"  scope=full"), content);
+        Files.writeString(policy, content.replaceAll("(?m)^#(?=[^\\s#-])", ""), StandardCharsets.UTF_8);
+        Policy.load(policy.toFile());
+    }
+
+    @Test
+    void onATrackedTreeTheListSuggestionIsACommentedReplace(@TempDir Path dir) throws Exception {
+        // Tracked, deploy merges and keeps what only the server holds; the open question is the opposite one
+        // — whether the tree should own the list — and adopting that deletes, so it is written as a comment.
+        Path tree = Files.createDirectories(dir.resolve("config"));
+        Files.writeString(tree.resolve("resource.xml"), resource("Prod"), StandardCharsets.UTF_8);
+        org.junit.jupiter.api.Assumptions.assumeTrue(gitInit(tree), "git not available");
+        serve("resources", liveResource("Prod"));
+        stateExists = true;
+        Path policy = dir.resolve("midgie.policy");
+
+        Result result = seedPolicy(tree, policy);
+
+        assertEquals(0, result.exit, result.err);
+        String content = Files.readString(policy, StandardCharsets.UTF_8);
+        assertTrue(content.contains("tracked on the server, so deploy runs on merge"), content);
+        assertTrue(content.contains("\n#ResourceType/Prod/schemaHandling/objectType  multivalue=replace\n"), content);
+        assertFalse(content.lines().anyMatch(line -> !line.startsWith("#") && !line.isBlank()),
+                "nothing active: the file changes no deploy until someone adopts a rule:\n" + content);
+        assertTrue(result.out.contains("(commented out)"), result.out);
+    }
+
+    @Test
+    void aListTheTreeFullyDeclaresGetsNoRule(@TempDir Path dir) throws Exception {
+        Path tree = Files.createDirectories(dir.resolve("config"));
+        Files.writeString(tree.resolve("resource.xml"), resource("Prod"), StandardCharsets.UTF_8);
+        serve("resources", resource("Prod"));
+        Path policy = dir.resolve("midgie.policy");
+
+        Result result = seedPolicy(tree, policy);
+
+        assertEquals(0, result.exit, result.err);
+        String content = Files.readString(policy, StandardCharsets.UTF_8);
+        assertTrue(content.contains("None: every list this tree declares matches the server's"), content);
+        assertTrue(result.out.contains("the defaults cover this tree"), result.out);
     }
 
     @Test
@@ -163,7 +214,7 @@ class InitCommandTest {
         assertTrue(written.contains("#scope = present"), written);
         assertTrue(written.contains("#timeout = 30"), written);
         assertFalse(written.contains("\n#yes = "), "a file may not waive the confirmation: " + written);
-        assertFalse(written.contains("\n#prune = "), "nor decide to delete: " + written);
+        assertFalse(written.contains("\n#prune = "), "nor offer a flag that is now the default: " + written);
 
         // Uncomment everything and hand it back: what midgie writes, midgie must read.
         Path uncommented = dir.resolve("uncommented.properties");
@@ -230,12 +281,13 @@ class InitCommandTest {
         // delimited block keeps the suggestions equal to what the tree implies now.
         Path tree = Files.createDirectories(dir.resolve("config"));
         Files.writeString(tree.resolve("resource.xml"), resource("Prod"), StandardCharsets.UTF_8);
+        serve("resources", liveResource("Prod"), liveResource("Test"));
         Path policy = dir.resolve("midgie.policy");
         assertEquals(0, seedPolicy(tree, policy).exit);
 
         // Write a rule of your own above the block, and edit something inside it.
         String edited = "# mine\nResourceType/Prod/schemaHandling/objectType  multivalue=replace\n\n"
-                + Files.readString(policy, StandardCharsets.UTF_8).replace("#   key:", "#   MY EDIT key:");
+                + Files.readString(policy, StandardCharsets.UTF_8).replace("live value(s) at", "MY EDIT at");
         Files.writeString(policy, edited, StandardCharsets.UTF_8);
 
         // A second object appears in the tree; re-run.
@@ -258,14 +310,17 @@ class InitCommandTest {
         // the file, because the ordering only matters if resolution actually honours it.
         Path tree = Files.createDirectories(dir.resolve("config"));
         Files.writeString(tree.resolve("resource.xml"), resource("Prod"), StandardCharsets.UTF_8);
+        serve("resources", liveResource("Prod"));
         Path policy = dir.resolve("midgie.policy");
         assertEquals(0, seedPolicy(tree, policy).exit);
+        assertTrue(Files.readString(policy, StandardCharsets.UTF_8).contains("objectType  multivalue=merge\n"),
+                "the generated rule this test is about must be there");
 
         Files.writeString(policy, "ResourceType/Prod/schemaHandling/objectType  multivalue=replace\n\n"
                 + Files.readString(policy, StandardCharsets.UTF_8), StandardCharsets.UTF_8);
 
         StrategyOptions.Resolved resolved = Policy.load(policy.toFile())
-                .resolveFor("ResourceType", "Prod", "11111111-1111-1111-1111-111111111111", baseline());
+                .resolveFor("ResourceType", "Prod", resourceOid("Prod"), baseline());
         assertFalse(resolved.multiValue.isMerge(
                         com.evolveum.midpoint.prism.path.ItemPath.fromString("schemaHandling/objectType")),
                 "the hand-written replace must beat the generated merge");
@@ -421,12 +476,16 @@ class InitCommandTest {
         assertTrue(result.out.contains("commented-out apply=on-create"), result.out);
         String content = Files.readString(policy, StandardCharsets.UTF_8);
         assertTrue(content.contains("\n#TaskType/*/executionState  apply=on-create\n"), content);
-        assertTrue(content.contains("\n#TaskType/*/schedulingState  apply=on-create\n"), content);
-        assertTrue(content.contains("\n#ResourceType/*/administrativeOperationalState  apply=on-create\n"), content);
+        // Only what the tree declares: an item no file mentions is never touched under --scope present.
+        assertFalse(content.contains("schedulingState  apply=on-create"), content);
+        assertFalse(content.contains("administrativeOperationalState  apply=on-create"), content);
         assertTrue(content.contains("Declared in 1 of 1 TaskType file(s)"), content);
+        assertFalse(content.contains("#TaskType/*/executionState  apply=on-create\n#\n# Fill"),
+                "and the examples do not repeat a knob the suggestions already show:\n" + content);
         assertTrue(content.contains("'apply=if-absent'"), "the alternative is named, so people know it exists:\n"
                 + content);
-        assertFalse(content.contains("UserType/"), "no user in the tree, so no user suggestions:\n" + content);
+        assertFalse(content.contains("UserType/*/credentials") || content.contains("administrativeStatus"),
+                "no user in the tree, so no user suggestions:\n" + content);
         assertTrue(content.indexOf("apply=on-create") < content.indexOf("# --- end midgie suggestions"),
                 "the suggestions live inside the regenerated block:\n" + content);
 
@@ -439,8 +498,6 @@ class InitCommandTest {
         Policy adopted = Policy.load(policy.toFile());
         assertEquals(ApplyRules.Mode.ON_CREATE,
                 adopted.resolveFor("TaskType", "Recompute", null, baseline()).apply.modeOf("executionState"));
-        assertEquals(ApplyRules.Mode.ON_CREATE,
-                adopted.resolveFor("ResourceType", "Prod", null, baseline()).apply.modeOf("schema"));
     }
 
     @Test
@@ -453,7 +510,10 @@ class InitCommandTest {
                 "--write-policy", policy.toString());
 
         assertEquals(0, result.exit, result.err);
-        assertFalse(Files.readString(policy, StandardCharsets.UTF_8).contains("apply=on-create"));
+        String content = Files.readString(policy, StandardCharsets.UTF_8);
+        assertFalse(content.contains("--- apply=on-create"), content);
+        assertTrue(content.contains("\n#TaskType/*/executionState  apply=on-create\n"),
+                "it is still shown once, as an example of what a policy can say:\n" + content);
         assertTrue(result.out.contains("suggests no rules"), result.out);
     }
 
@@ -465,12 +525,48 @@ class InitCommandTest {
 
     /** A resource whose schemaHandling/objectType carries the whole kind+intent natural key. */
     private static String resource(String name) {
-        return "<resource xmlns=\"" + NS + "\" oid=\"11111111-1111-1111-1111-111111111111\">\n"
-                + "  <name>" + name + "</name>\n"
+        return "<resource xmlns=\"" + NS + "\" oid=\"" + resourceOid(name) + "\">\n"
+                + "  <name>" + escapeXml(name) + "</name>\n"
                 + "  <schemaHandling><objectType>\n"
                 + "    <kind>account</kind><intent>default</intent>\n"
                 + "  </objectType></schemaHandling>\n"
                 + "</resource>";
+    }
+
+    /** The same resource as the server holds it: with an object type the tree does not declare. */
+    private static String liveResource(String name) {
+        return resource(name).replace("</schemaHandling>",
+                "<objectType><kind>entitlement</kind><intent>group</intent></objectType></schemaHandling>");
+    }
+
+    /** One OID per name, so two resources in a tree are two objects rather than one contradicting itself. */
+    private static String resourceOid(String name) {
+        return java.util.UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    private static String escapeXml(String text) {
+        return text.replace("&", "&amp;").replace("<", "&lt;");
+    }
+
+    private void serve(String restType, String... objects) {
+        live.put(restType, List.of(objects));
+    }
+
+    private static boolean gitInit(Path dir) throws Exception {
+        for (String[] command : new String[][] {{"git", "init", "-q", "."},
+                {"git", "config", "user.email", "test@example.invalid"}, {"git", "config", "user.name", "midgie test"},
+                {"git", "add", "-A"}, {"git", "commit", "-qm", "initial"}}) {
+            try {
+                Process process = new ProcessBuilder(command).directory(dir.toFile()).redirectErrorStream(true).start();
+                process.getInputStream().readAllBytes();
+                if (process.waitFor() != 0) {
+                    return false;
+                }
+            } catch (IOException e) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String task(String name, String body) {
@@ -488,10 +584,29 @@ class InitCommandTest {
     private void handle(HttpExchange exchange) throws IOException {
         String method = exchange.getRequestMethod();
         String path = exchange.getRequestURI().getPath();
-        exchange.getRequestBody().readAllBytes();
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         requests.add(method + " " + path);
+        String objectsType = path.endsWith("/search")
+                ? path.substring(path.lastIndexOf('/', path.length() - "/search".length() - 1) + 1,
+                        path.length() - "/search".length())
+                : null;
 
-        if (path.endsWith("/lookupTables/search")) {
+        if (objectsType != null && live.containsKey(objectsType)) {
+            StringBuilder list = new StringBuilder(
+                    "<objectList xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/api-types-3\""
+                            + " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">");
+            for (String object : live.get(objectsType)) {
+                String oid = object.replaceAll("(?s).*? oid=\"([^\"]+)\".*", "$1");
+                String name = object.replaceAll("(?s).*?<name>([^<]*)</name>.*", "$1");
+                if (body.contains(oid) || body.contains(name)) {
+                    list.append(object.replaceFirst("^<(\\w+) ", "<object xsi:type=\"c:"
+                            + objectTypeName(objectsType) + "\" xmlns:c=\"" + NS + "\" "));
+                    list.setLength(list.length() - ("</" + object.replaceAll("(?s)^<(\\w+).*", "$1") + ">").length());
+                    list.append("</object>");
+                }
+            }
+            respond(exchange, 200, list.append("</objectList>").toString());
+        } else if (path.endsWith("/lookupTables/search")) {
             respond(exchange, 200, stateExists
                     ? "<objectList xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/api-types-3\">"
                             + "<object xmlns=\"" + NS + "\" xsi:type=\"LookupTableType\""
@@ -512,6 +627,17 @@ class InitCommandTest {
                     + "common/api-types-3\"/>");
         } else {
             respond(exchange, 404, "not found");
+        }
+    }
+
+    private static String objectTypeName(String restType) {
+        switch (restType) {
+            case "resources":
+                return "ResourceType";
+            case "orgs":
+                return "OrgType";
+            default:
+                return "TaskType";
         }
     }
 

@@ -13,9 +13,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 
 import org.slf4j.Logger;
@@ -25,6 +28,7 @@ import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.path.ItemPath;
+import com.evolveum.midpoint.schema.constants.ObjectTypes;
 
 import org.w3c.dom.Element;
 
@@ -95,8 +99,8 @@ public class InitCommand implements Callable<Integer> {
     /**
      * An item that is usually right to write only when its object is created, and to leave to midPoint or its
      * operators after that. {@code --write-policy} offers one as a commented-out {@code apply=on-create} line
-     * whenever the tree holds an object of {@code type}: commented, because adopting it changes what a deploy
-     * does, and that is the operator's call.
+     * whenever a file of the tree declares it: commented, because adopting it changes what a deploy does, and
+     * that is the operator's call.
      */
     private record OnCreateSuggestion(String type, String path, String why) {
     }
@@ -138,8 +142,9 @@ public class InitCommand implements Callable<Integer> {
     boolean createState;
 
     @Option(names = "--write-policy", paramLabel = "FILE|DIR|-", arity = "0..1", fallbackValue = ".",
-            description = "Write a starter --policy file for PATH, listing the objects whose multi-valued "
-                    + "containers have a schema natural key. A directory (or no value, meaning the working "
+            description = "Write a starter --policy file for PATH holding only what the defaults leave open: "
+                    + "lists whose live copy holds values the tree does not, the apply=on-create candidates the "
+                    + "tree declares, and examples of the other knobs. A directory (or no value, meaning the working "
                     + "directory) writes '" + DEFAULT_POLICY_NAME + "' in it; '-' writes to stdout. Re-running "
                     + "on an existing file refreshes only its marked block, leaving your own rules alone.")
     File writePolicy;
@@ -196,7 +201,7 @@ public class InitCommand implements Callable<Integer> {
         // having already created the state object, so the operator saw an error for a command that had in
         // fact changed the server. The same holds now that one run can write three files.
         if (writePolicy != null && path == null) {
-            System.err.println("midgie: --write-policy needs a PATH to scan for keyed containers.");
+            System.err.println("midgie: --write-policy needs a PATH to compare with the server.");
             return EXIT_ERROR;
         }
         // A directory (or a bare flag, meaning the working directory) names the file midgie would read
@@ -418,12 +423,18 @@ public class InitCommand implements Callable<Integer> {
     }
 
     /**
-     * Write a starter policy file for the tree: one line per object whose fragments declare a multi-valued
-     * container that the schema gives a natural key, since those are exactly the places where
-     * {@code natural-keys} + {@code merge} lets individual entries be managed instead of the whole list being
-     * replaced. Comments name the containers that prompted each line, so the file explains itself. After
-     * them come commented-out {@code apply=on-create} suggestions for the types the tree holds (see
-     * {@link #ON_CREATE_SUGGESTIONS}).
+     * Write a starter policy file for the tree that holds only what midgie's defaults do not already cover.
+     *
+     * <p>The defaults cover a lot now. {@code --equivalence auto} matches list entries by natural key wherever
+     * the files fill the key in; {@code --scope present} leaves what the files do not mention alone; and
+     * {@code --multivalue auto} merges on a tracked tree — whose dropped values are removed with the change —
+     * and replaces on an untracked one. What no default can decide is <b>who owns a list the server holds more
+     * of than the tree</b>: that takes a person. So those lists are the suggestions — found by comparing each
+     * object with its live copy, not guessed from the schema — worded against the default in effect: on
+     * merge, a commented-out {@code multivalue=replace} for a list the tree should own; on replace, an active
+     * {@code multivalue=merge} that stops the next deploy from deleting what others added. After them come
+     * the {@code apply=on-create} candidates the tree actually declares (see {@link #ON_CREATE_SUGGESTIONS}),
+     * then commented examples of the knobs nothing above used.
      */
     private Integer seedPolicy(PrismContext prismContext, MidpointRestClient client) throws Exception {
         // Same two-step as deploy: discover and register the tree's own extension schemas *before* parsing,
@@ -442,7 +453,7 @@ public class InitCommand implements Callable<Integer> {
         schemaMap.putAll(schemaOptions.collectSchemas(prismContext, client));
         SchemaSupport.register(prismContext, schemaMap);
 
-        Map<String, Map<String, String>> keyedByObject = new LinkedHashMap<>();
+        List<Fragment> fragments = new ArrayList<>();
         Map<String, Integer> filesByType = new LinkedHashMap<>();
         Map<OnCreateSuggestion, Integer> declaredBy = new LinkedHashMap<>();
         int skipped = 0;
@@ -461,43 +472,53 @@ public class InitCommand implements Callable<Integer> {
                 continue;
             }
             countOnCreateCandidates(object, filesByType, declaredBy);
-            Map<String, String> keyed = NaturalKeys.keyedContainers(object);
-            if (keyed.isEmpty()) {
-                continue;
-            }
-            String selector = object.getCompileTimeClass().getSimpleName() + "/"
-                    + escapeSelectorChars(object.getName() != null ? object.getName().getOrig() : "?");
-            keyedByObject.computeIfAbsent(selector, key -> new LinkedHashMap<>()).putAll(keyed);
+            fragments.add(Fragment.of(object, file));
         }
 
-        StringBuilder out = new StringBuilder();
-        out.append("# midgie policy, seeded by 'midgie init --write-policy' from ").append(path).append("\n#\n")
-                .append("# Each container listed below is multi-valued, has a natural key in the midPoint schema,\n")
-                .append("# and your files fill that key in — so midgie can match its entries individually.\n")
-                .append("# 'multivalue=merge' on such a path updates just the entries your files list and leaves\n")
-                .append("# the rest alone; under the default (replace) every entry you did not list is deleted.\n")
-                .append("#\n")
-                .append("# No 'equivalence' rules are needed: the default '--equivalence auto' already matches\n")
-                .append("# entries by natural key wherever the key is filled in, deciding it per container from\n")
-                .append("# the same evidence this file was seeded from. Pinning 'equivalence=natural-keys' here\n")
-                .append("# would be a step backwards — prism takes one equivalence for a whole-object diff, so it\n")
-                .append("# would apply to every container of that object, including ones whose key nothing fills\n")
-                .append("# in (an assignment usually has no <identifier>), which pairs unrelated entries.\n")
-                .append("#\n# These are suggestions — review them, and delete any rule whose container your files\n")
-                .append("# are meant to be authoritative for.\n");
-        if (keyedByObject.isEmpty()) {
-            out.append("\n# Nothing in this tree addresses a keyed multi-valued container, so no multivalue rules "
-                    + "are needed.\n");
-        }
-        for (Map.Entry<String, Map<String, String>> entry : keyedByObject.entrySet()) {
-            out.append("\n# ").append(entry.getKey()).append('\n');
-            for (Map.Entry<String, String> keyed : entry.getValue().entrySet()) {
-                out.append("#   key: ").append(keyed.getValue()).append('\n')
-                        .append(quoteIfNeeded(entry.getKey() + "/" + keyed.getKey()))
-                        .append("  multivalue=merge\n");
+        // Compared as deploy compares: one object per identity, however many files describe it.
+        boolean tracked = treeIsTracked(prismContext, client);
+        List<ListSuggestion> lists = new ArrayList<>();
+        int notOnServer = 0;
+        String firstSelector = null;
+        String firstOid = null;
+        for (DeployObject object : DeployObject.group(fragments)) {
+            String selector = object.typeName() + "/" + escapeSelectorChars(object.name() != null ? object.name() : "?");
+            if (firstSelector == null) {
+                firstSelector = selector;
+                firstOid = object.oid();
+            }
+            PrismObject<? extends Objectable> live = liveCopyOf(prismContext, client, object);
+            if (live == null) {
+                notOnServer++;
+                continue;
+            }
+            for (DiffEngine.LiveOnly liveOnly : DiffEngine.liveOnlyValues(object.object(), live)) {
+                lists.add(new ListSuggestion(selector, liveOnly.pathText(), liveOnly.count()));
             }
         }
+
+        Set<String> used = new HashSet<>();
+        StringBuilder out = new StringBuilder();
+        out.append("# midgie policy, seeded by 'midgie init --write-policy' from ").append(path).append("\n#\n")
+                .append("# Only what midgie's defaults leave open is suggested here. They already cover:\n")
+                .append("#   --equivalence auto   list entries are matched by natural key wherever the files fill\n")
+                .append("#                        the key in, and updated in place; no 'equivalence' rules needed.\n")
+                .append("#   --scope present      items the files do not mention are left alone.\n")
+                .append("#   --multivalue auto    a tracked tree merges — live values a list holds beyond the files\n")
+                .append("#                        stay, and what the tree dropped is removed with the change; an\n")
+                .append("#                        untracked tree replaces.\n")
+                .append("#\n")
+                .append(tracked
+                        ? "# This tree is tracked on the server, so deploy runs on merge.\n"
+                        : "# This tree is not tracked on the server (see 'midgie init --create-state'), so deploy runs\n"
+                                + "# on replace.\n");
+        appendListSuggestions(out, lists, tracked, notOnServer, used);
         int onCreate = appendOnCreateSuggestions(out, filesByType, declaredBy);
+        if (onCreate > 0) {
+            used.add("apply=on-create");
+        }
+        appendExamples(out, used, tracked, firstSelector, firstOid);
+
         String block = BLOCK_BEGIN + "\n" + out.toString().stripTrailing() + "\n" + BLOCK_END;
         String existing = (!Io.isStdout(writePolicy) && writePolicy.isFile())
                 ? Files.readString(writePolicy.toPath(), StandardCharsets.UTF_8) : null;
@@ -517,14 +538,128 @@ public class InitCommand implements Callable<Integer> {
 
         String what = (existing == null) ? "Wrote" : (existing.contains(BLOCK_BEGIN)
                 ? "Refreshed the suggestions in" : "Appended suggestions to");
-        wrote(writePolicy, what + " " + label(writePolicy) + " for " + keyedByObject.size() + " object(s)"
-                + (onCreate > 0 ? ", plus " + onCreate + " commented-out apply=on-create suggestion(s)" : "")
+        String listRules = lists.size() + " list rule(s)" + (tracked && !lists.isEmpty() ? " (commented out)" : "");
+        wrote(writePolicy, what + " " + label(writePolicy) + ": " + listRules
+                + (onCreate > 0 ? ", " + onCreate + " commented-out apply=on-create suggestion(s)" : "")
                 + (skipped > 0 ? " (" + skipped + " file(s) could not be read)" : "")
                 + (existing != null ? " — anything you wrote outside the marked block is untouched." : "")
-                + (keyedByObject.isEmpty() && onCreate == 0
-                        ? " — nothing in this tree needs tuning, so it suggests no rules."
+                + (lists.isEmpty() && onCreate == 0
+                        ? " — the defaults cover this tree, so it suggests no rules."
                         : " — review it, then pass it as 'deploy --policy " + label(writePolicy) + "'."));
         return 0;
+    }
+
+    /** A multi-valued item whose live copy holds values the tree does not list. */
+    private record ListSuggestion(String selector, String path, int liveOnly) {
+    }
+
+    /**
+     * Whether deploy will track this tree, and so run {@code --multivalue auto} as merge: the tree has a
+     * deployment identity (it is in a full git clone) and the server has an enabled state object. The same
+     * two conditions deploy checks; a failure to read the state object counts as untracked, as it does there.
+     */
+    private boolean treeIsTracked(PrismContext prismContext, MidpointRestClient client) {
+        if (!DeploymentIdentity.of(path, null).isAvailable()) {
+            return false;
+        }
+        try {
+            PrismObject<? extends Objectable> table = SyncState.find(prismContext, client);
+            return table != null && SyncState.isEnabled(table);
+        } catch (Exception e) {
+            LOG.trace("could not read {} while seeding the policy", SyncState.TABLE_NAME, e);
+            return false;
+        }
+    }
+
+    /** The object as the server holds it — by OID, else by a single type+name match — or {@code null}. */
+    private static PrismObject<? extends Objectable> liveCopyOf(PrismContext prismContext,
+            MidpointRestClient client, DeployObject object) {
+        Class<?> clazz = object.object().getCompileTimeClass();
+        try {
+            String restType = ObjectTypes.getRestTypeFromClass(clazz);
+            if (object.oid() != null && !object.oid().isBlank()) {
+                return LiveLookup.byOid(prismContext, client, clazz, restType, object.oid());
+            }
+            List<PrismObject<? extends Objectable>> matches =
+                    LiveLookup.byName(prismContext, client, clazz, restType, object.name());
+            return (matches.size() == 1) ? matches.get(0) : null;
+        } catch (Exception e) {
+            System.err.println("midgie: warning: could not read " + object.identityLabel()
+                    + " from the server while seeding the policy (" + e.getMessage() + "); it has no suggestions.");
+            LOG.trace("live lookup of {} failed while seeding the policy", object.identityLabel(), e);
+            return null;
+        }
+    }
+
+    /**
+     * The lists whose live copy holds values the tree does not: the one call the defaults cannot make. Worded
+     * against the default in effect, since the same evidence means opposite things under each.
+     */
+    private static void appendListSuggestions(StringBuilder out, List<ListSuggestion> lists, boolean tracked,
+            int notOnServer, Set<String> used) {
+        out.append("\n# --- lists where the server holds values this tree does not list\n#\n");
+        if (tracked) {
+            out.append("# Merge keeps those values. If this tree owns one of these lists, uncomment its rule:\n")
+                    .append("# deploy then deletes whatever the tree does not list there.\n");
+        } else {
+            out.append("# Replace would DELETE those values on the next deploy. Each rule below keeps them; delete\n")
+                    .append("# a rule if this tree owns that list and the extra values should go.\n");
+        }
+        if (lists.isEmpty()) {
+            out.append("#\n# None: every list this tree declares matches the server's.\n");
+        }
+        for (ListSuggestion list : lists) {
+            out.append("\n# ").append(list.selector()).append(": ").append(list.liveOnly())
+                    .append(" live value(s) at ").append(list.path()).append(" not in the tree\n")
+                    .append(tracked ? "#" : "")
+                    .append(quoteIfNeeded(list.selector() + "/" + list.path()))
+                    .append(tracked ? "  multivalue=replace\n" : "  multivalue=merge\n");
+        }
+        if (!lists.isEmpty()) {
+            used.add(tracked ? "multivalue=replace" : "multivalue=merge");
+        }
+        if (notOnServer > 0) {
+            out.append("#\n# ").append(notOnServer).append(" object(s) of the tree are not on the server yet, so there ")
+                    .append("was nothing to compare them with.\n");
+        }
+    }
+
+    /**
+     * Commented examples of what else a policy line can say, leaving out the knobs the suggestions above
+     * already show. Object-level examples use this tree's first object, so they read as something to adapt
+     * rather than something to look up; every line is one {@code Policy.load} accepts once uncommented.
+     */
+    private static void appendExamples(StringBuilder out, Set<String> used, boolean tracked, String firstSelector,
+            String firstOid) {
+        String object = (firstSelector != null) ? quoteIfNeeded(firstSelector) : "RoleType/Some Role";
+        List<String[]> examples = new ArrayList<>();
+        examples.add(new String[] {"scope=full", "Own one object outright: items its files leave out are deleted too.",
+                object + "  scope=full"});
+        examples.add(new String[] {"multivalue=replace", "Own one list outright: live values the tree does not list "
+                + "there are deleted.", "RoleType/*/inducement  multivalue=replace"});
+        examples.add(new String[] {"multivalue=merge", "Keep one list open to values added elsewhere"
+                + (tracked ? " (already the default here; useful under --multivalue replace)." : "."),
+                "SystemConfigurationType/SystemConfiguration/**/panel  multivalue=merge"});
+        examples.add(new String[] {"apply=on-create", "Write an item only when the object is created; leave it to "
+                + "midPoint and its operators after that.", "TaskType/*/executionState  apply=on-create"});
+        examples.add(new String[] {"apply=if-absent", "Fill an item in whenever the server holds no value, and "
+                + "never overwrite it (midPoint's weak strength).", "UserType/*/description  apply=if-absent"});
+        examples.add(new String[] {"apply=always", "A more specific rule wins, so one object can be carved out of "
+                + "a broader one.", "TaskType/Nightly Recompute/executionState  apply=always"});
+        examples.add(new String[] {"smart-refs=verify", "Check references written as filters by running the filter "
+                + "on the server, instead of trusting the OID midPoint resolved.", "RoleType/*  smart-refs=verify"});
+        examples.add(new String[] {"allow-inplace-merge=true", "Address an object by OID, whatever its name — here "
+                + "letting merge update a value only the server holds in place instead of refusing.",
+                "oid:" + (firstOid != null ? firstOid : "00000000-0000-0000-0000-000000000001")
+                        + "  allow-inplace-merge=true"});
+
+        out.append("\n# --- other things a policy line can say (examples, not suggestions for this tree)\n");
+        for (String[] example : examples) {
+            if (used.contains(example[0])) {
+                continue;
+            }
+            out.append("#\n").append(commentWrapped(example[1])).append('#').append(example[2]).append('\n');
+        }
     }
 
     /** Count, per suggested type, the files describing such an object and how many declare each item. */
@@ -547,15 +682,17 @@ public class InitCommand implements Callable<Integer> {
     }
 
     /**
-     * Append the {@code apply=on-create} suggestions for the types this tree holds, every rule commented out
-     * so the seeded file behaves exactly as before until someone adopts one.
+     * Append the {@code apply=on-create} suggestions for the items this tree declares, every rule commented
+     * out so the seeded file behaves exactly as before until someone adopts one.
      *
      * @return how many were suggested
      */
     private static int appendOnCreateSuggestions(StringBuilder out, Map<String, Integer> filesByType,
             Map<OnCreateSuggestion, Integer> declaredBy) {
+        // Only what the tree declares: under the default --scope present an item no file mentions is never
+        // touched, so a rule for it would be one more line doing nothing.
         List<OnCreateSuggestion> relevant = ON_CREATE_SUGGESTIONS.stream()
-                .filter(suggestion -> filesByType.containsKey(suggestion.type()))
+                .filter(suggestion -> declaredBy.getOrDefault(suggestion, 0) > 0)
                 .toList();
         if (relevant.isEmpty()) {
             return 0;
@@ -564,8 +701,9 @@ public class InitCommand implements Callable<Integer> {
                 .append("#\n")
                 .append("# These are commented out, so they change nothing as they stand. Uncomment one to adopt it:\n")
                 .append("# the item then goes into the request that creates the object and is never touched again —\n")
-                .append("# not patched, not deleted under --scope full, not removed by --prune. A narrower\n")
-                .append("# '<Type>/<Name>/<item>  apply=always' line carves an exception out for one object.\n")
+                .append("# not patched, not deleted under --scope full, not removed when it drops out of the file.\n")
+                .append("# A narrower '<Type>/<Name>/<item>  apply=always' line carves an exception out for one\n")
+                .append("# object.\n")
                 .append("# To have an item filled in again whenever the server holds no value (and never overwritten),\n")
                 .append("# use 'apply=if-absent' instead: the weak mapping strength in midPoint terms.\n");
         for (OnCreateSuggestion suggestion : relevant) {
