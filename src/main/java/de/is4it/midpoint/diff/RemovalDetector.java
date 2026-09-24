@@ -74,10 +74,19 @@ final class RemovalDetector {
         final ItemDefinition<?> definition; // definition of the item the value belongs to
         final ItemPath itemPath;    // the same path, unrendered
         final PrismValue prismValue; // the value itself, for the delete
+        final DeployObject unit;    // the object in the tree it belongs to, whose PATCH carries the delete
 
         Removal(String objectLabel, String path, String value, String sourceFile, Class<?> objectClass,
                 String oid, String objectName, ItemDefinition<?> definition, ItemPath itemPath,
                 PrismValue prismValue) {
+            this(objectLabel, path, value, sourceFile, objectClass, oid, objectName, definition, itemPath,
+                    prismValue, null);
+        }
+
+        Removal(String objectLabel, String path, String value, String sourceFile, Class<?> objectClass,
+                String oid, String objectName, ItemDefinition<?> definition, ItemPath itemPath,
+                PrismValue prismValue, DeployObject unit) {
+            this.unit = unit;
             this.objectLabel = objectLabel;
             this.path = path;
             this.value = value;
@@ -106,9 +115,19 @@ final class RemovalDetector {
      * operations for values that were in last-applied, which is what makes pruning structurally unable to
      * touch accrued or foreign state.
      */
-    @SuppressWarnings({"unchecked", "rawtypes"}) // the delta's item types are matched by construction
     static ObjectDelta<? extends Objectable> pruneDelta(PrismContext prismContext, String oid,
             List<Removal> removals) throws SchemaException {
+        return pruneDelta(prismContext, oid, removals, null);
+    }
+
+    /**
+     * As above, with each value to delete taken from {@code live} where it holds a real-value match: a
+     * container value recovered from git usually carries no id, and deleting the server's own copy — id
+     * included — says which entry is meant rather than leaving midPoint to find it by content.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"}) // the delta's item types are matched by construction
+    static ObjectDelta<? extends Objectable> pruneDelta(PrismContext prismContext, String oid,
+            List<Removal> removals, PrismObject<? extends Objectable> live) throws SchemaException {
         List<ItemDelta> deltas = new ArrayList<>();
         Class<?> objectClass = null;
         for (Removal removal : removals) {
@@ -116,8 +135,9 @@ final class RemovalDetector {
                 continue;
             }
             objectClass = removal.objectClass;
+            PrismValue held = (live != null) ? heldValue(live, removal) : null;
             ItemDelta delta = removal.definition.createEmptyDelta(removal.itemPath);
-            delta.addValueToDelete(removal.prismValue.clone());
+            delta.addValueToDelete((held != null ? held : removal.prismValue).clone());
             deltas.add(delta);
         }
         if (deltas.isEmpty() || objectClass == null) {
@@ -125,6 +145,24 @@ final class RemovalDetector {
         }
         return prismContext.deltaFactory().object()
                 .createModifyDelta(oid, deltas, (Class<? extends Objectable>) objectClass);
+    }
+
+    /**
+     * The value {@code object} holds that is the same, by real value, as the one {@code removal} names — or
+     * {@code null} when it holds none. This is the ownership test: a removal only ever deletes a value the
+     * object still has in exactly the form midgie deployed it.
+     */
+    static PrismValue heldValue(PrismObject<? extends Objectable> object, Removal removal) {
+        Item<?, ?> item = object.findItem(removal.itemPath.removeIds());
+        if (item == null) {
+            return null;
+        }
+        for (PrismValue value : item.getValues()) {
+            if (EquivalenceStrategy.REAL_VALUE.equals(value, removal.prismValue)) {
+                return value;
+            }
+        }
+        return null;
     }
 
     /** An object that left the tree entirely: reported, never taken apart value by value. */
@@ -174,7 +212,7 @@ final class RemovalDetector {
             if (before == null) {
                 continue;
             }
-            collect(removals, before, unit.object(), identityKeyOf(before), previous);
+            collect(removals, before, unit, identityKeyOf(before), previous);
         }
 
         for (LastApplied previous : lastApplied) {
@@ -390,7 +428,8 @@ final class RemovalDetector {
 
     /** Add the values present in {@code lastApplied} but absent from {@code desired}. */
     private void collect(List<Removal> removals, PrismObject<? extends Objectable> lastApplied,
-            PrismObject<? extends Objectable> desired, String objectLabel, LastApplied previous) {
+            DeployObject unit, String objectLabel, LastApplied previous) {
+        PrismObject<? extends Objectable> desired = unit.object();
         DiffEngine.DiffResult result;
         try {
             // last-applied in the live slot: the delete side is "was deployed, no longer declared".
@@ -416,7 +455,7 @@ final class RemovalDetector {
             for (PrismValue value : mod.getValuesToDelete()) {
                 String sourceFile = previous.sourceOf(mod.getPath(), value);
                 removals.add(new Removal(objectLabel, path, render(value), sourceFile, objectClass, oid,
-                        objectName, mod.getDefinition(), mod.getPath(), value));
+                        objectName, mod.getDefinition(), mod.getPath(), value, unit));
             }
         }
     }

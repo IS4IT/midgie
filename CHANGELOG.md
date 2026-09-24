@@ -17,6 +17,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`--no-match-by-name` now always means what it says.** With creating on (the default), an OID-less object was looked up by name to avoid posting a duplicate — and when the lookup found one, it was patched, which is matching by name. It is now skipped with a message saying why; a `diff` of such an object exits `2`, since it has no change to show.
 
+- **`--prune` removes a value in the same PATCH as its object's other changes.** It used to run as a second pass after the whole tree, with its own prompt. An `inducement` retargeted under `multivalue=merge` was therefore added in one request and its old form deleted in another — the role held both in between, and kept both if the second request failed or was declined. Each object now gets one request carrying its change and its removals, so midPoint applies them together; there is one confirmation for the run, and `--plan`, `--dry-run --format` and the rollback plan all show the removals as part of the object's change. The guard that removes only a value the server still holds as deployed now judges against the live object with the change applied locally, rather than re-reading it after the write, and the delete addresses the server's own container value by id.
+
 ### Added
 
 - **`deploy --dry-run --format xml|json|summary [-o FILE]`** writes the change of a run holding exactly one object to stdout or a file, and moves the plan rows to stderr. **`deploy --oid`** addresses such a run's object.

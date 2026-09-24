@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.schema.constants.ObjectTypes;
 import com.evolveum.midpoint.util.exception.SchemaException;
@@ -47,6 +48,12 @@ final class Reconciler {
         final List<String> warnings;  // input advisories + blast radius, for the caller to report
         final List<String> heldBack;  // item paths that differ but the policy's apply= rules leave alone
         final List<String> protectedSkipped; // encrypted values that differ but are never patched
+        final List<RemovalDetector.Removal> removing; // values dropped from the tree that this PATCH deletes
+        /**
+         * Set when removals for this object could not be judged, and so were not sent. The run must not record
+         * its revision then: the next run is the only one that can still see them.
+         */
+        final boolean removalsDeferred;
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
@@ -58,6 +65,16 @@ final class Reconciler {
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings, List<String> heldBack, List<String> protectedSkipped) {
+            this(action, restType, oid, changes, detail, modificationXml, createBody, delta, warnings, heldBack,
+                    protectedSkipped, List.of(), false);
+        }
+
+        private Outcome(Action action, String restType, String oid, int changes, String detail,
+                String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
+                List<String> warnings, List<String> heldBack, List<String> protectedSkipped,
+                List<RemovalDetector.Removal> removing, boolean removalsDeferred) {
+            this.removing = List.copyOf(removing);
+            this.removalsDeferred = removalsDeferred;
             this.action = action;
             this.restType = restType;
             this.oid = oid;
@@ -91,6 +108,17 @@ final class Reconciler {
     /** Decide what to do with {@code desired}: resolve its current state from the server, then decide. */
     Outcome plan(PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy)
             throws SchemaException, IOException {
+        return plan(desired, strategy, List.of());
+    }
+
+    /**
+     * As above, deleting in the same PATCH the {@code removals} — values this object's files declared at the
+     * last deployed revision and no longer do. One request per object means midPoint applies the change and
+     * the removal together: an entry edited without a natural key is never held in both its old and its new
+     * form, not even between two requests, and never left that way by a second request that failed.
+     */
+    Outcome plan(PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy,
+            List<RemovalDetector.Removal> removals) throws SchemaException, IOException {
         Class<?> clazz = desired.getCompileTimeClass();
         String restType = restTypeOrNull(clazz);
         if (restType == null) {
@@ -122,7 +150,7 @@ final class Reconciler {
         } else {
             current = null;
         }
-        return decide(desired, current, restType, strategy);
+        return decide(desired, current, restType, strategy, removals);
     }
 
     /** Decide against a caller-supplied current object (or {@code null} = absent); no server read. */
@@ -132,21 +160,24 @@ final class Reconciler {
         if (restType == null) {
             return skip(null, null, unaddressable(desired.getCompileTimeClass()));
         }
-        return decide(desired, current, restType, strategy);
+        return decide(desired, current, restType, strategy, List.of());
     }
 
     private Outcome decide(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> current,
-            String restType, StrategyOptions.Resolved strategy) throws SchemaException {
+            String restType, StrategyOptions.Resolved strategy, List<RemovalDetector.Removal> removals)
+            throws SchemaException {
         String oid = desired.getOid();
         if (current != null) {
             String targetOid = (oid != null && !oid.isBlank()) ? oid : current.getOid();
-            return planPatch(restType, targetOid, desired, current, strategy);
+            return planPatch(restType, targetOid, desired, current, strategy, removals);
         }
+        // An object that is not there holds nothing to remove.
         return planCreate(restType, oid, desired);
     }
 
     private Outcome planPatch(String restType, String targetOid, PrismObject<? extends Objectable> desired,
-            PrismObject<? extends Objectable> current, StrategyOptions.Resolved strategy) throws SchemaException {
+            PrismObject<? extends Objectable> current, StrategyOptions.Resolved strategy,
+            List<RemovalDetector.Removal> removals) throws SchemaException {
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
                 .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
                         smartReferenceCheck(strategy));
@@ -168,24 +199,92 @@ final class Reconciler {
                     + String.join(", ", accruedInPlace)
                     + " (use --equivalence real-value or --allow-inplace-merge)");
         }
-        if (!result.hasDrift()) {
+        ObjectDelta<? extends Objectable> delta = result.delta();
+        List<String> warnings = notesOf(result);
+        RemovalJudgement judged = judgeRemovals(delta, current, removals, warnings);
+        if (!judged.removing.isEmpty()) {
+            ObjectDelta<? extends Objectable> prune =
+                    RemovalDetector.pruneDelta(prismContext, targetOid, judged.removing, current);
+            if (prune != null) {
+                for (ItemDelta<?, ?> mod : prune.getModifications()) {
+                    delta.addModification(mod.clone());
+                }
+            }
+        }
+        if (!result.hasDrift() && judged.removing.isEmpty()) {
             LOG.debug("{} {}: IN_SYNC{}", restType, targetOid,
                     held.paths.isEmpty() ? "" : ", left alone: " + held.paths);
             // The (empty) delta rides along so a caller rendering this one object — 'diff', or 'deploy
             // --dry-run --format xml' — writes an empty ObjectModificationType rather than nothing.
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null,
-                    result.delta(), notesOf(result), held.paths, result.protectedSkippedPaths());
+                    delta, warnings, held.paths, result.protectedSkippedPaths(), List.of(), judged.deferred);
         }
-        int changes = result.delta().getModifications().size();
-        String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
-        String summary = DeltaOutput.toSummary(result.delta()).replace("\n", "; ");
-        List<String> warnings = notesOf(result);
-        if (result.removalWarning() != null) {
-            warnings.add(result.removalWarning().replace("\n", "; "));
+        int changes = delta.getModifications().size();
+        String modificationXml = DeltaOutput.toModificationXml(prismContext, delta);
+        String summary = DeltaOutput.toSummary(delta).replace("\n", "; ");
+        // Counted on the delta being sent, removals included: that is the blast radius the operator confirms.
+        String removalWarning = DeltaOutput.removalWarning(delta);
+        if (removalWarning != null) {
+            warnings.add(removalWarning.replace("\n", "; "));
         }
-        LOG.debug("{} {}: PATCH, {} change(s): {}", restType, targetOid, changes, summary);
+        LOG.debug("{} {}: PATCH, {} change(s) ({} removal(s) from the tree): {}", restType, targetOid, changes,
+                judged.removing.size(), summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
-                result.delta(), warnings, held.paths, result.protectedSkippedPaths());
+                delta, warnings, held.paths, result.protectedSkippedPaths(), judged.removing, judged.deferred);
+    }
+
+    /** Which of an object's removals its PATCH carries, and whether any had to be left for a later run. */
+    private record RemovalJudgement(List<RemovalDetector.Removal> removing, boolean deferred) {
+    }
+
+    /**
+     * Narrow an object's removals to the ones its PATCH should carry.
+     *
+     * <p>This is the ownership guard. A removal deletes only a value the server holds in exactly the form midgie
+     * deployed it: one that has since been changed or removed by someone else is left alone, with a note. And it
+     * deletes only what the diff does not already take care of, which is judged against a <em>projection</em> —
+     * the live object with this object's diff applied locally. A value the tree edited rather than dropped also
+     * shows up as "no longer declared" (its old form is gone from the file), and deleting that old form beside a
+     * diff that updates the entry in place would delete the entry being updated; under {@code replace} the diff
+     * deletes the value itself, and a second delete of it would be redundant. The projection answers both,
+     * without a round trip, which is what the post-apply re-read this replaces was for.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo is typed by the object class the delta was built for
+    private RemovalJudgement judgeRemovals(ObjectDelta<? extends Objectable> delta,
+            PrismObject<? extends Objectable> current, List<RemovalDetector.Removal> removals,
+            List<String> notes) {
+        if (removals.isEmpty()) {
+            return new RemovalJudgement(List.of(), false);
+        }
+        PrismObject<? extends Objectable> projected = current.clone();
+        try {
+            if (!delta.isEmpty()) {
+                ((ObjectDelta) delta).applyTo((PrismObject) projected);
+            }
+        } catch (Exception e) {
+            // Without the projection there is no telling which removals the diff already covers, and guessing
+            // could delete the entry the diff is updating. Leave them all for a run that can tell.
+            LOG.trace("could not project the diff onto {}", current.getOid(), e);
+            notes.add(removals.size() + " value(s) dropped from the tree were not removed this run: the change "
+                    + "could not be projected onto the live object (" + e.getMessage() + "). The next run "
+                    + "offers them again");
+            return new RemovalJudgement(List.of(), true);
+        }
+        List<RemovalDetector.Removal> removing = new ArrayList<>();
+        for (RemovalDetector.Removal removal : removals) {
+            if (!removal.isPrunable()) {
+                continue; // reported by the caller, which also keeps the revision from moving past it
+            }
+            if (RemovalDetector.heldValue(current, removal) == null) {
+                notes.add("leaving " + removal.path + " alone — the server no longer holds the value that was "
+                        + "removed from " + removal.sourceFile + " (already changed or removed)");
+            } else if (RemovalDetector.heldValue(projected, removal) == null) {
+                LOG.trace("{} {} is already taken care of by the diff", removal.objectLabel, removal.path);
+            } else {
+                removing.add(removal);
+            }
+        }
+        return new RemovalJudgement(removing, false);
     }
 
     /**

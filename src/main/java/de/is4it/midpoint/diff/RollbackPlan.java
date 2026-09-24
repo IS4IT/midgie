@@ -171,9 +171,8 @@ final class RollbackPlan {
                 items.add(new Item(true, outcome.restType, oid, name, null));
                 LOG.trace("rollback: recorded creation of {}/{}", outcome.restType, oid);
             } else if (action == Reconciler.Action.PATCH && outcome.delta != null) {
-                String inverse = DeltaOutput.toModificationXml(prismContext, outcome.delta.createReverseDelta());
-                items.add(new Item(false, outcome.restType, oid, name, inverse));
-                LOG.trace("rollback: recorded inverse patch for {}/{}", outcome.restType, oid);
+                recordPatch(outcome.restType, oid, name, outcome.delta);
+                return;
             } else {
                 return;
             }
@@ -183,15 +182,19 @@ final class RollbackPlan {
         }
     }
 
-    /** Record the inverse of a {@code --prune} delta, which puts back exactly the values it removed. */
-    void recordPruned(String restType, String oid, String name, ObjectDelta<? extends Objectable> delta) {
+    /**
+     * Record the inverse of a PATCH this run sent. The delta is the whole change to the object — the removals
+     * of values dropped from the tree included, since they travel in the same request — so the inverse puts
+     * back exactly what was changed and removed, and nothing else.
+     */
+    void recordPatch(String restType, String oid, String name, ObjectDelta<? extends Objectable> delta) {
         try {
             items.add(new Item(false, restType, oid, name,
                     DeltaOutput.toModificationXml(prismContext, delta.createReverseDelta())));
             recordVersion(oid, readVersion(restType, oid));
-            LOG.trace("rollback: recorded inverse prune for {}/{}", restType, oid);
+            LOG.trace("rollback: recorded inverse patch for {}/{}", restType, oid);
         } catch (Exception e) {
-            LOG.debug("could not record a rollback entry for the prune of {}/{}", restType, oid, e);
+            LOG.debug("could not record a rollback entry for {}/{}", restType, oid, e);
         }
     }
 

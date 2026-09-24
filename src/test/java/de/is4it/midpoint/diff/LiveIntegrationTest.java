@@ -58,6 +58,9 @@ class LiveIntegrationTest {
     private static final String DEPLOY_USER_OID = "a17e57e5-0000-0000-0000-0000000000d2";
     private static final String DEPLOY_MATCH_OID = "a17e57e5-0000-0000-0000-0000000000d3";
     private static final String LOOKUP_OID = "a17e57e5-0000-0000-0000-0000000000d4";
+    // Built-in roles, only ever induced by the throwaway role, which nobody is assigned.
+    private static final String SUPERUSER_ROLE_OID = "00000000-0000-0000-0000-000000000004";
+    private static final String END_USER_ROLE_OID = "00000000-0000-0000-0000-000000000008";
     // An OID-less role, created by the server with a random OID; cleaned up by name.
     private static final String COMBO_NAME = "zz-it-combo-role";
 
@@ -455,6 +458,62 @@ class LiveIntegrationTest {
         assertTrue(legacy.out.contains("replace description"), legacy.out);
     }
 
+    @Test
+    void pruneRemovesDroppedValuesInTheSamePatchAsTheChangeAndRollsBack(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
+
+        // A tracked tree: a git repository of its own, so its identity (root commit + path) is fresh.
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path file = tree.resolve("role.xml");
+        Files.writeString(file, trackedRole(List.of("alpha", "beta"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        git(tree, "config", "user.email", "test@example.invalid");
+        git(tree, "config", "user.name", "midgie test");
+        commit(tree, "v1");
+        Path plans = dir.resolve("rollback");
+        CliResult first = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--rollback-plan", plans.toString());
+        assertEquals(0, first.exit, first.err);
+        assertTrue(first.out.contains("Recorded revision"), first.out);
+
+        // v2 drops 'beta' and retargets the inducement. Under merge the retarget is an add of the new entry
+        // (an inducement has no key to match on), so only the removal of the old one — in the same PATCH —
+        // keeps the role from holding both.
+        Files.writeString(file, trackedRole(List.of("alpha", "gamma"), END_USER_ROLE_OID), StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult preview = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--multivalue", "merge", "--prune", "--dry-run", "--format", "xml");
+        assertEquals(1, preview.exit, preview.err);
+        assertTrue(preview.out.contains("beta") && preview.out.contains(SUPERUSER_ROLE_OID),
+                "the one PATCH body carries the removals too: " + preview.out);
+        assertTrue(preview.err.contains("removing 2 value(s)"), preview.err);
+
+        CliResult second = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--multivalue", "merge", "--prune", "--yes", "--rollback-plan", plans.toString());
+        assertEquals(0, second.exit, second.out + second.err);
+        assertTrue(second.out.contains("1 patched"), second.out);
+        String live = client.getObject("roles", DEPLOY_ROLE_OID);
+        assertFalse(live.contains(">beta<"), "the dropped value is gone:\n" + live);
+        assertTrue(live.contains(">gamma<"), "the added one is there:\n" + live);
+        assertEquals(1, live.split("<inducement").length - 1, "one inducement, not old and new:\n" + live);
+        assertTrue(live.contains(END_USER_ROLE_OID) && !live.contains(SUPERUSER_ROLE_OID), live);
+
+        CliResult again = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--multivalue", "merge", "--prune", "--dry-run");
+        assertEquals(0, again.exit, "settled after one run: " + again.out + again.err);
+
+        // The rollback plan holds one inverse for the object, removals included.
+        CliResult back = run("rollback", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--rollback-plan", plans.toString());
+        assertEquals(0, back.exit, back.out + back.err);
+        String restored = client.getObject("roles", DEPLOY_ROLE_OID);
+        assertTrue(restored.contains(">beta<") && restored.contains(SUPERUSER_ROLE_OID),
+                "rollback puts the removed values back:\n" + restored);
+        assertFalse(restored.contains(">gamma<") || restored.contains(END_USER_ROLE_OID), restored);
+    }
+
     // --- helpers ---
 
     private static boolean reachable() {
@@ -576,6 +635,34 @@ class LiveIntegrationTest {
             ids.add(m.group(1));
         }
         return ids;
+    }
+
+    private static String trackedRole(List<String> subtypes, String inducedRoleOid) {
+        StringBuilder xml = new StringBuilder("<role xmlns=\"" + NS + "\" oid=\"" + DEPLOY_ROLE_OID + "\">\n"
+                + "  <name>IT Deploy Role</name>\n");
+        for (String subtype : subtypes) {
+            xml.append("  <subtype>").append(subtype).append("</subtype>\n");
+        }
+        return xml.append("  <inducement>\n    <targetRef oid=\"").append(inducedRoleOid)
+                .append("\" type=\"RoleType\"/>\n  </inducement>\n</role>").toString();
+    }
+
+    private static void commit(Path repo, String message) throws Exception {
+        git(repo, "add", "-A");
+        git(repo, "commit", "-qm", message);
+    }
+
+    private static int git(Path repo, String... args) throws Exception {
+        List<String> command = new ArrayList<>();
+        command.add("git");
+        command.addAll(List.of(args));
+        try {
+            Process process = new ProcessBuilder(command).directory(repo.toFile()).redirectErrorStream(true).start();
+            process.getInputStream().readAllBytes();
+            return process.waitFor();
+        } catch (IOException e) {
+            return -1; // no git on the PATH
+        }
     }
 
     private static String role(String oid, String name, String description) {

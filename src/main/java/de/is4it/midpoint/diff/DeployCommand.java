@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -21,13 +22,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Element;
 
-import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
-import com.evolveum.midpoint.prism.delta.ObjectDelta;
-import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
-import com.evolveum.midpoint.schema.constants.ObjectTypes;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
 import picocli.CommandLine.Command;
@@ -218,6 +215,12 @@ public class DeployCommand implements Callable<Integer> {
 
     /** The safety net being accumulated for this run; null when no writing pass will happen. */
     private RollbackPlan rollback;
+
+    /** Under --prune, each object's removals, which its own PATCH carries. */
+    private final Map<DeployObject, List<RemovalDetector.Removal>> removalsByUnit = new IdentityHashMap<>();
+
+    /** Removals that cannot be turned into a delete; they fail the run so the revision stays put. */
+    private final List<RemovalDetector.Removal> unprunable = new ArrayList<>();
 
     private void markNotFullyApplied(String reason) {
         if (notFullyApplied == null) {
@@ -444,6 +447,16 @@ public class DeployCommand implements Callable<Integer> {
             if (prune && !tracking.canDetect()) {
                 note("warning: --prune has nothing to compare against, so nothing will be removed.");
             }
+            if (prune) {
+                for (RemovalDetector.Removal removal : removals) {
+                    if (!removal.isPrunable()) {
+                        warn("cannot remove " + removal + " — no item definition for it.");
+                        unprunable.add(removal);
+                    } else if (removal.unit != null) {
+                        removalsByUnit.computeIfAbsent(removal.unit, key -> new ArrayList<>()).add(removal);
+                    }
+                }
+            }
 
             // Only a run that actually writes needs a net; --dry-run and --plan touch nothing.
             if (planDir == null && !dryRun && !noRollbackPlan) {
@@ -457,32 +470,11 @@ public class DeployCommand implements Callable<Integer> {
             // including the ones that were about to be applied.
             reportUnmatchedPolicyRules();
 
-            // Prune after the tree is applied, so the desired state lands first and only leftovers go.
-            if (prune && !removals.isEmpty() && planDir == null) {
-                if (dryRun) {
-                    exit = (exit == 0) ? 1 : exit; // would change something
-                } else if (exit != 0) {
-                    warn("not removing anything — the apply did not succeed; the values stay detectable "
-                            + "on the next run.");
-                } else if (notFullyApplied != null) {
-                    // The removal set says "the tree declares this no longer". That is only a safe thing to
-                    // delete once the tree has actually been applied: until then the server is missing
-                    // whatever the declined or skipped units would have written.
-                    warn("not removing anything — " + notFullyApplied + ", so the server does not hold the "
-                            + "tree the removal set was computed against; the values stay detectable on the "
-                            + "next run.");
-                } else {
-                    // Gate separately: when the apply pass had nothing to do it returns without prompting,
-                    // so without this a --prune run could delete with no confirmation at all.
-                    Integer stop = confirmPrune(removals.size());
-                    if (stop != null) {
-                        exit = stop;   // fall through: the apply already succeeded and must still be recorded
-                    } else if (applyPrune(prismContext, client, removals) > 0) {
-                        exit = EXIT_ERROR;
-                    }
-                }
+            if (!unprunable.isEmpty() && planDir == null && !dryRun) {
+                // Left unsaid, the revision would advance past these and they would never be offered again.
+                markNotFullyApplied("some removals cannot be expressed");
+                exit = EXIT_ERROR;
             }
-            // After the prune, so the values it removed are in the net too.
             writeRollbackPlan(client, tracking);
 
             if (exit == 0 && planDir == null && !dryRun) {
@@ -640,7 +632,8 @@ public class DeployCommand implements Callable<Integer> {
 
     /**
      * Say what is no longer declared, and whether it will be removed or only reported. Without
-     * {@code --prune} only the count is given; the per-value list belongs to a run that is about pruning.
+     * {@code --prune} only the count is given; with it, each object names its own removals beside its change
+     * ({@link #reportRemoving}), since that is where they are sent.
      */
     private void reportRemovals(List<RemovalDetector.Removal> removals, Tracking tracking) {
         if (removals.isEmpty()) {
@@ -652,9 +645,18 @@ public class DeployCommand implements Callable<Integer> {
             note(summary + " (reported only — pass --prune with --dry-run or --plan for details).");
             return;
         }
-        note(summary + removalDisposition() + ":");
-        for (RemovalDetector.Removal removal : removals) {
-            note("  " + removal.objectLabel + "  " + removal);
+        note(summary + removalDisposition() + ".");
+    }
+
+    /** Name the dropped values an object's PATCH deletes, so the change being confirmed is the whole change. */
+    private void reportRemoving(DeployObject unit, Reconciler.Outcome outcome) {
+        if (outcome.removing.isEmpty()) {
+            return;
+        }
+        note("note: " + unit.objectPath() + ": removing " + outcome.removing.size()
+                + " value(s) no longer declared by the tree:");
+        for (RemovalDetector.Removal removal : outcome.removing) {
+            note("  " + removal);
         }
     }
 
@@ -694,118 +696,18 @@ public class DeployCommand implements Callable<Integer> {
         }
     }
 
-    /** How this run will treat the removals it just listed — never claiming a deletion that cannot happen. */
+    /** How this run will treat the removals it just counted — never claiming a deletion that cannot happen. */
     private String removalDisposition() {
         if (planDir != null) {
-            return " (reported only — --prune does not apply in plan mode)";
+            return " (--prune: written into each object's plan file)";
         }
-        return dryRun ? " (--prune: would be removed)" : " (--prune: removing)";
+        return dryRun ? " (--prune: each object's change would remove its own)"
+                : " (--prune: each object's change removes its own)";
     }
 
-    /**
-     * Delete the detected removals. Each object gets one PATCH built solely from values that were in
-     * last-applied, so pruning cannot reach accrued or foreign state however wrong the rest of the tree is.
-     * An object that cannot be addressed (no OID, and no match by name) is reported and skipped.
-     *
-     * @return the number of objects that failed to prune
-     */
-    private int applyPrune(PrismContext prismContext, MidpointRestClient client,
-            List<RemovalDetector.Removal> removals) {
-        int unprunable = 0;
-        Map<String, List<RemovalDetector.Removal>> byObject = new LinkedHashMap<>();
-        for (RemovalDetector.Removal removal : removals) {
-            if (removal.isPrunable()) {
-                byObject.computeIfAbsent(removal.objectLabel, key -> new ArrayList<>()).add(removal);
-            } else {
-                // Counts as a prune failure: left unsaid, the revision would advance past it and the value
-                // would never be offered again.
-                warn("cannot remove " + removal + " — no item definition for it.");
-                unprunable++;
-            }
-        }
-
-        int failed = 0;
-        for (Map.Entry<String, List<RemovalDetector.Removal>> entry : byObject.entrySet()) {
-            List<RemovalDetector.Removal> group = entry.getValue();
-            RemovalDetector.Removal first = group.get(0);
-            try {
-                String restType = ObjectTypes.getRestTypeFromClass(first.objectClass);
-                String oid = resolvePruneTarget(prismContext, client, first, restType);
-                if (oid == null) {
-                    warn("cannot address " + entry.getKey() + " to remove "
-                            + group.size() + " value(s); skipped.");
-                    failed++;
-                    continue;
-                }
-                List<RemovalDetector.Removal> stillOurs = stillLive(prismContext, client, restType, oid, group);
-                if (stillOurs.isEmpty()) {
-                    continue;
-                }
-                ObjectDelta<? extends Objectable> delta =
-                        RemovalDetector.pruneDelta(prismContext, oid, stillOurs);
-                if (delta == null || delta.isEmpty()) {
-                    continue;
-                }
-                client.patchObject(restType, oid, DeltaOutput.toModificationXml(prismContext, delta),
-                        DeltaOutput.carriesSmartReference(delta));
-                if (rollback != null) {
-                    // A prune delta is built solely from values that were in last-applied, so its inverse
-                    // puts back exactly what was removed and nothing else.
-                    rollback.recordPruned(restType, oid, entry.getKey(), delta);
-                }
-                status("  pruned       " + entry.getKey() + "  " + group.size() + " value(s)");
-            } catch (Exception e) {
-                warn("could not remove " + group.size() + " value(s) from " + entry.getKey()
-                        + ": " + safe(e.getMessage()));
-                LOG.trace("prune failed for {}", entry.getKey(), e);
-                failed++;
-            }
-        }
-        return failed + unprunable;
-    }
-
-    /**
-     * Narrow a prune group to the values the live object still actually holds, comparing by real value.
-     *
-     * <p>This is the ownership guard, and it is what stops a prune from undoing the apply that just ran. A
-     * value the tree *changed* rather than dropped also shows up as "no longer declared" (the old content is
-     * gone from the file), and the recovered value still carries its container id — deleting that by id would
-     * remove the entry the apply had just rewritten. Anything the server no longer holds in that form is
-     * therefore skipped: someone else already removed it, or it was replaced rather than removed.
-     */
-    private List<RemovalDetector.Removal> stillLive(PrismContext prismContext, MidpointRestClient client,
-            String restType, String oid, List<RemovalDetector.Removal> group) throws Exception {
-        PrismObject<? extends Objectable> live =
-                prismContext.parseObject(client.getObject(restType, oid));
-        List<RemovalDetector.Removal> stillOurs = new ArrayList<>();
-        for (RemovalDetector.Removal removal : group) {
-            Item<?, ?> item = live.findItem(removal.itemPath.removeIds());
-            boolean present = item != null && item.getValues().stream()
-                    .anyMatch(value -> EquivalenceStrategy.REAL_VALUE.equals(value, removal.prismValue));
-            if (present) {
-                stillOurs.add(removal);
-            } else {
-                LOG.trace("not pruning {} at {}: the live object no longer holds that value",
-                        removal.value, removal.path);
-                note("note: leaving " + removal.path + " alone — the server no longer holds the value that "
-                        + "was removed from " + removal.sourceFile + " (already changed or removed).");
-            }
-        }
-        return stillOurs;
-    }
-
-    /** The OID to prune: the fragment's own, else a single match by type+name when --match-by-name is set. */
-    private String resolvePruneTarget(PrismContext prismContext, MidpointRestClient client,
-            RemovalDetector.Removal removal, String restType) throws Exception {
-        if (removal.oid != null && !removal.oid.isBlank()) {
-            return removal.oid;
-        }
-        if (!matchByName() || removal.objectName == null) {
-            return null;
-        }
-        List<PrismObject<? extends Objectable>> matches = LiveLookup.byName(
-                prismContext, client, removal.objectClass, restType, removal.objectName);
-        return (matches.size() == 1) ? matches.get(0).getOid() : null;
+    /** This object's removals under --prune, for its PATCH to carry. */
+    private List<RemovalDetector.Removal> removalsFor(DeployObject unit) {
+        return removalsByUnit.getOrDefault(unit, List.of());
     }
 
     /** Record the revision just deployed, so the next run can tell what has been removed since. */
@@ -978,9 +880,12 @@ public class DeployCommand implements Callable<Integer> {
         Tally tally = new Tally();
         for (DeployObject unit : units) {
             try {
-                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
+                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit));
                 Reconciler.Action action = outcome.action;
                 tally.lastOutcome = outcome;
+                if (!preview && outcome.removalsDeferred) {
+                    markNotFullyApplied("some removals were left for the next run");
+                }
 
                 if (!preview && perUnitPrompt
                         && (action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH)) {
@@ -1017,6 +922,10 @@ public class DeployCommand implements Callable<Integer> {
         // in the plan before anything is written (and still shows in a real apply).
         for (String warning : outcome.warnings) {
             note("warning: " + unit.objectPath() + ": " + warning);
+        }
+        // Once per run: in the preview when there is one, else in the pass that writes.
+        if (preview || assumeYes || confirmEachApply) {
+            reportRemoving(unit, outcome);
         }
         if (preview) {
             reportHeldBack(unit, outcome);
@@ -1145,7 +1054,8 @@ public class DeployCommand implements Callable<Integer> {
                 // local projection this used to keep — advanced with each applied delta so that a second
                 // fragment of a to-be-created object became a patch rather than a second create — has
                 // nothing left to answer for now that an object's files are reconciled together.
-                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
+                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit));
+                reportRemoving(unit, outcome);
                 reportHeldBack(unit, outcome);
                 reportProtectedSkipped(unit, outcome);
 
@@ -1326,37 +1236,6 @@ public class DeployCommand implements Callable<Integer> {
         String answer = console.readLine("%s? [y/N] ", prompt);
         String normalized = (answer == null) ? "" : answer.trim().toLowerCase();
         return normalized.equals("y") || normalized.equals("yes");
-    }
-
-    /**
-     * Confirm before deleting previously-deployed values. Its own gate rather than the apply prompt, because
-     * a prune can be the only thing a run does. Returns {@code null} to proceed, or the exit code to return.
-     */
-    private Integer confirmPrune(int valueCount) {
-        if (assumeYes) {
-            return null;
-        }
-        Console console = System.console();
-        boolean interactive = console != null;
-        String answer = interactive
-                ? console.readLine("Remove %d previously deployed value(s) from %s? [y/N] ",
-                        valueCount, connectionOptions.url())
-                : null;
-        switch (Confirmation.decide(false, interactive, answer)) {
-            case PROCEED:
-                return null;
-            case ABORTED:
-                // Recording now would move the baseline past the very values the operator asked to look at
-                // first, so the next run would find nothing to review.
-                markNotFullyApplied("the prune was declined");
-                System.err.println("midgie: aborted — nothing was removed.");
-                return 0;
-            case NON_INTERACTIVE:
-            default:
-                System.err.println("midgie: refusing to remove values without confirmation in a "
-                        + "non-interactive session; re-run with --yes (or --dry-run to preview).");
-                return EXIT_ERROR;
-        }
     }
 
     private Integer confirmOnce(int changeCount) {

@@ -47,9 +47,9 @@ class RollbackPlanTest {
         // Undoing a sequence means replaying the inverses backwards, and --apply-plan replays in filename
         // order, so the LAST thing applied has to sort FIRST.
         RollbackPlan plan = new RollbackPlan(prismContext, null);
-        plan.recordPruned("roles", oid(1), "first", deltaChangingDescription(oid(1)));
-        plan.recordPruned("roles", oid(2), "second", deltaChangingDescription(oid(2)));
-        plan.recordPruned("roles", oid(3), "third", deltaChangingDescription(oid(3)));
+        plan.recordPatch("roles", oid(1), "first", deltaChangingDescription(oid(1)));
+        plan.recordPatch("roles", oid(2), "second", deltaChangingDescription(oid(2)));
+        plan.recordPatch("roles", oid(3), "third", deltaChangingDescription(oid(3)));
 
         File run = plan.write(dir.toFile(), "http://server/midpoint", "deploy-key", "abc123");
 
@@ -63,7 +63,7 @@ class RollbackPlanTest {
     @Test
     void manifestRecordsProvenanceAndCreatedObjects(@TempDir Path dir) throws Exception {
         RollbackPlan plan = new RollbackPlan(prismContext, null);
-        plan.recordPruned("roles", oid(1), "patched-one", deltaChangingDescription(oid(1)));
+        plan.recordPatch("roles", oid(1), "patched-one", deltaChangingDescription(oid(1)));
         plan.recordApplied(Reconciler.Action.CREATE, createOutcome(oid(2)), oid(2), "made-one");
 
         File run = plan.write(dir.toFile(), "http://server/midpoint", "deploy-key", "abc123");
@@ -84,7 +84,7 @@ class RollbackPlanTest {
     @Test
     void aFinishedPlanIsNoLongerMarkedIncomplete(@TempDir Path dir) throws Exception {
         RollbackPlan plan = new RollbackPlan(prismContext, null);
-        plan.recordPruned("roles", oid(1), "one", deltaChangingDescription(oid(1)));
+        plan.recordPatch("roles", oid(1), "one", deltaChangingDescription(oid(1)));
         File run = plan.write(dir.toFile(), "http://server/midpoint", null, null);
 
         assertFalse(PlanStore.isIncomplete(run), "a completed net must be replayable");
@@ -94,7 +94,7 @@ class RollbackPlanTest {
     @Test
     void newestUnderSkipsAnUnfinishedRun(@TempDir Path dir) throws Exception {
         RollbackPlan plan = new RollbackPlan(prismContext, null);
-        plan.recordPruned("roles", oid(1), "one", deltaChangingDescription(oid(1)));
+        plan.recordPatch("roles", oid(1), "one", deltaChangingDescription(oid(1)));
         File good = plan.write(dir.toFile(), "http://server/midpoint", null, null);
 
         // A later run that died half way through: newer by name, but not replayable.

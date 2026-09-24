@@ -235,11 +235,11 @@ midgie: 1 value(s) deployed at 2d58fd5 are no longer declared by the tree (repor
 By default it **reports only**, and only the count. Add **`--prune`** to list and actually remove them:
 
 ```bash
-bin/midgie deploy config/ --url … --prune --dry-run   # preview: lists each value, exits 1 if anything would go
+bin/midgie deploy config/ --url … --prune --dry-run   # preview: each object lists what it removes, exits 1 if anything would go
 bin/midgie deploy config/ --url … --prune --yes       # remove them
 ```
 
-Pruning is confirmation-gated in its own right (a non-interactive run without `--yes` refuses, even when the apply pass had nothing to do), runs *after* the tree is applied so the desired state lands first, and is structurally safe: the delta is built solely from values that were in last-applied, so it cannot reach accrued or foreign state however wrong the rest of the tree is.
+**A removal travels in its object's own PATCH**, next to the object's other changes — one request, one confirmation, one entry in the plan and in the rollback plan. So midPoint applies the change and the removal together: an `inducement` retargeted under `multivalue=merge` is added and its old form deleted in the same request, and the role never holds both, not even between two requests — which a recompute could otherwise have provisioned from. `--plan` writes the removals into each object's plan file, and `--dry-run --format xml` shows them in the one PATCH body. It is structurally safe: a removal is built solely from a value that was in last-applied, and it is sent only while the server still holds that value exactly as it was deployed — one someone has since changed or removed is left alone with a note. A value the object's diff already takes care of (an entry edited in place, or deleted anyway under `replace`) is not deleted a second time; that is judged against the live object with the diff applied locally, so no second round trip is needed. The server's own copy of a container value is what gets deleted, id included, rather than a lookup by content.
 
 Deleting a *fragment* is handled the same way and needs no special case: both sides are compared as whole objects — every file describing the object now against every file that described it then, deleted ones included — so you get exactly the values no surviving file still declares, a value merely moved from one file to another is not a removal at all, and the object itself is never a deletion candidate. Each reported value still names the file it came from.
 
