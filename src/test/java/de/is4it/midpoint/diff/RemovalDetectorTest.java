@@ -257,6 +257,175 @@ class RemovalDetectorTest {
                 "and says how many of what it cannot: " + removal);
     }
 
+    @Test
+    void aMappingThatOnlyLostOneNestedItemIsNeverRemovedWhole(@TempDir Path dir) throws Exception {
+        // The hazard the item-granular walk exists for. Matched by content, a mapping that lost its
+        // lifecycleState reads as "the whole old mapping was removed". Once a tracked diff leaves undeclared
+        // nested items alone, the live mapping can still equal that old form exactly — and the removal would
+        // delete the entire mapping. It has to be "lifecycleState inside mapping[name=given]", nothing more.
+        Path file = dir.resolve("template.xml");
+        Files.writeString(file, template(NestedOwnershipTest.mapping(null, "given",
+                "<lifecycleState>draft</lifecycleState>") + NestedOwnershipTest.mapping(null, "family", "")),
+                StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, template(NestedOwnershipTest.mapping(null, "given", "")
+                + NestedOwnershipTest.mapping(null, "family", "")), StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+
+        assertEquals(1, removals.size(), "one nested item, not a mapping: " + removals);
+        RemovalDetector.Removal removal = removals.get(0);
+        assertTrue(removal.isNested(), removal.toString());
+        assertEquals("mapping/lifecycleState", removal.itemPath.toString());
+        assertEquals("mapping[name=given]/lifecycleState", removal.path);
+        assertEquals("draft", removal.value);
+        assertFalse(removals.stream().anyMatch(r -> r.itemPath.size() == 1),
+                "no removal may name the mapping itself: " + removals);
+
+        // Against a server holding exactly the deployed mapping, the delete reaches its own copy by id.
+        PrismObject<? extends com.evolveum.midpoint.prism.Objectable> live = prismContext.parseObject(template(
+                NestedOwnershipTest.mapping(4L, "given", "<lifecycleState>draft</lifecycleState>")
+                        + NestedOwnershipTest.mapping(7L, "family", "")));
+        ObjectDelta<?> prune = RemovalDetector.pruneDelta(prismContext, OID, removals, live);
+        assertEquals(1, prune.getModifications().size(), prune.toString());
+        ItemDelta<?, ?> only = prune.getModifications().iterator().next();
+        assertEquals("mapping/4/lifecycleState", only.getPath().toString());
+    }
+
+    @Test
+    void aMappingDroppedEntirelyIsStillRemovedWhole(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("template.xml");
+        Files.writeString(file, template(NestedOwnershipTest.mapping(null, "given", "")
+                + NestedOwnershipTest.mapping(null, "family", "")), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, template(NestedOwnershipTest.mapping(null, "family", "")), StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+
+        assertEquals(1, removals.size(), removals.toString());
+        assertFalse(removals.get(0).isNested(), "a dropped value is a list-level removal, as before");
+        assertEquals("mapping", removals.get(0).path);
+    }
+
+    @Test
+    void anEditedUnkeyedListValueIsStillRemovedWhole(@TempDir Path dir) throws Exception {
+        // No key, no id: nothing to pair the old inducement with, so its old form is removed whole, as before.
+        Path file = dir.resolve("role.xml");
+        Files.writeString(file, role("<inducement><targetRef oid=\"aaaaaaaa-0000-0000-0000-000000000001\" "
+                + "type=\"RoleType\"/></inducement>"), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, role("<inducement><targetRef oid=\"aaaaaaaa-0000-0000-0000-000000000002\" "
+                + "type=\"RoleType\"/></inducement>"), StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+
+        assertEquals(1, removals.size(), removals.toString());
+        assertEquals("inducement", removals.get(0).path);
+        assertFalse(removals.get(0).isNested());
+    }
+
+    @Test
+    void aSingleValuedNestedItemDroppedFromTheTreeIsARemovalOfThatItem(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("archetype.xml");
+        Files.writeString(file, archetype("<archetypePolicy><display><label>Old</label><icon><cssClass>fa</cssClass>"
+                + "</icon></display></archetypePolicy>"), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, archetype("<archetypePolicy><display><icon><cssClass>fa</cssClass></icon>"
+                + "</display></archetypePolicy>"), StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+
+        assertEquals(1, removals.size(), removals.toString());
+        assertEquals("archetypePolicy/display/label", removals.get(0).path);
+    }
+
+    // --- the three-way rule below the top level, through the whole plan (desired, last-applied, live) ---
+
+    @Test
+    void anItemTheTreeDroppedIsRemovedAndTheMappingSurvivesWithItsId(@TempDir Path dir) throws Exception {
+        // D absent, A draft, L draft: dropped by the tree, so removed — addressed to the server's mapping 4.
+        Reconciler.Outcome outcome = threeWay(dir, "<lifecycleState>draft</lifecycleState>", "",
+                "<lifecycleState>draft</lifecycleState>", true);
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        List<String> paths = outcome.delta.getModifications().stream().map(m -> m.getPath().toString()).toList();
+        assertEquals(List.of("mapping/4/lifecycleState"), paths, "only the item, never the mapping: " + paths);
+        assertEquals(1, outcome.removing.size());
+        assertTrue(outcome.keptNested.isEmpty(), "the tree deployed it, so it is not reported as kept: "
+                + outcome.keptNested);
+    }
+
+    @Test
+    void anItemAddedOnTheServerIsKeptAndReported(@TempDir Path dir) throws Exception {
+        // D absent, A absent, L draft: never deployed by the tree.
+        Reconciler.Outcome outcome = threeWay(dir, "", "", "<lifecycleState>draft</lifecycleState>", true);
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertEquals(List.of("mapping/lifecycleState ×1"), outcome.keptNested);
+    }
+
+    @Test
+    void anItemChangedOnTheServerAfterTheDeployIsKeptWithANote(@TempDir Path dir) throws Exception {
+        // D absent, A draft, L active: someone changed it after the deploy, so it is theirs now.
+        Reconciler.Outcome outcome = threeWay(dir, "<lifecycleState>draft</lifecycleState>", "",
+                "<lifecycleState>active</lifecycleState>", true);
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertTrue(outcome.removing.isEmpty());
+        assertTrue(outcome.warnings.stream().anyMatch(w -> w.contains("mapping[name=given]/lifecycleState")
+                && w.contains("changed on the server after it was deployed")), outcome.warnings.toString());
+        assertTrue(outcome.keptNested.isEmpty(), "said once, in the note: " + outcome.keptNested);
+    }
+
+    @Test
+    void aDeclaredItemIsStillReplacedWhateverLastAppliedSaid(@TempDir Path dir) throws Exception {
+        Reconciler.Outcome outcome = threeWay(dir, "<lifecycleState>draft</lifecycleState>",
+                "<lifecycleState>active</lifecycleState>", "<lifecycleState>proposed</lifecycleState>", true);
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        ItemDelta<?, ?> only = outcome.delta.getModifications().iterator().next();
+        assertEquals("mapping/4/lifecycleState", only.getPath().toString());
+        assertTrue(only.getValuesToReplace() != null, "a replace with the declared value: " + only);
+    }
+
+    @Test
+    void noPruneWithholdsTheNestedRemovalWithoutCallingItKept(@TempDir Path dir) throws Exception {
+        Reconciler.Outcome outcome = threeWay(dir, "<lifecycleState>draft</lifecycleState>", "",
+                "<lifecycleState>draft</lifecycleState>", false);
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertTrue(outcome.removing.isEmpty());
+        assertTrue(outcome.keptNested.isEmpty(), "dropped by the tree, not someone else's: " + outcome.keptNested);
+    }
+
+    /**
+     * Commit a template whose mapping 'given' holds {@code applied}, change the file so it holds
+     * {@code desired}, and plan the change against a server whose mapping (id 4) holds {@code live}, the way a
+     * tracked deploy does.
+     */
+    private static Reconciler.Outcome threeWay(Path dir, String applied, String desired, String live,
+            boolean prune) throws Exception {
+        Path file = dir.resolve("template.xml");
+        Files.writeString(file, template(NestedOwnershipTest.mapping(null, "given", applied)), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, template(NestedOwnershipTest.mapping(null, "given", desired)), StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+        PrismObject<? extends com.evolveum.midpoint.prism.Objectable> current =
+                prismContext.parseObject(template(NestedOwnershipTest.mapping(4L, "given", live)));
+        StrategyOptions.Resolved strategy = new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
+                DiffEngine.EquivalencePlan.auto(), DiffEngine.MultiValueStrategy.replaceAll(), false,
+                StrategyOptions.SmartRefs.ACCEPT, ApplyRules.none(), true)
+                .settleMultiValue(true).settleTracking(true);
+        return new Reconciler(prismContext, null, true, true).planAgainst(
+                prismContext.parseObject(file.toFile()), current, strategy, removals, prune);
+    }
+
     // --- helpers ---
 
     /** Run detection for the files currently present, comparing against {@code revision}. */
@@ -324,6 +493,16 @@ class RemovalDetectorTest {
     private static String role(String body) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
                 + "  <name>Removal Probe</name>\n  " + body + "\n</role>";
+    }
+
+    private static String template(String body) {
+        return "<objectTemplate xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
+                + "  <name>Removal Probe Template</name>\n  " + body + "\n</objectTemplate>";
+    }
+
+    private static String archetype(String body) {
+        return "<archetype xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
+                + "  <name>Removal Probe Archetype</name>\n  " + body + "\n</archetype>";
     }
 
     private static String task(String body) {

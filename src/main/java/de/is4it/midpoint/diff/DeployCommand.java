@@ -222,7 +222,7 @@ public class DeployCommand implements Callable<Integer> {
     /** The safety net being accumulated for this run; null when no writing pass will happen. */
     private RollbackPlan rollback;
 
-    /** Unless --no-prune, each object's removals, which its own PATCH carries. */
+    /** Each object's removals, which its own PATCH carries unless --no-prune. */
     private final Map<DeployObject, List<RemovalDetector.Removal>> removalsByUnit = new IdentityHashMap<>();
 
     /** Removals that cannot be turned into a delete; they fail the run so the revision stays put. */
@@ -451,14 +451,16 @@ public class DeployCommand implements Callable<Integer> {
             List<RemovalDetector.Removal> removals = findRemovals(prismContext, tracking, units);
             settleMultiValue(tracking);
             reportRemovals(removals, tracking);
-            if (prune()) {
-                for (RemovalDetector.Removal removal : removals) {
-                    if (!removal.isPrunable()) {
+            // Under --no-prune too: an object's removals are not sent then, but they are still what tells an item
+            // the tree deployed and dropped apart from one it never deployed, which is reported as kept.
+            for (RemovalDetector.Removal removal : removals) {
+                if (!removal.isPrunable()) {
+                    if (prune()) {
                         warn("cannot remove " + removal + " — no item definition for it.");
                         unprunable.add(removal);
-                    } else if (removal.unit != null) {
-                        removalsByUnit.computeIfAbsent(removal.unit, key -> new ArrayList<>()).add(removal);
                     }
+                } else if (removal.unit != null) {
+                    removalsByUnit.computeIfAbsent(removal.unit, key -> new ArrayList<>()).add(removal);
                 }
             }
 
@@ -653,15 +655,25 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     /**
-     * Name what merge keeps on the server beyond the tree, so an entry someone added to a list the tree means
-     * to own is visible. One line per object; the fix, when the tree should own the list, is a policy rule.
+     * Name what the change keeps on the server beyond the tree, so a value someone added is visible: list values
+     * merge keeps, and on a tracked run items inside values the tree declares that it never deployed. One line
+     * per object; the fix, when the tree should own a list, is a policy rule.
      */
     private void reportKept(DeployObject unit, Reconciler.Outcome outcome) {
-        if (!outcome.kept.isEmpty()) {
-            note("note: " + unit.objectPath() + ": keeps live value(s) the tree does not list (multivalue=merge): "
-                    + String.join(", ", outcome.kept) + ". A '<path>  multivalue=replace' policy rule makes the "
-                    + "tree own such a list.");
+        if (outcome.kept.isEmpty() && outcome.keptNested.isEmpty()) {
+            return;
         }
+        List<String> parts = new ArrayList<>();
+        if (!outcome.kept.isEmpty()) {
+            parts.add(String.join(", ", outcome.kept) + " (multivalue=merge; a '<path>  multivalue=replace' "
+                    + "policy rule makes the tree own such a list)");
+        }
+        if (!outcome.keptNested.isEmpty()) {
+            parts.add(String.join(", ", outcome.keptNested) + " (inside values the tree declares; it never "
+                    + "deployed them)");
+        }
+        note("note: " + unit.objectPath() + ": keeps live value(s) the tree does not list: "
+                + String.join("; ", parts) + ".");
     }
 
     /** Name the dropped values an object's PATCH deletes, so the change being confirmed is the whole change. */
@@ -731,15 +743,20 @@ public class DeployCommand implements Callable<Integer> {
      * entry without a natural key. So: merge when this run can track the tree, else replace, said out loud.
      * {@code --no-prune} does not change the answer: it withholds the removals, and flipping the whole run to
      * replace because of it would delete more, not less.
+     *
+     * <p>The same answer decides ownership below the top level ({@link StrategyOptions.Resolved#settleTracking}),
+     * whatever {@code --multivalue} says: on a tracked run an item inside a declared container value that the
+     * tree does not mention is left alone unless the tree deployed it and dropped it since.
      */
     private void settleMultiValue(Tracking tracking) {
-        if (!globalStrategy.multiValueAuto) {
-            return;
-        }
         // Several paths without --app are tracked under the first one only, so the rest would get merge's
         // keeping without the removals that make it safe.
         boolean singleIdentity = paths == null || paths.size() <= 1 || app != null;
         boolean tracked = tracking.canRecord() && !detectionBroken && singleIdentity;
+        globalStrategy = globalStrategy.settleTracking(tracked);
+        if (!globalStrategy.multiValueAuto) {
+            return;
+        }
         globalStrategy = globalStrategy.settleMultiValue(tracked);
         if (tracked) {
             LOG.debug("--multivalue auto: merge — removals are tracked for {}", tracking.identity.key());
@@ -749,7 +766,7 @@ public class DeployCommand implements Callable<Integer> {
         }
     }
 
-    /** This object's removals, for its PATCH to carry (none under --no-prune). */
+    /** This object's removals, for its PATCH to carry (withheld from it under --no-prune). */
     private List<RemovalDetector.Removal> removalsFor(DeployObject unit) {
         return removalsByUnit.getOrDefault(unit, List.of());
     }
@@ -924,7 +941,7 @@ public class DeployCommand implements Callable<Integer> {
         Tally tally = new Tally();
         for (DeployObject unit : units) {
             try {
-                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit));
+                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune());
                 Reconciler.Action action = outcome.action;
                 tally.lastOutcome = outcome;
                 if (!preview && outcome.removalsDeferred) {
@@ -1099,7 +1116,7 @@ public class DeployCommand implements Callable<Integer> {
                 // local projection this used to keep — advanced with each applied delta so that a second
                 // fragment of a to-be-created object became a patch rather than a second create — has
                 // nothing left to answer for now that an object's files are reconciled together.
-                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit));
+                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune());
                 reportRemoving(unit, outcome);
                 reportKept(unit, outcome);
                 reportHeldBack(unit, outcome);

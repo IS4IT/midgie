@@ -79,6 +79,14 @@ public final class StrategyOptions {
          * default until {@link #settleMultiValue} learns whether this run can track removals.
          */
         final boolean multiValueAuto;
+        /**
+         * Whether this run tracks the tree, so that last-applied is known and ownership can be decided below the
+         * top level: an item inside a declared container value that the desired object does not mention is left
+         * alone unless the tree deployed it and dropped it since (which the removal side handles). Settled with
+         * {@link #settleTracking}, alongside {@code --multivalue auto}; {@code false} everywhere else, which keeps
+         * an untracked run and an offline diff exactly as they were.
+         */
+        final boolean tracked;
 
         Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge) {
@@ -99,7 +107,14 @@ public final class StrategyOptions {
         Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
                 DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge, SmartRefs smartRefs,
                 ApplyRules apply, boolean multiValueAuto) {
+            this(scope, equivalence, multiValue, allowInplaceMerge, smartRefs, apply, multiValueAuto, false);
+        }
+
+        Resolved(DiffEngine.Scope scope, DiffEngine.EquivalencePlan equivalence,
+                DiffEngine.MultiValueStrategy multiValue, boolean allowInplaceMerge, SmartRefs smartRefs,
+                ApplyRules apply, boolean multiValueAuto, boolean tracked) {
             this.multiValueAuto = multiValueAuto;
+            this.tracked = tracked;
             this.scope = scope;
             this.equivalence = equivalence;
             this.multiValue = multiValue;
@@ -119,7 +134,27 @@ public final class StrategyOptions {
                 return this;
             }
             return new Resolved(scope, equivalence, DiffEngine.MultiValueStrategy.of(tracked, multiValue.pathRules()),
-                    allowInplaceMerge, smartRefs, apply, false);
+                    allowInplaceMerge, smartRefs, apply, false, this.tracked);
+        }
+
+        /**
+         * Record whether this run tracks the tree. Unlike {@link #settleMultiValue} this applies whatever
+         * {@code --multivalue} says: who owns an item inside a declared container value is not a question of
+         * list membership, and the answer rests on the same thing merge's safety does — knowing what was
+         * deployed last time.
+         */
+        Resolved settleTracking(boolean tracked) {
+            return new Resolved(scope, equivalence, multiValue, allowInplaceMerge, smartRefs, apply, multiValueAuto,
+                    tracked);
+        }
+
+        /**
+         * Whether the diff keeps live items below the top level that the desired object does not declare —
+         * the nested analogue of {@code --scope present}, on a tracked run only. {@code --scope full} asks for
+         * full replace, so it keeps nothing.
+         */
+        boolean keepsUndeclaredNested() {
+            return tracked && scope == DiffEngine.Scope.PRESENT;
         }
 
         /**

@@ -229,6 +229,18 @@ public final class DiffEngine {
     public DiffResult diff(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> live,
             EquivalencePlan equivalence, Scope scope, MultiValueStrategy multiValue,
             SmartReferenceCheck smartRefs) throws SchemaException {
+        return diff(desired, live, equivalence, scope, multiValue, smartRefs, false);
+    }
+
+    /**
+     * As above, and with {@code keepUndeclaredNested} set, live items <em>below</em> the top level that the
+     * desired object does not declare are kept rather than deleted (see {@link #keepUndeclaredNested}). Only
+     * a tracked deploy under {@code --scope present} asks for that, because only there is last-applied known,
+     * so that what the tree deployed and then dropped can still be removed — by the removal side, not here.
+     */
+    public DiffResult diff(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> live,
+            EquivalencePlan equivalence, Scope scope, MultiValueStrategy multiValue,
+            SmartReferenceCheck smartRefs, boolean keepUndeclaredNested) throws SchemaException {
 
         Class<?> desiredType = desired.getCompileTimeClass();
         Class<?> liveType = live.getCompileTimeClass();
@@ -260,6 +272,12 @@ public final class DiffEngine {
         // only midPoint having resolved a smart reference. Ahead of applyMerge because merge would otherwise
         // strip the delete side of a merge-designated reference path and leave nothing to pair the add with.
         List<String> smartReferences = stripResolvedSmartReferences(delta, smartRefs);
+
+        // Before merge and scope, so that it sees every delete of a nested item and can report what it keeps:
+        // applyMerge would otherwise clear the deletes of a multi-valued item inside a declared value, and
+        // retainItemsPresentIn drop those along single-valued containers, both without a word.
+        List<KeptNested> keptNested = (keepUndeclaredNested && scope == Scope.PRESENT)
+                ? keepUndeclaredNested(delta, desired, live) : List.of();
 
         List<String> mergeFallbacks = multiValue.isMergeActive() ? applyMerge(delta, multiValue) : List.of();
 
@@ -307,7 +325,116 @@ public final class DiffEngine {
                 DeltaOutput.removedValueCount(delta), mergeFallbacks, protectedSkipped, accruedInPlaceEdits,
                 inputWarnings.size(), smartReferences, equivalenceChoices);
         return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits, inputWarnings,
-                smartReferences, equivalenceChoices, incompleteSkipped);
+                smartReferences, equivalenceChoices, incompleteSkipped, keptNested);
+    }
+
+    /**
+     * Live values of an item below the top level that a tracked diff kept instead of deleting, because the
+     * desired object does not declare the item there.
+     *
+     * @param path       the item's path in the live object, container ids included
+     *                   ({@code mapping/4/lifecycleState})
+     * @param definition the item's definition, when the delta carried one
+     * @param values     the live values that the two-way diff would have deleted
+     */
+    record KeptNested(ItemPath path, ItemDefinition<?> definition, List<PrismValue> values) {
+    }
+
+    /** What {@link #declarationAt} found for a nested delta path. */
+    private enum Declaration { DECLARED, UNDECLARED, UNKNOWN }
+
+    /**
+     * The nested analogue of {@link #retainItemsPresentIn}, for a tracked run: drop every delete of live values
+     * of an item <em>below</em> the top level that the desired object does not declare at that path, and
+     * return what was kept.
+     *
+     * <p>A two-way diff reads an item missing from desired as "delete it". At the top level {@code --scope
+     * present} already says otherwise; inside a container value the tree declares — one {@code mapping} of a
+     * template, paired by its {@code name} — the diff deleted everything the server's copy held beyond the
+     * file, whoever had put it there. An administrator who set {@code lifecycleState} on ten mappings got ten
+     * deletes. With last-applied known that is no longer necessary: an item the tree deployed and then dropped
+     * is found by the removal side ({@link RemovalDetector}) and deleted there, in the form the tree deployed
+     * it; one the tree never deployed is someone else's and stays.
+     *
+     * <p>Only deletes of an item desired lacks <em>entirely</em> at that path are dropped. An item desired
+     * declares keeps its delta — a replace of a single-valued item, and the add/delete of a multi-valued one,
+     * which is list membership and belongs to merge/replace. So does every top-level delta ({@code --scope
+     * present} decides those), including the whole-value add/delete of a container value that {@code auto}'s
+     * {@code real-value} half produces for a list without keys: its path names the list, which desired
+     * declares.
+     *
+     * <p>A path through a multi-valued container carries the <em>live</em> value's container id
+     * ({@code mapping/4/lifecycleState}); desired, written by hand, usually has none. Each id is therefore
+     * mapped back to the desired value the diff paired it with — by container id, else by natural key, the
+     * pairing {@link NaturalKeys#match} defines for every other caller. A live value that maps to nothing in
+     * desired is left to the accrued-value guard, which exists for exactly that case.
+     */
+    private static List<KeptNested> keepUndeclaredNested(ObjectDelta<?> delta, PrismObject<?> desired,
+            PrismObject<?> live) {
+        List<KeptNested> kept = new ArrayList<>();
+        List<ItemDelta<?, ?>> emptied = new ArrayList<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            if (localNames(mod.getPath()).size() < 2) {
+                continue; // a top-level item: --scope present's business
+            }
+            if (mod.getValuesToDelete() == null || mod.getValuesToDelete().isEmpty()) {
+                continue; // an add or a replace: desired declares the item, and it is sent as before
+            }
+            if (declarationAt(desired, live, mod.getPath()) != Declaration.UNDECLARED) {
+                continue;
+            }
+            List<PrismValue> values = new ArrayList<>();
+            for (PrismValue value : mod.getValuesToDelete()) {
+                values.add(value.clone());
+            }
+            kept.add(new KeptNested(mod.getPath(), mod.getDefinition(), values));
+            mod.clearValuesToDelete();
+            if (mod.isEmpty()) {
+                emptied.add(mod);
+            }
+        }
+        emptied.forEach(delta::removeModification);
+        return kept;
+    }
+
+    /**
+     * Whether {@code desired} declares the item a delta path names. Each container-id segment is resolved to
+     * the desired value paired with the live value carrying that id; the names after the last one are looked
+     * up in that value, through single-valued containers. {@code UNKNOWN} when a live value on the way has no
+     * counterpart in desired.
+     */
+    private static Declaration declarationAt(PrismObject<?> desired, PrismObject<?> live, ItemPath path) {
+        PrismContainerValue<?> desiredParent = desired.getValue();
+        PrismContainerValue<?> liveParent = (live != null) ? live.getValue() : null;
+        List<QName> names = new ArrayList<>();
+        for (Object segment : path.getSegments()) {
+            if (ItemPath.isName(segment)) {
+                names.add(ItemPath.toName(segment));
+                continue;
+            }
+            if (!ItemPath.isId(segment) || names.isEmpty()) {
+                return Declaration.UNKNOWN; // an exotic segment: nothing to vouch for either way
+            }
+            ItemPath containerPath = ItemPath.create(names.toArray());
+            names.clear();
+            Item<?, ?> desiredItem = desiredParent.findItem(containerPath);
+            if (!(desiredItem instanceof PrismContainer<?> desiredContainer) || desiredItem.hasNoValues()) {
+                return Declaration.UNDECLARED;
+            }
+            Long id = ItemPath.toId(segment);
+            PrismContainerValue<?> liveValue = containerValueById(liveParent, containerPath, id);
+            PrismContainerValue<?> match = NaturalKeys.match(desiredContainer, liveValue, id);
+            if (match == null) {
+                return Declaration.UNKNOWN;
+            }
+            desiredParent = match;
+            liveParent = liveValue;
+        }
+        if (names.isEmpty()) {
+            return Declaration.UNKNOWN;
+        }
+        Item<?, ?> item = desiredParent.findItem(ItemPath.create(names.toArray()));
+        return (item == null || item.hasNoValues()) ? Declaration.UNDECLARED : Declaration.DECLARED;
     }
 
     private static <O extends Objectable> ObjectDelta<O> reconcile(PrismObject<O> live, PrismObject<?> desired,
@@ -1153,11 +1280,14 @@ public final class DiffEngine {
         private final List<String> smartReferencePaths;
         private final List<String> equivalenceChoices;
         private final List<String> incompleteSkippedPaths;
+        private final List<KeptNested> keptNested;
 
         DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths,
                 List<String> protectedSkippedPaths, List<String> accruedInPlaceEditPaths,
                 List<String> inputWarnings, List<String> smartReferencePaths,
-                List<String> equivalenceChoices, List<String> incompleteSkippedPaths) {
+                List<String> equivalenceChoices, List<String> incompleteSkippedPaths,
+                List<KeptNested> keptNested) {
+            this.keptNested = List.copyOf(keptNested);
             this.delta = delta;
             this.mergeFallbackPaths = List.copyOf(mergeFallbackPaths);
             this.protectedSkippedPaths = List.copyOf(protectedSkippedPaths);
@@ -1174,6 +1304,14 @@ public final class DiffEngine {
          */
         public List<String> incompleteSkippedPaths() {
             return incompleteSkippedPaths;
+        }
+
+        /**
+         * Live values below the top level that a tracked diff kept because desired does not declare their item
+         * (see {@code keepUndeclaredNested}); empty on any other run.
+         */
+        List<KeptNested> keptNested() {
+            return keptNested;
         }
 
         /**

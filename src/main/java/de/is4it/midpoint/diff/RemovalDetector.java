@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.evolveum.midpoint.prism.Item;
+import com.evolveum.midpoint.prism.PrismContainer;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContainerValue;
 import com.evolveum.midpoint.prism.PrismContext;
@@ -42,8 +43,10 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectType;
  * never applied is accrued or someone else's and must be left alone.
  *
  * <p>Last-applied comes from version control: {@code git show <lastRev>:<path>} is exactly the file as it was
- * when midgie last deployed it. The removal set is then the <em>delete side</em> of an ordinary
- * {@code DiffEngine} run with last-applied in the live slot, so no new diff logic is needed.
+ * when midgie last deployed it. The removal set is what last-applied holds and desired no longer does,
+ * compared item by item: container values of a multi-valued container are paired the way the diff pairs them
+ * (by container id, else by natural key), so a value that only lost one nested item yields a removal of that
+ * item, never of the whole value (see {@link #collect}).
  *
  * <p>It works per <b>object</b>, on both sides: the union of the files that describe it now against the union
  * of the files that described it then, deleted ones included. That is what makes it correct for objects
@@ -75,6 +78,12 @@ final class RemovalDetector {
         final ItemPath itemPath;    // the same path, unrendered
         final PrismValue prismValue; // the value itself, for the delete
         final DeployObject unit;    // the object in the tree it belongs to, whose PATCH carries the delete
+        /**
+         * The keyed container values the value lies inside, outermost first, as last-applied held them; empty
+         * for a value reached through single-valued containers only. {@link #itemPath} is then id-free and
+         * {@link #livePath} finds the server's own copy of each value.
+         */
+        final List<Step> steps;
 
         Removal(String objectLabel, String path, String value, String sourceFile, Class<?> objectClass,
                 String oid, String objectName, ItemDefinition<?> definition, ItemPath itemPath,
@@ -86,6 +95,14 @@ final class RemovalDetector {
         Removal(String objectLabel, String path, String value, String sourceFile, Class<?> objectClass,
                 String oid, String objectName, ItemDefinition<?> definition, ItemPath itemPath,
                 PrismValue prismValue, DeployObject unit) {
+            this(objectLabel, path, value, sourceFile, objectClass, oid, objectName, definition, itemPath,
+                    prismValue, unit, List.of());
+        }
+
+        Removal(String objectLabel, String path, String value, String sourceFile, Class<?> objectClass,
+                String oid, String objectName, ItemDefinition<?> definition, ItemPath itemPath,
+                PrismValue prismValue, DeployObject unit, List<Step> steps) {
+            this.steps = List.copyOf(steps);
             this.unit = unit;
             this.objectLabel = objectLabel;
             this.path = path;
@@ -99,6 +116,52 @@ final class RemovalDetector {
             this.prismValue = prismValue;
         }
 
+        /** Whether the value lies inside a value of a multi-valued container, matched by id or natural key. */
+        boolean isNested() {
+            return !steps.isEmpty();
+        }
+
+        /**
+         * The path of this removal's item in {@code object}, container ids included, or {@code null} when the
+         * object no longer holds one of the container values it lies inside.
+         *
+         * <p>Last-applied comes from git, where a container value usually carries no id, while a delete has to
+         * name the server's value — and a removal of {@code lifecycleState} inside one mapping must never turn
+         * into a removal of the mapping. So each step is found again in {@code object} the way the diff pairs
+         * values: by container id, else by natural key ({@link NaturalKeys#match}).
+         */
+        ItemPath livePath(PrismObject<? extends Objectable> object) {
+            if (steps.isEmpty()) {
+                return itemPath;
+            }
+            PrismContainerValue<?> parent = object.getValue();
+            List<Object> segments = new ArrayList<>();
+            for (Step step : steps) {
+                Item<?, ?> item = parent.findItem(step.containerPath());
+                if (!(item instanceof PrismContainer<?> container)) {
+                    return null;
+                }
+                PrismContainerValue<?> match = NaturalKeys.match(container, step.value(), step.value().getId());
+                if (match == null || match.getId() == null) {
+                    return null; // a value without an id cannot be addressed by a delete path
+                }
+                segments.addAll(step.containerPath().getSegments());
+                segments.add(match.getId());
+                parent = match;
+            }
+            segments.addAll(relativePath().getSegments());
+            return ItemPath.create(segments.toArray());
+        }
+
+        /** The item's path below the innermost step (the whole path when there is none). */
+        private ItemPath relativePath() {
+            int skip = 0;
+            for (Step step : steps) {
+                skip += step.containerPath().size();
+            }
+            return itemPath.rest(skip);
+        }
+
         /** Whether this removal can be turned into a delta (it needs the item's definition). */
         boolean isPrunable() {
             return definition != null && objectClass != null;
@@ -108,6 +171,17 @@ final class RemovalDetector {
         public String toString() {
             return path + (value != null && !value.isBlank() ? " = " + value : "") + " (was in " + sourceFile + ")";
         }
+    }
+
+    /**
+     * One container value of a multi-valued container that a nested removal lies inside.
+     *
+     * @param containerPath the container's id-free path, relative to the previous step's value (or to the
+     *                      object), possibly through single-valued containers
+     * @param value         the value as last-applied held it; what is matched against the server's copy
+     * @param label         how the report names it, e.g. {@code mapping[name=Given name]}
+     */
+    record Step(ItemPath containerPath, PrismContainerValue<?> value, String label) {
     }
 
     /**
@@ -134,9 +208,14 @@ final class RemovalDetector {
             if (!removal.isPrunable()) {
                 continue;
             }
+            // A nested removal can only be addressed through the server's own container ids.
+            ItemPath path = (live != null) ? removal.livePath(live) : (removal.isNested() ? null : removal.itemPath);
+            if (path == null) {
+                continue;
+            }
             objectClass = removal.objectClass;
             PrismValue held = (live != null) ? heldValue(live, removal) : null;
-            ItemDelta delta = removal.definition.createEmptyDelta(removal.itemPath);
+            ItemDelta delta = removal.definition.createEmptyDelta(path);
             delta.addValueToDelete((held != null ? held : removal.prismValue).clone());
             deltas.add(delta);
         }
@@ -153,7 +232,7 @@ final class RemovalDetector {
      * object still has in exactly the form midgie deployed it.
      */
     static PrismValue heldValue(PrismObject<? extends Objectable> object, Removal removal) {
-        Item<?, ?> item = object.findItem(removal.itemPath.removeIds());
+        Item<?, ?> item = itemAt(object, removal);
         if (item == null) {
             return null;
         }
@@ -163,6 +242,25 @@ final class RemovalDetector {
             }
         }
         return null;
+    }
+
+    /**
+     * Whether {@code object} holds a value of a single-valued item where {@code removal} names one it does not
+     * hold — the item was changed on the server after midgie deployed it. Asked only once {@link #heldValue}
+     * came back empty, to word the note that says the removal is left alone.
+     */
+    static boolean holdsOtherValue(PrismObject<? extends Objectable> object, Removal removal) {
+        if (removal.definition == null || !removal.definition.isSingleValue()) {
+            return false;
+        }
+        Item<?, ?> item = itemAt(object, removal);
+        return item != null && !item.hasNoValues();
+    }
+
+    /** The item {@code removal} names in {@code object}, or {@code null}. */
+    private static Item<?, ?> itemAt(PrismObject<? extends Objectable> object, Removal removal) {
+        ItemPath path = removal.isNested() ? removal.livePath(object) : removal.itemPath.removeIds();
+        return (path != null) ? object.findItem(path) : null;
     }
 
     /** An object that left the tree entirely: reported, never taken apart value by value. */
@@ -426,38 +524,175 @@ final class RemovalDetector {
         return orphaned;
     }
 
-    /** Add the values present in {@code lastApplied} but absent from {@code desired}. */
+    /**
+     * Add the values present in {@code lastApplied} but absent from {@code desired}, item by item.
+     *
+     * <p>This used to be the delete side of a {@code real-value} diff with last-applied in the live slot. That
+     * matches a value of a multi-valued container by content, so a {@code mapping} that only lost its
+     * {@code lifecycleState} came out as "the whole old mapping was removed". Harmless while the two-way diff
+     * rewrote the mapping in place anyway — the projection in {@code Reconciler.judgeRemovals} then no longer
+     * found the old form — but a tracked diff now leaves undeclared nested items alone, so the live mapping can
+     * still equal the old one exactly, and the removal would have deleted the <em>entire</em> mapping.
+     *
+     * <p>So the walk pairs container values the way the diff does: a value of a multi-valued container is
+     * matched in desired by container id, else by natural key ({@link NaturalKeys#match}); a matched pair is
+     * compared inside, and what the value lost is removed item by item, addressed to the server's copy of the
+     * value ({@link Removal#livePath}). A value with no counterpart — a mapping dropped entirely, or a list
+     * value without a key that no desired value equals by content — is removed whole, exactly as before.
+     * Single-valued containers are always compared inside, as prism does; a single-valued property desired
+     * still declares is a replace in the diff and never a removal; everything else loses the values desired
+     * no longer holds, by real value.
+     */
     private void collect(List<Removal> removals, PrismObject<? extends Objectable> lastApplied,
             DeployObject unit, String objectLabel, LastApplied previous) {
-        PrismObject<? extends Objectable> desired = unit.object();
-        DiffEngine.DiffResult result;
+        Target target = new Target(removals, lastApplied, unit, objectLabel, previous);
         try {
-            // last-applied in the live slot: the delete side is "was deployed, no longer declared".
-            result = new DiffEngine(prismContext).diff(desired, lastApplied, EquivalenceStrategy.REAL_VALUE,
-                    DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll());
-        } catch (Exception e) {
+            walk(target, unit.object().getValue(), lastApplied.getValue(), List.of(), ItemPath.EMPTY_PATH,
+                    ItemPath.EMPTY_PATH);
+        } catch (RuntimeException e) {
             LOG.trace("could not compare {} against revision {}", previous.sourceLabel(), lastRevision, e);
+        }
+    }
+
+    /** Where one object's removals go, and what each of them has to say about the object. */
+    private record Target(List<Removal> removals, PrismObject<? extends Objectable> lastApplied,
+            DeployObject unit, String objectLabel, LastApplied previous) {
+    }
+
+    /**
+     * Compare one desired container value against the last-applied value it is paired with.
+     *
+     * @param steps    the keyed container values crossed so far
+     * @param fullPath the id-free path of {@code applied} from the object root
+     * @param relative the id-free path of {@code applied} below the innermost step
+     */
+    private void walk(Target target, PrismContainerValue<?> desired, PrismContainerValue<?> applied,
+            List<Step> steps, ItemPath fullPath, ItemPath relative) {
+        for (Item<?, ?> appliedItem : applied.getItems()) {
+            ItemDefinition<?> definition = appliedItem.getDefinition();
+            if ((definition != null && definition.isOperational()) || appliedItem.hasNoValues()) {
+                continue; // metadata and the like: never deployed config, never a removal
+            }
+            ItemName name = appliedItem.getElementName();
+            ItemPath itemPath = fullPath.append(name);
+            ItemPath itemRelative = relative.append(name);
+            Item<?, ?> desiredItem = (desired != null) ? desired.findItem(name) : null;
+            if (desiredItem == null || desiredItem.hasNoValues()) {
+                for (PrismValue value : appliedItem.getValues()) {
+                    add(target, appliedItem, itemPath, value, steps);
+                }
+                continue;
+            }
+            if (appliedItem instanceof PrismContainer<?> appliedContainer
+                    && desiredItem instanceof PrismContainer<?> desiredContainer) {
+                boolean singleValued = definition != null ? definition.isSingleValue()
+                        : appliedContainer.getValues().size() == 1 && desiredContainer.getValues().size() == 1;
+                if (singleValued) {
+                    walk(target, desiredContainer.getValues().get(0), appliedContainer.getValues().get(0), steps,
+                            itemPath, itemRelative);
+                    continue;
+                }
+                for (PrismContainerValue<?> value : appliedContainer.getValues()) {
+                    if (containsByRealValue(desiredContainer, value)) {
+                        continue;
+                    }
+                    PrismContainerValue<?> match = NaturalKeys.match(desiredContainer, value, value.getId());
+                    if (match == null) {
+                        add(target, appliedItem, itemPath, value, steps); // dropped whole, as before
+                        continue;
+                    }
+                    List<Step> inner = new ArrayList<>(steps);
+                    inner.add(new Step(itemRelative, value, label(itemPath, appliedContainer, value)));
+                    walk(target, match, value, inner, itemPath, ItemPath.EMPTY_PATH);
+                }
+                continue;
+            }
+            if (definition != null && definition.isSingleValue()
+                    && !(definition instanceof com.evolveum.midpoint.prism.PrismReferenceDefinition)) {
+                continue; // a changed single-valued property is a replace in the diff, not a removal
+            }
+            for (PrismValue value : appliedItem.getValues()) {
+                if (!containsByRealValue(desiredItem, value)) {
+                    add(target, appliedItem, itemPath, value, steps);
+                }
+            }
+        }
+    }
+
+    private static boolean containsByRealValue(Item<?, ?> item, PrismValue value) {
+        for (PrismValue candidate : item.getValues()) {
+            if (EquivalenceStrategy.REAL_VALUE.equals(candidate, value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void add(Target target, Item<?, ?> item, ItemPath itemPath, PrismValue value, List<Step> steps) {
+        ItemDefinition<?> definition = item.getDefinition();
+        String path = pathText(itemPath, steps);
+        if (isUndeletable(itemPath, definition)) {
+            LOG.trace("{} is required and is never a removal candidate ({})", path, target.previous().sourceLabel());
             return;
         }
-        Class<?> objectClass = lastApplied.getCompileTimeClass();
-        String oid = lastApplied.getOid();
+        PrismObject<? extends Objectable> lastApplied = target.lastApplied();
         String objectName = (lastApplied.getName() != null) ? lastApplied.getName().getOrig() : null;
-        for (ItemDelta<?, ?> mod : result.delta().getModifications()) {
-            if (mod.getValuesToDelete() == null) {
-                continue;
+        String sourceFile = target.previous().sourceOf(itemPath, value);
+        target.removals().add(new Removal(target.objectLabel(), path, render(value), sourceFile,
+                lastApplied.getCompileTimeClass(), lastApplied.getOid(), objectName, definition, itemPath,
+                value.clone(), target.unit(), steps));
+    }
+
+    /**
+     * The path as the report shows it: each keyed value crossed named by its key, e.g.
+     * {@code mapping[name=Given name]/lifecycleState}, since a container id from git would mean nothing to the
+     * operator and usually is not there.
+     */
+    private static String pathText(ItemPath itemPath, List<Step> steps) {
+        if (steps.isEmpty()) {
+            return itemPath.toString();
+        }
+        StringBuilder text = new StringBuilder();
+        int consumed = 0;
+        for (Step step : steps) {
+            if (text.length() > 0) {
+                text.append('/');
             }
-            String path = mod.getPath().toString();
-            if (isUndeletable(mod.getPath(), mod.getDefinition())) {
-                LOG.trace("{} is required and is never a removal candidate ({})", path,
-                        previous.sourceLabel());
-                continue;
-            }
-            for (PrismValue value : mod.getValuesToDelete()) {
-                String sourceFile = previous.sourceOf(mod.getPath(), value);
-                removals.add(new Removal(objectLabel, path, render(value), sourceFile, objectClass, oid,
-                        objectName, mod.getDefinition(), mod.getPath(), value, unit));
+            text.append(step.label());
+            consumed += step.containerPath().size();
+        }
+        ItemPath rest = itemPath.rest(consumed);
+        for (Object segment : rest.getSegments()) {
+            if (ItemPath.isName(segment)) {
+                text.append('/').append(ItemPath.toName(segment).getLocalPart());
             }
         }
+        return text.toString();
+    }
+
+    /** {@code mapping[name=Given name]}, or {@code inducement[3]} for a value paired by container id. */
+    private static String label(ItemPath itemPath, PrismContainer<?> container, PrismContainerValue<?> value) {
+        List<String> names = new ArrayList<>();
+        for (Object segment : itemPath.getSegments()) {
+            if (ItemPath.isName(segment)) {
+                names.add(ItemPath.toName(segment).getLocalPart());
+            }
+        }
+        String local = names.isEmpty() ? "?" : names.get(names.size() - 1);
+        com.evolveum.midpoint.prism.key.NaturalKeyDefinition key = NaturalKeys.of(container);
+        ItemDefinition<?> definition = container.getDefinition();
+        List<javax.xml.namespace.QName> constituents =
+                (definition != null) ? definition.getNaturalKeyConstituents() : null;
+        if (key != null && constituents != null && !constituents.isEmpty() && NaturalKeys.carries(key, value)) {
+            List<String> parts = new ArrayList<>();
+            for (javax.xml.namespace.QName constituent : constituents) {
+                Item<?, ?> item = value.findItem(ItemName.fromQName(constituent));
+                Object real = (item != null && item.getValues().size() == 1) ? item.getRealValue() : null;
+                parts.add(constituent.getLocalPart() + "=" + (real != null ? abbreviate(String.valueOf(real)) : "?"));
+            }
+            return local + "[" + String.join(", ", parts) + "]";
+        }
+        return local + "[" + value.getId() + "]";
     }
 
     /**

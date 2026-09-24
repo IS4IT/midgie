@@ -7,16 +7,22 @@ package de.is4it.midpoint.diff;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
+import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.schema.constants.ObjectTypes;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
@@ -56,6 +62,11 @@ final class Reconciler {
         final boolean removalsDeferred;
         /** Multi-valued items on merge whose live values beyond the tree stay, e.g. {@code inducement ×2}. */
         final List<String> kept;
+        /**
+         * Items below the top level that a tracked run leaves on the server because the tree never deployed
+         * them, e.g. {@code mapping/lifecycleState ×10}.
+         */
+        final List<String> keptNested;
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
@@ -68,14 +79,16 @@ final class Reconciler {
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings, List<String> heldBack, List<String> protectedSkipped) {
             this(action, restType, oid, changes, detail, modificationXml, createBody, delta, warnings, heldBack,
-                    protectedSkipped, List.of(), false, List.of());
+                    protectedSkipped, List.of(), false, List.of(), List.of());
         }
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings, List<String> heldBack, List<String> protectedSkipped,
-                List<RemovalDetector.Removal> removing, boolean removalsDeferred, List<String> kept) {
+                List<RemovalDetector.Removal> removing, boolean removalsDeferred, List<String> kept,
+                List<String> keptNested) {
             this.kept = List.copyOf(kept);
+            this.keptNested = List.copyOf(keptNested);
             this.removing = List.copyOf(removing);
             this.removalsDeferred = removalsDeferred;
             this.action = action;
@@ -122,6 +135,16 @@ final class Reconciler {
      */
     Outcome plan(PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy,
             List<RemovalDetector.Removal> removals) throws SchemaException, IOException {
+        return plan(desired, strategy, removals, true);
+    }
+
+    /**
+     * As above; with {@code prune} unset ({@code --no-prune}) the removals are not sent. They are still
+     * passed, because they are what tells an item the tree deployed and dropped apart from one it never
+     * deployed: only the latter is reported as kept.
+     */
+    Outcome plan(PrismObject<? extends Objectable> desired, StrategyOptions.Resolved strategy,
+            List<RemovalDetector.Removal> removals, boolean prune) throws SchemaException, IOException {
         Class<?> clazz = desired.getCompileTimeClass();
         String restType = restTypeOrNull(clazz);
         if (restType == null) {
@@ -153,7 +176,7 @@ final class Reconciler {
         } else {
             current = null;
         }
-        return decide(desired, current, restType, strategy, removals);
+        return decide(desired, current, restType, strategy, removals, prune);
     }
 
     /** Decide against a caller-supplied current object (or {@code null} = absent); no server read. */
@@ -163,16 +186,27 @@ final class Reconciler {
         if (restType == null) {
             return skip(null, null, unaddressable(desired.getCompileTimeClass()));
         }
-        return decide(desired, current, restType, strategy, List.of());
+        return decide(desired, current, restType, strategy, List.of(), true);
+    }
+
+    /** As above, carrying {@code removals} the way {@link #plan} does; no server read. */
+    Outcome planAgainst(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> current,
+            StrategyOptions.Resolved strategy, List<RemovalDetector.Removal> removals, boolean prune)
+            throws SchemaException {
+        String restType = restTypeOrNull(desired.getCompileTimeClass());
+        if (restType == null) {
+            return skip(null, null, unaddressable(desired.getCompileTimeClass()));
+        }
+        return decide(desired, current, restType, strategy, removals, prune);
     }
 
     private Outcome decide(PrismObject<? extends Objectable> desired, PrismObject<? extends Objectable> current,
-            String restType, StrategyOptions.Resolved strategy, List<RemovalDetector.Removal> removals)
-            throws SchemaException {
+            String restType, StrategyOptions.Resolved strategy, List<RemovalDetector.Removal> removals,
+            boolean prune) throws SchemaException {
         String oid = desired.getOid();
         if (current != null) {
             String targetOid = (oid != null && !oid.isBlank()) ? oid : current.getOid();
-            return planPatch(restType, targetOid, desired, current, strategy, removals);
+            return planPatch(restType, targetOid, desired, current, strategy, removals, prune);
         }
         // An object that is not there holds nothing to remove.
         return planCreate(restType, oid, desired);
@@ -180,10 +214,10 @@ final class Reconciler {
 
     private Outcome planPatch(String restType, String targetOid, PrismObject<? extends Objectable> desired,
             PrismObject<? extends Objectable> current, StrategyOptions.Resolved strategy,
-            List<RemovalDetector.Removal> removals) throws SchemaException {
+            List<RemovalDetector.Removal> removals, boolean prune) throws SchemaException {
         DiffEngine.DiffResult result = new DiffEngine(prismContext)
                 .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
-                        smartReferenceCheck(strategy));
+                        smartReferenceCheck(strategy), strategy.keepsUndeclaredNested());
         // The object exists, so an item the policy applies only on create — or only while it is absent — may
         // not be this PATCH's business. Before the in-place check, so a change that is not going to be sent
         // cannot refuse the object.
@@ -204,24 +238,28 @@ final class Reconciler {
         }
         ObjectDelta<? extends Objectable> delta = result.delta();
         List<String> warnings = notesOf(result);
-        RemovalJudgement judged = judgeRemovals(delta, current, removals, warnings);
+        RemovalJudgement judged = prune ? judgeRemovals(delta, current, removals, warnings)
+                : new RemovalJudgement(List.of(), false);
         if (!judged.removing.isEmpty()) {
-            ObjectDelta<? extends Objectable> prune =
+            ObjectDelta<? extends Objectable> pruning =
                     RemovalDetector.pruneDelta(prismContext, targetOid, judged.removing, current);
-            if (prune != null) {
-                for (ItemDelta<?, ?> mod : prune.getModifications()) {
+            if (pruning != null) {
+                for (ItemDelta<?, ?> mod : pruning.getModifications()) {
                     delta.addModification(mod.clone());
                 }
             }
         }
-        List<String> kept = keptOnMerge(desired, current, delta, strategy);
+        PrismObject<? extends Objectable> after = project(current, delta);
+        List<String> kept = keptOnMerge(desired, after, strategy);
+        List<String> keptNested = keptNested(result.keptNested(), current, after, removals);
         if (!result.hasDrift() && judged.removing.isEmpty()) {
             LOG.debug("{} {}: IN_SYNC{}", restType, targetOid,
                     held.paths.isEmpty() ? "" : ", left alone: " + held.paths);
             // The (empty) delta rides along so a caller rendering this one object — 'diff', or 'deploy
             // --dry-run --format xml' — writes an empty ObjectModificationType rather than nothing.
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null,
-                    delta, warnings, held.paths, result.protectedSkippedPaths(), List.of(), judged.deferred, kept);
+                    delta, warnings, held.paths, result.protectedSkippedPaths(), List.of(), judged.deferred, kept,
+                    keptNested);
         }
         int changes = delta.getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, delta);
@@ -235,7 +273,7 @@ final class Reconciler {
                 judged.removing.size(), summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
                 delta, warnings, held.paths, result.protectedSkippedPaths(), judged.removing, judged.deferred,
-                kept);
+                kept, keptNested);
     }
 
     /**
@@ -244,20 +282,9 @@ final class Reconciler {
      * word unless someone says so, and an entry an administrator added to a list the tree means to own is
      * exactly the drift that must not go unseen.
      */
-    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo is typed by the object class the delta was built for
     private static List<String> keptOnMerge(PrismObject<? extends Objectable> desired,
-            PrismObject<? extends Objectable> current, ObjectDelta<? extends Objectable> delta,
-            StrategyOptions.Resolved strategy) {
-        if (!strategy.multiValue.isMergeActive()) {
-            return List.of();
-        }
-        PrismObject<? extends Objectable> after = current.clone();
-        try {
-            if (!delta.isEmpty()) {
-                ((ObjectDelta) delta).applyTo((PrismObject) after);
-            }
-        } catch (Exception e) {
-            LOG.trace("could not project the change to count what merge keeps on {}", current.getOid(), e);
+            PrismObject<? extends Objectable> after, StrategyOptions.Resolved strategy) {
+        if (!strategy.multiValue.isMergeActive() || after == null) {
             return List.of();
         }
         List<String> kept = new ArrayList<>();
@@ -267,6 +294,80 @@ final class Reconciler {
             }
         }
         return kept;
+    }
+
+    /**
+     * The live object with the whole PATCH applied locally, removals included, or {@code null} when prism
+     * cannot apply it — then nothing is counted as kept, which only costs a note.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo is typed by the object class the delta was built for
+    private static PrismObject<? extends Objectable> project(PrismObject<? extends Objectable> current,
+            ObjectDelta<? extends Objectable> delta) {
+        PrismObject<? extends Objectable> after = current.clone();
+        try {
+            if (!delta.isEmpty()) {
+                ((ObjectDelta) delta).applyTo((PrismObject) after);
+            }
+            return after;
+        } catch (Exception e) {
+            LOG.trace("could not project the change to count what it keeps on {}", current.getOid(), e);
+            return null;
+        }
+    }
+
+    /**
+     * What a tracked run leaves standing below the top level because the tree never deployed it: the live
+     * values the diff kept ({@link DiffEngine.DiffResult#keptNested}) that the server still holds after this
+     * PATCH, minus the items the tree <em>did</em> deploy — those are the removals' business, and are either
+     * removed or left with a note of their own ("changed after it was deployed"). Counted per id-free item
+     * path, so ten mappings an administrator gave a {@code lifecycleState} read as one entry,
+     * {@code mapping/lifecycleState ×10}.
+     */
+    private static List<String> keptNested(List<DiffEngine.KeptNested> keptByDiff,
+            PrismObject<? extends Objectable> current, PrismObject<? extends Objectable> after,
+            List<RemovalDetector.Removal> removals) {
+        if (keptByDiff.isEmpty() || after == null) {
+            return List.of();
+        }
+        List<ItemPath> deployedPaths = new ArrayList<>();
+        for (RemovalDetector.Removal removal : removals) {
+            ItemPath path = removal.livePath(current);
+            if (path != null) {
+                deployedPaths.add(path);
+            }
+        }
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (DiffEngine.KeptNested kept : keptByDiff) {
+            if (deployedPaths.stream().anyMatch(path -> path.equivalent(kept.path()))) {
+                continue;
+            }
+            Item<?, ?> item = after.findItem(kept.path());
+            if (item == null) {
+                continue;
+            }
+            int held = 0;
+            for (PrismValue value : kept.values()) {
+                if (item.getValues().stream().anyMatch(v -> EquivalenceStrategy.REAL_VALUE.equals(v, value))) {
+                    held++;
+                }
+            }
+            if (held > 0) {
+                counts.merge(idFreeText(kept.path()), held, Integer::sum);
+            }
+        }
+        List<String> kept = new ArrayList<>();
+        counts.forEach((path, count) -> kept.add(path + " ×" + count));
+        return kept;
+    }
+
+    private static String idFreeText(ItemPath path) {
+        List<String> names = new ArrayList<>();
+        for (Object segment : path.removeIds().getSegments()) {
+            if (ItemPath.isName(segment)) {
+                names.add(ItemPath.toName(segment).getLocalPart());
+            }
+        }
+        return String.join("/", names);
     }
 
     /** Which of an object's removals its PATCH carries, and whether any had to be left for a later run. */
@@ -312,8 +413,12 @@ final class Reconciler {
                 continue; // reported by the caller, which also keeps the revision from moving past it
             }
             if (RemovalDetector.heldValue(current, removal) == null) {
-                notes.add("leaving " + removal.path + " alone — the server no longer holds the value that was "
-                        + "removed from " + removal.sourceFile + " (already changed or removed)");
+                notes.add(RemovalDetector.holdsOtherValue(current, removal)
+                        ? "leaving " + removal.path + " alone — the server holds a different value than the one "
+                                + "removed from " + removal.sourceFile + " (changed on the server after it was "
+                                + "deployed)"
+                        : "leaving " + removal.path + " alone — the server no longer holds the value that was "
+                                + "removed from " + removal.sourceFile + " (already changed or removed)");
             } else if (RemovalDetector.heldValue(projected, removal) == null) {
                 LOG.trace("{} {} is already taken care of by the diff", removal.objectLabel, removal.path);
             } else {

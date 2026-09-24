@@ -317,7 +317,7 @@ final class Policy {
                 DiffEngine.MultiValueStrategy.of(globalMerge, itemRules, identity);
         logApplied(type, name, scopeRule, equivalenceRule, allowInplaceRule, smartRefsRule, globalMergeRule);
         return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace, smartRefs,
-                ApplyRules.of(applyRules, identity));
+                ApplyRules.of(applyRules, identity), false, baseline.tracked);
     }
 
     /**
