@@ -46,16 +46,18 @@ final class Reconciler {
         final ObjectDelta<? extends Objectable> delta; // the computed delta for a PATCH (for projection)
         final List<String> warnings;  // input advisories + blast radius, for the caller to report
         final List<String> heldBack;  // item paths that differ but the policy's apply= rules leave alone
+        final List<String> protectedSkipped; // encrypted values that differ but are never patched
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings) {
-            this(action, restType, oid, changes, detail, modificationXml, createBody, delta, warnings, List.of());
+            this(action, restType, oid, changes, detail, modificationXml, createBody, delta, warnings, List.of(),
+                    List.of());
         }
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
-                List<String> warnings, List<String> heldBack) {
+                List<String> warnings, List<String> heldBack, List<String> protectedSkipped) {
             this.action = action;
             this.restType = restType;
             this.oid = oid;
@@ -66,6 +68,7 @@ final class Reconciler {
             this.delta = delta;
             this.warnings = List.copyOf(warnings);
             this.heldBack = List.copyOf(heldBack);
+            this.protectedSkipped = List.copyOf(protectedSkipped);
         }
     }
 
@@ -163,7 +166,7 @@ final class Reconciler {
             LOG.debug("{} {}: IN_SYNC{}", restType, targetOid,
                     held.paths.isEmpty() ? "" : ", left alone: " + held.paths);
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null, null,
-                    result.inputWarnings(), held.paths);
+                    result.inputWarnings(), held.paths, result.protectedSkippedPaths());
         }
         int changes = result.delta().getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
@@ -178,7 +181,7 @@ final class Reconciler {
         }
         LOG.debug("{} {}: PATCH, {} change(s): {}", restType, targetOid, changes, summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
-                result.delta(), warnings, held.paths);
+                result.delta(), warnings, held.paths, result.protectedSkippedPaths());
     }
 
     private Outcome planCreate(String restType, String oid, PrismObject<? extends Objectable> desired)

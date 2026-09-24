@@ -76,6 +76,27 @@ class ReconcilerTest {
     }
 
     @Test
+    void aDifferingProtectedValueIsReportedNotPatched() throws Exception {
+        // midPoint 4.10.5 made PasswordType/hint a protected string. A changed hint must not be patched —
+        // encrypted values never are — but the outcome has to carry it, or deploy calls the user in-sync
+        // without saying the file's value was ignored.
+        String ns = "xmlns=\"" + NS + "\"";
+        PrismObject<? extends Objectable> desired = prismContext.parseObject("<user " + ns + " oid=\"" + OID
+                + "\"><name>u</name><credentials><password><hint>new hint</hint></password></credentials></user>");
+        PrismObject<? extends Objectable> current = prismContext.parseObject("<user " + ns + " oid=\"" + OID
+                + "\"><name>u</name><credentials><password><hint>old hint</hint></password></credentials></user>");
+        StrategyOptions.Resolved strategy = new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
+                DiffEngine.EquivalencePlan.auto(), DiffEngine.MultiValueStrategy.replaceAll(), false);
+
+        Reconciler.Outcome outcome = new Reconciler(prismContext, null, true, true)
+                .planAgainst(desired, current, strategy);
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertTrue(outcome.protectedSkipped.stream().anyMatch(path -> path.contains("hint")),
+                "the skipped hint must be reported: " + outcome.protectedSkipped);
+    }
+
+    @Test
     void presentAndEqualIsInSync() throws Exception {
         searchResponse = objectList(role(OID, "Manager", "same"));
         Reconciler.Outcome outcome = plan(false, false, role(OID, "Manager", "same"));

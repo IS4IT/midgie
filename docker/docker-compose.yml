@@ -9,7 +9,7 @@
 # IMPORTANT: the midPoint image tag (MP_VER) must match <midpoint.version> in
 # pom.xml. midgie bundles the compile-time base schema for that version,
 # and diffing against a different major line will misparse objects. Both are
-# pinned to 4.10.3 (bump together).
+# pinned to 4.10.5 (bump together).
 #
 # Usage (from project root):
 #   docker compose -f docker/docker-compose.yml up -d      # start (DB + repo init + server)

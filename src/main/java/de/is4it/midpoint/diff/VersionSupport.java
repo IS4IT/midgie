@@ -20,8 +20,9 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectType;
 
 /**
  * Compares the bundled compile-time midPoint schema version against a live server's version. The schema
- * jar is version-coupled (see DESIGN.md / docker/README.md), so a mismatched major line can silently
- * misparse objects. Best-effort: if either version cannot be determined it stays quiet.
+ * jar is version-coupled (see DESIGN.md / docker/README.md), so a mismatched line — or a server on a newer
+ * patch release — can silently misparse objects. Best-effort: if either version cannot be determined it says
+ * the check did not run, and otherwise stays quiet.
  */
 final class VersionSupport {
 
@@ -79,7 +80,10 @@ final class VersionSupport {
         }
     }
 
-    /** Warn on stderr if the live server's major line differs from the bundled schema version. */
+    /**
+     * Warn on stderr if the live server is on a different line than the bundled schema, or on a newer patch
+     * release of the same line.
+     */
     static void warnIfMismatch(PrismContext prismContext, MidpointRestClient client) {
         String compile = compileTimeVersion();
         String live = liveVersion(prismContext, client);
@@ -99,6 +103,45 @@ final class VersionSupport {
             System.err.println("midgie: warning: server midPoint version " + live
                     + " differs from the bundled schema version " + compile
                     + "; objects may be misparsed. Rebuild with a matching <midpoint.version>.");
+            return;
+        }
+        // Within a line the direction decides. midPoint patch releases change the schema too — mostly by
+        // adding, occasionally by changing a type (4.10.5 made PasswordType/hint a protected string) — so a
+        // server on a newer patch may send what this build does not know. A server on an older patch only
+        // lacks things the bundled schema knows, which is the safe way round and not worth a line per run.
+        int patchOrder = comparePatch(compile, live);
+        if (patchOrder < 0) {
+            System.err.println("midgie: warning: server midPoint version " + live
+                    + " is a newer patch release than the bundled schema version " + compile
+                    + "; items it added or changed may be misparsed. Use a midgie built for " + live
+                    + " or later.");
+        } else if (patchOrder > 0) {
+            LOG.debug("server {} is an older patch release than the bundled schema {}; the bundled schema "
+                    + "is a superset", live, compile);
+        }
+    }
+
+    /**
+     * Compare the patch numbers of two versions on the same line: negative when {@code bundled} is older than
+     * {@code live}, positive when newer, zero when equal or when either cannot be read as a number — an
+     * unreadable version is not evidence of a mismatch.
+     */
+    static int comparePatch(String bundled, String live) {
+        Integer a = patchOf(bundled);
+        Integer b = patchOf(live);
+        return (a == null || b == null) ? 0 : Integer.compare(a, b);
+    }
+
+    /** {@code "4.10.5"} / {@code "4.10.5-SNAPSHOT"} -> {@code 5}; {@code null} when there is no numeric patch. */
+    static Integer patchOf(String version) {
+        String[] parts = version.split("[.-]");
+        if (parts.length < 3) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(parts[2]);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 

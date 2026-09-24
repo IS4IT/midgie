@@ -624,6 +624,20 @@ public class DeployCommand implements Callable<Integer> {
         }
     }
 
+    /**
+     * Say which encrypted values differ but were not sent. {@code diff} and {@code apply} always said so;
+     * {@code deploy} reported such an object {@code in-sync} without a word, so a password hint changed in the
+     * tree — protected since midPoint 4.10.5 — looked applied when it had been ignored. Printed on every run,
+     * not just a preview, because nothing else tells the operator the value was never written.
+     */
+    private void reportProtectedSkipped(DeployObject unit, Reconciler.Outcome outcome) {
+        if (!outcome.protectedSkipped.isEmpty()) {
+            note("note: " + unit.objectPath() + ": skipped protected value(s) at "
+                    + String.join(", ", outcome.protectedSkipped) + " — encrypted values are never patched; "
+                    + "they are written only when midgie creates the object. Change them through midPoint.");
+        }
+    }
+
     /** Name the policy lines that applied to nothing, so a typo is not mistaken for a rule that ran. */
     private void reportUnmatchedPolicyRules() {
         if (policy == null) {
@@ -946,6 +960,7 @@ public class DeployCommand implements Callable<Integer> {
         if (preview) {
             reportHeldBack(unit, outcome);
         }
+        reportProtectedSkipped(unit, outcome);
         switch (action) {
             case CREATE:
                 tally.created++;
@@ -1071,6 +1086,7 @@ public class DeployCommand implements Callable<Integer> {
                 // nothing left to answer for now that an object's files are reconciled together.
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
                 reportHeldBack(unit, outcome);
+                reportProtectedSkipped(unit, outcome);
 
                 switch (outcome.action) {
                     case CREATE:

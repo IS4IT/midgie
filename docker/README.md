@@ -35,7 +35,7 @@ test stacks (e.g. `connector-sap` on 11080) without port clashes.
 
 `midgie` bundles midPoint's **compile-time base schema** for the version pinned by
 `<midpoint.version>` in `pom.xml`. That must match the running server's major line, or
-objects fetched over REST will be misparsed. Both are pinned to **4.10.3** — to target
+objects fetched over REST will be misparsed. Both are pinned to **4.10.5** — to target
 another version, bump `MP_VER` in `docker/.env` **and** `midpoint.version` in `pom.xml`
 together, then rebuild.
 

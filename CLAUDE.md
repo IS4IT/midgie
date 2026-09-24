@@ -19,7 +19,7 @@ java -jar target/midgie.jar diff examples/a.xml examples/b.xml
 
 ## Things that will bite you
 
-- **Base-schema version coupling.** The `midpoint-schema` jar carries the *compile-time* base object model, so it must match the target midPoint's major line. It is pinned by `<midpoint.version>` in `pom.xml` (default `4.10.3`). Targeting another midPoint version = bump that property **and** `MP_VER` in `docker/.env`, then rebuild. Two guards enforce this: the build fails (maven-antrun in the `validate` phase) if `docker/.env`'s `MP_VER` drifts from `<midpoint.version>`, and at runtime the live modes warn if the server's version (read via `GET /nodes/current`) is a different major line than the bundled schema (`VersionSupport`, using the filtered `build-info.properties`). You cannot feed the base schema in as XML; only *extension* schema is runtime-loadable (`--schema-dir` / `--schema` / live-read). See DESIGN.md "Schema".
+- **Base-schema version coupling.** The `midpoint-schema` jar carries the *compile-time* base object model, so it must match the target midPoint's major line. It is pinned by `<midpoint.version>` in `pom.xml` (default `4.10.5`). Targeting another midPoint version = bump that property **and** `MP_VER` in `docker/.env`, then rebuild. Two guards enforce this: the build fails (maven-antrun in the `validate` phase) if `docker/.env`'s `MP_VER` drifts from `<midpoint.version>`, and at runtime the live modes warn if the server's version (read via `GET /nodes/current`) is a different major line than the bundled schema, or a newer patch release of the same line (`VersionSupport`, using the filtered `build-info.properties`). You cannot feed the base schema in as XML; only *extension* schema is runtime-loadable (`--schema-dir` / `--schema` / live-read). See DESIGN.md "Schema".
 
 - **midgie's own version is the git tag, and the pom's is a placeholder.** `pom.xml`'s `<version>` stays `0.1.0-SNAPSHOT` and is never bumped — a release is cut by tagging (`git tag -a v0.12.0 -m "midgie 0.12.0"` and pushing it), and the tag is the single source of truth. Every build stamps `git describe --tags --dirty`, minus the `v`, into `build-info.properties` as `midgie.version` (the `stamp-version-from-git` antrun execution), and that is what `--version` reports: `0.12.0` on a tag, `0.12.0-3-gabc1234-dirty` past one. The pom version is only the fallback for a build that cannot read a tag — a source archive, a shallow clone — and such a build logs Ant's `[ERROR] [exec] Result: 128` while still succeeding. The release workflow additionally applies the tag with `versions:set`, which is what makes that fallback correct there.
 
@@ -31,7 +31,7 @@ java -jar target/midgie.jar diff examples/a.xml examples/b.xml
 
 ## Verifying midPoint APIs
 
-The midPoint source is checked out at **`/Volumes/Daten/git/midpoint`**, at the tag matching `<midpoint.version>` (currently `v4.10.3`). When in doubt about a signature, grep there rather than guessing — DESIGN.md's API table lists the exact classes and line numbers already confirmed.
+The midPoint source is checked out at **`/Volumes/Daten/git/midpoint`**, at the tag matching `<midpoint.version>` (currently `v4.10.5`). When in doubt about a signature, grep there rather than guessing — DESIGN.md's API table lists the exact classes and line numbers already confirmed.
 
 ## Conventions
 

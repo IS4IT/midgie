@@ -29,6 +29,17 @@ class VersionSupportTest {
     }
 
     @Test
+    void comparePatchTellsWhichSideIsNewer() {
+        // Patch releases change the schema too (4.10.5 made PasswordType/hint a protected string), so the
+        // direction within a line matters: a server on a newer patch is the one that can send the unknown.
+        assertTrue(VersionSupport.comparePatch("4.10.5", "4.10.6") < 0, "server on a newer patch");
+        assertTrue(VersionSupport.comparePatch("4.10.5", "4.10.3") > 0, "server on an older patch");
+        assertEquals(0, VersionSupport.comparePatch("4.10.5", "4.10.5-SNAPSHOT"));
+        assertEquals(0, VersionSupport.comparePatch("4.10.5", "4.10"), "no patch to compare is not a mismatch");
+        assertEquals(0, VersionSupport.comparePatch("4.10.5", "4.10.x"));
+    }
+
+    @Test
     void compileTimeVersionIsFilteredIntoTheJar() {
         String version = VersionSupport.compileTimeVersion();
         assertNotNull(version, "build-info.properties must be on the classpath");

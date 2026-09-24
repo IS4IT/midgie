@@ -24,7 +24,7 @@
         <!-- Base-schema version knob. The midpoint-schema jar carries the COMPILE-TIME base
              object model (UserType, RoleType, ...), so this MUST match the target midPoint's
              major line. Bump it (and rebuild) to target a different midPoint version. -->
-        <midpoint.version>4.10.3</midpoint.version>
+        <midpoint.version>4.10.5</midpoint.version>
 
         <picocli.version>4.7.6</picocli.version>
         <junit.version>5.10.2</junit.version>

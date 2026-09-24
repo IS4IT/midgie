@@ -254,7 +254,14 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 - **Base** model (UserType, RoleType, SystemConfigurationType, … and their item definitions) is
   **compile-time** — generated Java bound to XSD, loaded from the `midpoint-schema` jar. It **cannot** be
   supplied as XML. The bundled jar version (`midpoint.version` in `pom.xml`) must match the target's major
-  line. This is why a fat JAR is version-specific (ninja and midPoint Studio are too).
+  line. This is why a fat JAR is version-specific (ninja and midPoint Studio are too). Within a line the
+  build tracks the **newest patch release**: patch releases change the schema as well (4.10.4 added natural
+  keys and GUI items, 4.10.5 made `PasswordType/hint` a `ProtectedStringType`), and the newest one is a
+  superset of what an older patch on the same line sends. `VersionSupport` warns on a different line and on
+  a server running a newer patch than the bundled schema; an older patch is only logged. Bundling several
+  patch schemas (per-version classloaders, or older XSDs overlaid on the newest classes) was considered and
+  rejected: the gain over "newest patch plus handling the rare type change" does not pay for its size and
+  fragility.
 - **Extension** schema (custom `extension` attributes, custom `SchemaType` objects) is **runtime**:
   - *File mode:* `--schema <file>` (repeatable) and/or `--schema-dir <dir>`. Both accept either format,
     chosen by extension: a `.xsd` is a raw XSD, a `.xml` is an exported `SchemaType` object (its embedded

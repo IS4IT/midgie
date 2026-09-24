@@ -563,9 +563,7 @@ A CA certificate is the case worth spelling out. With `cacert` in the file, TLS 
 
 ## Safety guards
 
-- **Protected/encrypted values** — `ProtectedStringType` deltas (e.g. `credentials/password/value`) are
-  dropped from the delta and their paths reported: the ciphertext re-encrypts on every fetch, so diffing it
-  yields spurious deltas *and* would leak the secret. Rotate credentials through midPoint's own API.
+- **Protected/encrypted values** — `ProtectedStringType` deltas (e.g. `credentials/password/value`) are dropped from the delta and their paths reported: the ciphertext re-encrypts on every fetch, so diffing it yields spurious deltas *and* would leak the secret. Rotate credentials through midPoint's own API. Since midPoint 4.10.5 this includes the password **hint** (`credentials/password/hint`): a hint in the tree is still written when midgie creates the user, but no longer patched on an existing one. `diff`, `apply` and `deploy` each name every protected value they skipped, so an ignored change does not pass for an applied one.
 - **Items the server withholds** — midPoint does not return some items unless they are asked for, and says so by sending `<row incomplete="true"/>`. A `LookupTableType`'s `row` is the everyday case (a `jpegPhoto` another): read as written it means "no rows", so a lookup table would re-propose its whole contents on every run and never reach in-sync, and a row an admin had added would be in line for deletion without ever being named. midgie re-reads a live object asking for whatever came back incomplete, so the diff sees the real thing. Anything the server still will not hand over — no read authorization on it, usually — is **left out of the delta** and reported rather than diffed as empty: unknown is not absent, and a delta built on that would overwrite content midgie never saw.
 - **Type/OID cross-check** — enforces the "same object" contract: the diff refuses inputs of different
   types, or inputs that both carry an OID when the OIDs differ, so you cannot accidentally diff the wrong
@@ -573,9 +571,7 @@ A CA certificate is the case worth spelling out. With `cacert` in the file, TLS 
   governs).
 - **Accrued in-place merge edits** — see `--allow-inplace-merge` above; refused by default.
 - **Smart references** — a reference written as a search filter instead of an OID, so the file stays portable across instances where the target's OID differs (`connectorRef` is the everyday case). midPoint resolves the filter **at import** and stores the OID; your file still says "filter". Diffed literally that reads as a change, and the resulting PATCH strips the OID — and a modify does *not* re-resolve the filter, so the object is left pointing at nothing. midgie therefore treats the resolved OID as satisfying the filter and reports **in-sync**, and any PATCH it does send for such a reference carries `?options=reevaluateSearchFilters` so midPoint rebinds it instead. `--smart-refs verify` confirms the OID by running the filter against the server first (a mismatch is then a real change); `--smart-refs resolve` always sends the file's form and lets midPoint re-resolve. Settable per object in `--policy` as `smart-refs=`.
-- **Base-schema version coupling** — the bundled `midpoint-schema` jar is the *compile-time* object model,
-  so it must match the target midPoint's major line. In live mode the tool warns if the server's version
-  (read via `GET /nodes`) is a different major line than the bundled schema.
+- **Base-schema version coupling** — the bundled `midpoint-schema` jar is the *compile-time* object model, so it must match the target midPoint's line (4.10, 4.11, …). Patch releases change the schema too — mostly by adding items, occasionally by changing a type, as 4.10.5 did for `PasswordType/hint` — so midgie is built against the **newest** patch of its line, which knows everything an older patch of that line sends. In live mode the tool reads the server's version (`GET /nodes/current`) and warns when it is on a different line, or on a **newer patch** than the bundled schema; an older patch on the same line is the safe direction and is only logged under `--debug`.
 
 ## Schema handling
 
@@ -590,7 +586,7 @@ Two layers (full detail in [`DESIGN.md`](DESIGN.md#schema-two-layers-two-knobs))
 ## Targeting another midPoint version
 
 The bundled base schema is version-specific. To target a different midPoint major line, bump
-`<midpoint.version>` in `pom.xml` (default **4.10.3**) **and** `MP_VER` in `docker/.env`, then rebuild. A
+`<midpoint.version>` in `pom.xml` (default **4.10.5**) **and** `MP_VER` in `docker/.env`, then rebuild. A
 build-time check fails if those two drift apart. `bin/midgie --version` prints the tool version (from the
 git tag the build was cut from) and the bundled schema line.
 
