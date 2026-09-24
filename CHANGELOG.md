@@ -5,6 +5,18 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-09-24
+
+### Changed
+
+- **Built against midPoint 4.10.5 (was 4.10.3).** Patch releases change the schema too: 4.10.4 added natural keys for a resource's `defaultOperationPolicy` (by `lifecycleState`) and for simulated reference types (by `name`), plus new GUI items, and 4.10.5 turned `PasswordType/hint` into an encrypted `ProtectedStringType`. midgie now tracks the newest patch of its line, which knows everything an older 4.10.x server sends: the new keys let `--equivalence auto` update those entries in place instead of replacing the list, and objects using the new items parse. A password hint is now handled like the password value — written when midgie creates the user, never patched afterwards. The test rig runs 4.10.5, and the live tests pass against it.
+
+- **The version check now looks at the patch release too.** It compared only major and minor, so a server on a newer patch of the same line passed silently even though it may send items this build does not know. It now warns when the server runs a newer patch than the bundled schema; an older patch is the safe direction and is only logged under `--debug`. A different line warns as before.
+
+### Fixed
+
+- **`deploy` now says when it skipped an encrypted value.** Encrypted values are never patched, and `diff` and `apply` have always named the ones they skipped; `deploy` reported such an object `in-sync` without a word. With the password hint encrypted since midPoint 4.10.5, a hint changed in the tree looked applied when it had been ignored. `deploy` now prints `skipped protected value(s) at credentials/password/hint` for the object, on every run and not only in a preview, since nothing else tells the operator the value was never written.
+
 ## [0.12.0] - 2026-09-23
 
 ### Added
@@ -391,7 +403,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/IS4IT/midgie/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/IS4IT/midgie/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/IS4IT/midgie/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/IS4IT/midgie/compare/v0.11.0...v0.11.1
