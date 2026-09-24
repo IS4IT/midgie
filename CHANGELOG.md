@@ -5,6 +5,24 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **The `apply` subcommand.** It was `deploy` for one object, written a second time: its own lookup, its own notes, its own output, and small differences between the two that nobody had chosen — `apply` could not read tree-local schemas or a policy, and `deploy` never said when the server withheld an item. `deploy` already takes files as well as folders, so `deploy role.xml` is the replacement; `deploy role.xml --dry-run --format xml` gives the PATCH (or POST) body `apply --dry-run` used to print.
+
+### Changed
+
+- **A live `diff` is `deploy --dry-run --format xml` for its one object, and runs through the same code.** The lookup, the policy (`diff` now takes `--policy`), the reconciliation and the payload are deploy's, so the two cannot disagree about a file. An object that does not exist yet is shown as the POST that would create it, with exit `1`, instead of failing with "does not exist". `diff` still cannot write. An offline diff of two files is unchanged.
+
+- **`--no-match-by-name` now always means what it says.** With creating on (the default), an OID-less object was looked up by name to avoid posting a duplicate — and when the lookup found one, it was patched, which is matching by name. It is now skipped with a message saying why; a `diff` of such an object exits `2`, since it has no change to show.
+
+### Added
+
+- **`deploy --dry-run --format xml|json|summary [-o FILE]`** writes the change of a run holding exactly one object to stdout or a file, and moves the plan rows to stderr. **`deploy --oid`** addresses such a run's object.
+
+- **`deploy` names items the server withheld and merge fallbacks**, as `diff` always did.
+
 ## [0.12.1] - 2026-09-24
 
 ### Changed

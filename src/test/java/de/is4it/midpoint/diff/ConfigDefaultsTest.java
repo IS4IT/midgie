@@ -77,7 +77,7 @@ class ConfigDefaultsTest {
     void aQualifiedKeyAppliesToOneCommandOnly(@TempDir Path dir) throws Exception {
         Path desired = writeXml(dir, "desired.xml", user(null));
         Path current = writeXml(dir, "current.xml", user("only on the server"));
-        useConfig(dir, "midgie.apply.scope = full");   // apply, not diff
+        useConfig(dir, "midgie.deploy.scope = full");   // deploy, not diff
 
         assertEquals(0, run("diff", desired.toString(), current.toString()).exit,
                 "a key qualified with another command must not reach this one");
@@ -343,8 +343,8 @@ class ConfigDefaultsTest {
         assertTrue(Main.insecureRequested(new String[] {"diff", "a.xml", "b.xml"}),
                 "the file's insecure must reach the latch");
 
-        useConfig(dir, "midgie.apply.insecure = true");
-        assertTrue(Main.insecureRequested(new String[] {"apply", "a.xml"}),
+        useConfig(dir, "midgie.deploy.insecure = true");
+        assertTrue(Main.insecureRequested(new String[] {"deploy", "a.xml"}),
                 "including when it is qualified with a command");
 
         useConfig(dir, "insecure = false");

@@ -155,17 +155,17 @@ helm upgrade midgie charts/midgie -n <namespace> -f charts/midgie/values-openshi
 
 ## Commands
 
-`midgie` has five subcommands. **`diff`** and **`apply`** work on a **single object**; **`deploy`** reconciles a **folder tree** of them; **`rollback`** puts back what the last `deploy` changed; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
+`midgie` has four subcommands. **`diff`** shows the change for a **single object** and never writes; **`deploy`** reconciles any number of **files and folders** — one file is a tree of one; **`rollback`** puts back what the last `deploy` changed; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
 
 Every `init` step is opt-in, because each one writes something: `init` on its own prints its help and exits 2 rather than picking a step for you.
 
 > Each object is compared with **itself**, not another object: its *desired* state (how you want it) against its *current* state (how it is now), and the delta transforms current → desired. If both sides carry an OID and the OIDs differ, the run is refused.
 
-In live mode `diff` and `apply` address the object by OID (its `oid`, or `--oid`), and `deploy` by the OID in each file; if it has none it is resolved on the server by type + name (a single match). That is the default on all three, since a tree whose files carry no OIDs is the ordinary way to write one; **`--no-match-by-name`** opts out and requires an OID. An ambiguous name — two live objects sharing it — is always an error rather than a guess.
+In live mode each object is addressed by the OID in its file (or `--oid`, when the run holds exactly one object); if it has none it is resolved on the server by type + name (a single match). That is the default, since a tree whose files carry no OIDs is the ordinary way to write one; **`--no-match-by-name`** opts out: an OID-less object that already exists is then skipped rather than patched by name. An ambiguous name — two live objects sharing it — is always an error rather than a guess.
 
 ### `diff` — the minimal delta
 
-Emits the `ObjectModificationType`. The current state is a local `CURRENT` file (offline) or, with `--url`, a `GET` over REST (fetched by the desired object's `oid`, or `--oid`). Pass `-` for either path to read from stdin.
+Emits the `ObjectModificationType`. The current state is a local `CURRENT` file (offline) or, with `--url`, the object on a running server. Pass `-` for either path to read from stdin.
 
 ```bash
 # Offline: desired vs a saved copy of its current state
@@ -177,23 +177,19 @@ bin/midgie diff desired.xml --url https://mp.example/midpoint --user administrat
 
 An explicit `CURRENT` file means offline; `--url` (or `MIDPOINT_URL`) means live — the two together are an error, and a URL inherited only from `MIDPOINT_URL` is a fallback that a `CURRENT` file overrides (so an env var never breaks a file diff).
 
-### `apply` — reconcile one live object
+A live `diff` **is** `deploy --dry-run --format xml` for that one object, and runs through the same code: the same lookup, the same `--policy`, the same notes, byte-for-byte the same payload. An object that does not exist yet comes out as the `POST` body that would create it (exit `1`), not as an error. What `diff` adds is that it cannot write — it has no flag that leads to a `PATCH` — which is what you want from a drift check in CI or a read-only account. An offline diff compares the two files as they are, with no policy.
 
-Fetches the object's current state, computes the delta, shows what would change, and — after confirmation — `PATCH`es it. Idempotent (nothing is sent when already in sync); an object that does not exist yet is `POST`ed (operational/metadata items stripped first) unless `--no-create-if-absent` says to fail instead; `--dry-run` reports without writing (exit `1` if it would change anything); `--yes`/`-y` skips the prompt (required in non-interactive use).
+### `deploy` — reconcile files and folders
 
-```bash
-bin/midgie apply desired.xml --url https://mp.example/midpoint --user administrator --create-if-absent
-```
-
-### `deploy` — reconcile a folder tree
-
-Walks a folder tree of desired-state object XML, sorts it by dependency, and either prints the apply order (offline) or reconciles it against a live server (`--url`).
+Takes any number of files and folders (folders are walked recursively), sorts the objects by dependency, and either prints the apply order (offline) or reconciles them against a live server (`--url`). A single file is simply a tree of one, which is how you apply one object:
 
 ```bash
+bin/midgie deploy role.xml --url https://mp.example/midpoint --user administrator   # one object, with a prompt
+bin/midgie deploy role.xml --url … --dry-run --format xml > patch.xml             # its PATCH (or POST) body
 bin/midgie deploy config/          # offline: print the dependency-ordered apply plan
 bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator --dry-run   # preview the changes
-bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator --create-if-absent --yes   # apply
-bin/midgie deploy config/ --url … --create-if-absent --plan out/   # write the changes to out/ for review
+bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator --yes   # apply
+bin/midgie deploy config/ --url … --plan out/                      # write the changes to out/ for review
 bin/midgie deploy --apply-plan out/ --url … --yes                  # replay a reviewed plan
 ```
 
@@ -316,9 +312,7 @@ The contract lets CI gate on drift without parsing output:
 
 | command | `0` | `1` | `2` |
 |---|---|---|---|
-| `diff` | no differences | differences found (drift) | error |
-| `apply --dry-run` | already in sync | would create/patch | error |
-| `apply` (real write) | applied, created, in sync, or declined | — | error |
+| `diff` | no differences | differences found (drift), or the object would be created | error, or the object was skipped |
 | `deploy --dry-run` / `--plan` | nothing to change | would change something | error |
 | `deploy` (real apply) | all applied/in-sync/skipped/declined | — | a unit failed, or error |
 | `deploy` (offline, no `--url`) | printed the apply order | — | error |
@@ -352,7 +346,7 @@ Setting `--equivalence natural-keys` by hand is almost always worse than leaving
 **Multi-value handling still needs choosing.** The default `replace` makes a run **converge** and keeps **drift visible**. `merge` buys safety from accidental deletion, but it gives up both, so turn it on deliberately and per path rather than globally:
 
 - **It cannot express an edit.** A content change reads as *old value gone, new value added*, and merge drops the deletion — so it keeps both. With live `subtype=[alpha]` and desired `[beta]` you get `[alpha, beta]`, not `[beta]`.
-- **It cannot express a removal.** Dropping an entry from your file no longer removes it from the server, and because the delta comes out empty `diff` reports `No differences.` and exits `0`. Drift detection and the CI exit-code gate stop seeing anything the file does not declare. `deploy` closes this for a version-controlled tree — it compares against what it last applied and reports the values you dropped (`--prune` removes them) — but `diff` and `apply`, which have no such history, still cannot see a removal at all.
+- **It cannot express a removal.** Dropping an entry from your file no longer removes it from the server, and because the delta comes out empty `diff` reports `No differences.` and exits `0`. Drift detection and the CI exit-code gate stop seeing anything the file does not declare. `deploy` closes this for a version-controlled tree — it compares against what it last applied and reports the values you dropped (`--prune` removes them) — but `diff`, which does not read that history, still cannot see a removal at all.
 
 Rule of thumb: keep a path on **replace** when your tree is authoritative for that list, and use **merge** where it is not — where the list also holds entries midPoint ships, an admin added live, or another team's tree owns. Note that *your own* tree splitting a list across several files is **not** one of those cases: `deploy` combines the files describing one object before diffing, so composition needs no merge and keeps removals working.
 
@@ -428,7 +422,7 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 | `--url URL` | midPoint base URL (or `MIDPOINT_URL`), e.g. `https://mp.example/midpoint`. A trailing `/ws/rest` is accepted. |
 | `--user USER` | REST user (or `MIDPOINT_USER`). |
 | `--password`, `--password-env VAR`, `--password-file FILE` | Password sources; resolved in the order **`--password` → `--password-env` → `--password-file` → `MIDPOINT_PASSWORD` → interactive prompt**. Prefer anything but `--password` (it is visible in `ps`/shell history). |
-| `--oid OID` | *(diff, apply)* Object to fetch/patch. Defaults to the OID in the desired object. |
+| `--oid OID` | *(diff, deploy)* Object to fetch/patch when the run holds exactly one object. Defaults to the OID in its file. |
 | `--cacert FILE` | Verify the server's TLS certificate against this CA cert (PEM). |
 | `--insecure` | Trust any TLS certificate and skip hostname verification (self-signed dev servers). |
 | `--proxy URL` | Forward proxy, `http://proxy.corp:3128` or `proxy.corp:3128` (or `https_proxy`/`http_proxy`). |
@@ -467,15 +461,15 @@ midgie deploy config/ --url https://mp.example/midpoint \
 
 | flag | meaning |
 |---|---|
-| `--format xml\|json\|summary` | *(diff, apply)* `xml` (default) / `json`: the `ObjectModificationType`. `summary`: a human-readable changed-path list. |
-| `-o, --output FILE` | *(diff, apply)* Write the delta to `FILE` instead of stdout. |
+| `--format xml\|json\|summary` | *(diff; deploy with `--dry-run` and one object)* `xml` (diff's default) / `json`: the `ObjectModificationType`, or the `POST` body for an object that does not exist yet. `summary`: a human-readable changed-path list. Under `deploy` the plan rows move to stderr. |
+| `-o, --output FILE` | *(diff, deploy)* Write the `--format` output to `FILE` instead of stdout. |
 | `-q, --quiet` | Suppress advisory notes/status; keep the delta payload, errors, and exit code. |
 | `-v, --debug` | Follow what midgie is doing on stderr: one line per step (mode, connection, config files, schema registration, each REST call) and per object-level decision (the diff summary, the reconcile outcome, which policy rule applied). midgie's own loggers only — the prism/framework logs stay quiet. |
 | `--trace` | Everything `--debug` shows plus the detail behind it: per-file and per-value decisions, stack traces, full REST request/response bodies (**may include sensitive values**), and the framework logs. |
-| `--no-create-if-absent` | *(apply, deploy)* Fail on an object that does not exist instead of creating it (and skip an OID-less one). Creating is the default. |
-| `--no-match-by-name` | *(diff, apply, deploy)* Require an OID. Resolving an OID-less object by type + name (a single match) is the default. |
-| `--dry-run` | *(apply, deploy)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
-| `-y, --yes` | *(apply, deploy)* Apply without the interactive confirmation prompt (required non-interactively). |
+| `--no-create-if-absent` | *(deploy)* Fail on an object that does not exist instead of creating it (and skip an OID-less one). Creating is the default. |
+| `--no-match-by-name` | *(diff, deploy)* Do not patch an OID-less object found by type + name — skip it instead. Resolving it by name (a single match) is the default. |
+| `--dry-run` | *(deploy)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
+| `-y, --yes` | *(deploy)* Apply without the interactive confirmation prompt (required non-interactively). |
 
 `deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--policy <file>`, `--rollback-plan <dir>` / `--no-rollback-plan`, and `--confirm-each-apply` — described in the `deploy` section above.
 
@@ -563,7 +557,7 @@ A CA certificate is the case worth spelling out. With `cacert` in the file, TLS 
 
 ## Safety guards
 
-- **Protected/encrypted values** — `ProtectedStringType` deltas (e.g. `credentials/password/value`) are dropped from the delta and their paths reported: the ciphertext re-encrypts on every fetch, so diffing it yields spurious deltas *and* would leak the secret. Rotate credentials through midPoint's own API. Since midPoint 4.10.5 this includes the password **hint** (`credentials/password/hint`): a hint in the tree is still written when midgie creates the user, but no longer patched on an existing one. `diff`, `apply` and `deploy` each name every protected value they skipped, so an ignored change does not pass for an applied one.
+- **Protected/encrypted values** — `ProtectedStringType` deltas (e.g. `credentials/password/value`) are dropped from the delta and their paths reported: the ciphertext re-encrypts on every fetch, so diffing it yields spurious deltas *and* would leak the secret. Rotate credentials through midPoint's own API. Since midPoint 4.10.5 this includes the password **hint** (`credentials/password/hint`): a hint in the tree is still written when midgie creates the user, but no longer patched on an existing one. `diff` and `deploy` each name every protected value they skipped, so an ignored change does not pass for an applied one.
 - **Items the server withholds** — midPoint does not return some items unless they are asked for, and says so by sending `<row incomplete="true"/>`. A `LookupTableType`'s `row` is the everyday case (a `jpegPhoto` another): read as written it means "no rows", so a lookup table would re-propose its whole contents on every run and never reach in-sync, and a row an admin had added would be in line for deletion without ever being named. midgie re-reads a live object asking for whatever came back incomplete, so the diff sees the real thing. Anything the server still will not hand over — no read authorization on it, usually — is **left out of the delta** and reported rather than diffed as empty: unknown is not absent, and a delta built on that would overwrite content midgie never saw.
 - **Type/OID cross-check** — enforces the "same object" contract: the diff refuses inputs of different
   types, or inputs that both carry an OID when the OIDs differ, so you cannot accidentally diff the wrong

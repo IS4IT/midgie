@@ -93,8 +93,11 @@ public class DeployCommand implements Callable<Integer> {
             description = "Prompt before each individual change (per itemDelta) instead of once for the whole tree.")
     boolean confirmEachApply;
 
-    // Creating and name-matching are the defaults; these opt out. See the note on ApplyCommand's copy for
-    // why these are separate --no-x options rather than picocli's `negatable`.
+    // Creating and name-matching are the defaults; these opt out, following the same shape as
+    // --no-rollback-plan and --no-live-schema. picocli's `negatable = true` looks like the tidier way to
+    // express it and is not: a negatable flag flips *away from* its declared default
+    // (CommandLine.applyValueToSingleValuedField, "#712 flip the default value"), so with defaultValue
+    // "true" both spellings inverted — plain --create-if-absent turned creation OFF.
     @Option(names = "--no-create-if-absent",
             description = "Fail on an object that does not exist instead of creating it, and skip an "
                     + "OID-less one. Creating is otherwise the default.")
@@ -161,8 +164,19 @@ public class DeployCommand implements Callable<Integer> {
                     + "(root commit + path). Only needed for setups where that derivation does not fit.")
     String app;
 
+    @Option(names = "--format", paramLabel = "xml|json|summary",
+            description = "With --dry-run and exactly one object: write its change to stdout (or -o) — the "
+                    + "PATCH body as ObjectModificationType (xml/json) or a changed-path list (summary); for an "
+                    + "object that does not exist yet, the POST body. The plan rows move to stderr.")
+    String format;
+
+    @Option(names = {"--output", "-o"}, paramLabel = "FILE",
+            description = "Write the --format output to FILE instead of stdout (implies --format xml).")
+    File output;
+
     @Option(names = {"--quiet", "-q"},
-            description = "Suppress the plan/status output and notes; keep errors, failures, and the exit code.")
+            description = "Suppress the plan/status output and notes; keep errors, failures, the --format "
+                    + "output, and the exit code.")
     boolean quiet;
 
     @Option(names = {"--debug", "-v"},
@@ -175,6 +189,14 @@ public class DeployCommand implements Callable<Integer> {
                     + "decisions, stack traces, REST request/response bodies (may include sensitive values), "
                     + "and the prism/framework logs.")
     boolean trace;
+
+    /**
+     * Set by {@code diff}, which is this command's preview of one object under another name: its stdout is the
+     * delta, so the plan rows and the summary are dropped rather than moved, and the notes about how
+     * tracking is set up — addressed to someone deploying, not someone looking — go to the debug log.
+     * Everything else, the reconciliation included, is exactly what {@code deploy --dry-run --format} does.
+     */
+    boolean asDiff;
 
     // Resolved once per run.
     private StrategyOptions.Resolved globalStrategy;
@@ -218,11 +240,24 @@ public class DeployCommand implements Callable<Integer> {
             System.err.println("midgie: use either --plan or --apply-plan, not both.");
             return EXIT_ERROR;
         }
-        if (connectionOptions.oid != null) {
-            // Inherited from the shared connection mixin, but deploy addresses each object by the OID in its
-            // own file. Accepting a write-affecting flag and ignoring it is worse than rejecting it.
-            System.err.println("midgie: --oid applies to 'diff' and 'apply', which address one object; "
-                    + "deploy takes the OID from each file.");
+        if (output != null && format == null) {
+            format = "xml";
+        }
+        if (format != null) {
+            if (!List.of("xml", "json", "summary").contains(format)) {
+                System.err.println("midgie: --format must be 'xml', 'json' or 'summary', got: " + format);
+                return EXIT_ERROR;
+            }
+            if (!dryRun || planDir != null || applyPlanDir != null) {
+                // The delta of a run that writes is the one it sent, and a plan has its own files; only a
+                // preview has a single change to hand over.
+                System.err.println("midgie: --format/--output write the change a --dry-run would make; "
+                        + "use them with --dry-run (and without --plan/--apply-plan).");
+                return EXIT_ERROR;
+            }
+        }
+        if (connectionOptions.oid != null && applyPlanDir != null) {
+            System.err.println("midgie: --apply-plan replays a plan as written; --oid would have no effect.");
             return EXIT_ERROR;
         }
         boolean live = connectionOptions.isLive();
@@ -369,6 +404,17 @@ public class DeployCommand implements Callable<Integer> {
                 System.err.println("midgie: " + nothingFound(scan));
                 return EXIT_ERROR;
             }
+            int unitCount = deployableSchemas.size() + objects.size();
+            if ((connectionOptions.oid != null || format != null) && unitCount != 1) {
+                // Both name "the" object: --oid says where it lives, --format hands over its one change.
+                System.err.println("midgie: " + (connectionOptions.oid != null ? "--oid" : "--format/--output")
+                        + " applies to exactly one object, and " + String.join(", ", pathLabels())
+                        + " describe(s) " + unitCount + ".");
+                return EXIT_ERROR;
+            }
+            if (connectionOptions.oid != null) {
+                objects = withOid(objects, connectionOptions.oid);
+            }
 
             TopoSort.Result<SchemaFile> schemaOrder = sortSchemas(deployableSchemas);
             TopoSort.Result<DeployObject> objectOrder = sortObjects(objects);
@@ -493,12 +539,12 @@ public class DeployCommand implements Callable<Integer> {
             // Identity, the revision and the "deleted since" query are all rooted at one tree. Deploying
             // several at once would record the first one's revision as if it covered them all, quietly
             // hiding removals in the rest — so say so rather than half-tracking.
-            note("note: tracking follows " + tree + " only; removals in the other path(s) are not detected. "
+            trackingNote("note: tracking follows " + tree + " only; removals in the other path(s) are not detected. "
                     + "Deploy each tree separately, or pass --app to track them as one.");
         }
         DeploymentIdentity identity = DeploymentIdentity.of(tree, app);
         if (!identity.isAvailable()) {
-            note("note: removals cannot be detected — " + identity.unavailableReason() + ".");
+            trackingNote("note: removals cannot be detected — " + identity.unavailableReason() + ".");
             return new Tracking(identity, null, null, null);
         }
 
@@ -509,18 +555,18 @@ public class DeployCommand implements Callable<Integer> {
             // Every other "cannot detect" branch says so. Staying silent here — the likely cause is the
             // deploy account having no read on lookupTables — makes a run with tracking quietly dead look
             // exactly like a healthy one.
-            note("note: removals cannot be detected — could not read " + SyncState.TABLE_NAME + ": "
+            trackingNote("note: removals cannot be detected — could not read " + SyncState.TABLE_NAME + ": "
                     + safe(e.getMessage()));
             LOG.trace("could not read {}", SyncState.TABLE_NAME, e);
             return new Tracking(identity, null, null, null);
         }
         if (table == null) {
-            note("note: no " + SyncState.TABLE_NAME + " on the server, so removals cannot be detected — "
+            trackingNote("note: no " + SyncState.TABLE_NAME + " on the server, so removals cannot be detected — "
                     + "run 'midgie init --create-state --url …' to enable it.");
             return new Tracking(identity, null, null, null);
         }
         if (!SyncState.isEnabled(table)) {
-            note("note: " + SyncState.TABLE_NAME + " is '" + SyncState.lifecycleOf(table)
+            trackingNote("note: " + SyncState.TABLE_NAME + " is '" + SyncState.lifecycleOf(table)
                     + "', so removal tracking is switched off.");
             return new Tracking(identity, null, null, null);
         }
@@ -529,7 +575,7 @@ public class DeployCommand implements Callable<Integer> {
         String current = git.head();
         if (current != null && git.isDirty()) {
             current = current + "-dirty";
-            note("note: the tree has uncommitted changes; recording revision " + GitRevision.abbreviate(current)
+            trackingNote("note: the tree has uncommitted changes; recording revision " + GitRevision.abbreviate(current)
                     + ", which does not describe exactly what was deployed.");
         }
         String last = SyncState.revisionOf(table, identity.key());
@@ -871,6 +917,20 @@ public class DeployCommand implements Callable<Integer> {
         if (dryRun) {
             Tally preview = pass(reconciler, units, true, false);
             emitSummary(preview, true);
+            if (format != null) {
+                Reconciler.Outcome outcome = preview.lastOutcome;
+                String payload = (outcome != null) ? reconciler.render(outcome, format) : null;
+                if (payload == null) {
+                    // A skipped object has no change to hand over, and an empty payload with exit 0 would
+                    // read as "in sync". The row saying why was a status line, which diff does not print.
+                    if (outcome != null && outcome.action == Reconciler.Action.SKIP) {
+                        System.err.println("midgie: " + units.get(0).objectPath() + ": " + outcome.detail + ".");
+                    }
+                    return EXIT_ERROR;
+                }
+                // The payload — written even under --quiet, which silences prose, not results.
+                Io.writePayload(output, payload);
+            }
             if (preview.failed > 0) {
                 return EXIT_ERROR;
             }
@@ -920,6 +980,7 @@ public class DeployCommand implements Callable<Integer> {
             try {
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit));
                 Reconciler.Action action = outcome.action;
+                tally.lastOutcome = outcome;
 
                 if (!preview && perUnitPrompt
                         && (action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH)) {
@@ -1281,7 +1342,7 @@ public class DeployCommand implements Callable<Integer> {
                 ? console.readLine("Remove %d previously deployed value(s) from %s? [y/N] ",
                         valueCount, connectionOptions.url())
                 : null;
-        switch (ApplyCommand.decideConfirmation(false, interactive, answer)) {
+        switch (Confirmation.decide(false, interactive, answer)) {
             case PROCEED:
                 return null;
             case ABORTED:
@@ -1304,7 +1365,7 @@ public class DeployCommand implements Callable<Integer> {
         String answer = interactive
                 ? console.readLine("Apply %d change(s) to %s? [y/N] ", changeCount, connectionOptions.url())
                 : null;
-        switch (ApplyCommand.decideConfirmation(false, interactive, answer)) {
+        switch (Confirmation.decide(false, interactive, answer)) {
             case PROCEED:
                 return null;
             case ABORTED:
@@ -1432,9 +1493,53 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     private void status(String message) {
-        if (!quiet) {
-            System.out.println(message);
+        if (quiet || asDiff) {
+            return;
         }
+        // When the change itself is going to stdout, the rows go beside it rather than into it.
+        (payloadOnStdout() ? System.err : System.out).println(message);
+    }
+
+    private boolean payloadOnStdout() {
+        return format != null && (output == null || Io.isStdout(output));
+    }
+
+    /**
+     * A note about how removal tracking is set up for this run. Worth saying to someone deploying; to someone
+     * running {@code diff} it is the same sentence on every call about a step they are not taking.
+     */
+    private void trackingNote(String message) {
+        if (asDiff) {
+            LOG.debug(message);
+        } else {
+            note(message);
+        }
+    }
+
+    /** The paths as given, for a message that has to name them. */
+    private List<String> pathLabels() {
+        List<String> labels = new ArrayList<>();
+        if (paths != null) {
+            for (File path : paths) {
+                labels.add(path.toString());
+            }
+        }
+        return labels;
+    }
+
+    /**
+     * The one object, addressed by {@code oid} instead of whatever its files carry. Set on every fragment and
+     * regrouped, so the identity, the reference edges and the removal lookup all see the same OID.
+     */
+    private static List<DeployObject> withOid(List<DeployObject> objects, String oid) throws SchemaException {
+        List<Fragment> fragments = new ArrayList<>();
+        for (DeployObject object : objects) {
+            for (Fragment fragment : object.fragments()) {
+                fragment.object().setOid(oid);
+                fragments.add(fragment);
+            }
+        }
+        return DeployObject.group(fragments);
     }
 
     private void note(String message) {
@@ -1487,6 +1592,7 @@ public class DeployCommand implements Callable<Integer> {
         int skipped;
         int failed;
         final List<DeployObject> failedUnits = new ArrayList<>();
+        Reconciler.Outcome lastOutcome;   // what --format renders, when the run holds one object
 
         int changed() {
             return created + patched;

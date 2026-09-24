@@ -55,6 +55,18 @@ final class Io {
     }
 
     /**
+     * Drain stdin into an owner-only temporary {@code .xml} file, deleted on exit, for the code paths that take
+     * files rather than streams — a live {@code diff -} runs through deploy's discovery, which walks paths.
+     * {@code createTempFile} already creates it {@code rw-------} on a POSIX file system.
+     */
+    static File stdinToTempFile() throws IOException {
+        java.nio.file.Path temp = Files.createTempFile("midgie-stdin-", ".xml");
+        temp.toFile().deleteOnExit();
+        Files.write(temp, System.in.readAllBytes());
+        return temp.toFile();
+    }
+
+    /**
      * Fail now if {@code file} cannot be read or is not well-formed XML.
      *
      * <p>For a live run this is the cheap half of the work done before the expensive half: parsing an object

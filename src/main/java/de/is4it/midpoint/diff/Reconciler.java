@@ -113,6 +113,12 @@ final class Reconciler {
                         + LiveLookup.nameOf(desired) + "'; refusing an ambiguous match");
             }
             current = matches.isEmpty() ? null : matches.get(0);
+            if (current != null && !matchByName) {
+                // The search ran only to keep a create from duplicating a name. Patching what it found
+                // would be matching by name, which is exactly what the flag ruled out.
+                return skip(restType, null, "an object named '" + LiveLookup.nameOf(desired) + "' exists, "
+                        + "and --no-match-by-name rules out patching it by name; give the file its oid");
+            }
         } else {
             current = null;
         }
@@ -165,17 +171,15 @@ final class Reconciler {
         if (!result.hasDrift()) {
             LOG.debug("{} {}: IN_SYNC{}", restType, targetOid,
                     held.paths.isEmpty() ? "" : ", left alone: " + held.paths);
-            return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null, null,
-                    result.inputWarnings(), held.paths, result.protectedSkippedPaths());
+            // The (empty) delta rides along so a caller rendering this one object — 'diff', or 'deploy
+            // --dry-run --format xml' — writes an empty ObjectModificationType rather than nothing.
+            return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null,
+                    result.delta(), notesOf(result), held.paths, result.protectedSkippedPaths());
         }
         int changes = result.delta().getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, result.delta());
         String summary = DeltaOutput.toSummary(result.delta()).replace("\n", "; ");
-        List<String> warnings = new ArrayList<>(result.inputWarnings());
-        for (String path : result.smartReferencePaths()) {
-            warnings.add("'" + path + "' is a smart reference; the OID midPoint resolved its filter to is "
-                    + "left in place");
-        }
+        List<String> warnings = notesOf(result);
         if (result.removalWarning() != null) {
             warnings.add(result.removalWarning().replace("\n", "; "));
         }
@@ -184,12 +188,46 @@ final class Reconciler {
                 result.delta(), warnings, held.paths, result.protectedSkippedPaths());
     }
 
+    /**
+     * The advisories a diff produced, worded for the per-object report. Built in one place so a single object
+     * reads the same whichever command reconciled it — 'diff' used to name paths the server withheld and
+     * merge fallbacks that 'deploy' passed over in silence.
+     */
+    private static List<String> notesOf(DiffEngine.DiffResult result) {
+        List<String> notes = new ArrayList<>(result.inputWarnings());
+        for (String path : result.incompleteSkippedPaths()) {
+            notes.add("the server did not return '" + path + "' (it came back incomplete), so its values are "
+                    + "unknown, not empty — midgie will not patch an item it cannot see. Check the account's "
+                    + "read authorization for that item");
+        }
+        for (String path : result.mergeFallbackPaths()) {
+            notes.add("'" + path + "' diffs to a whole-value replace; merge does not apply there, so it was "
+                    + "left as replace");
+        }
+        for (String path : result.smartReferencePaths()) {
+            notes.add("'" + path + "' is a smart reference; the OID midPoint resolved its filter to is "
+                    + "left in place");
+        }
+        return notes;
+    }
+
+    /** Serialize the desired object for a create POST, stripping operational/metadata items midPoint owns. */
+    static String createBody(PrismContext prismContext, PrismObject<? extends Objectable> desired)
+            throws SchemaException {
+        // On a copy: this runs in the read-only preview pass that deploy does before the real one. Stripping
+        // the caller's own object there changed what a later fragment of the same object diffed to, so the
+        // emitted PATCH depended on whether --yes had skipped the preview.
+        PrismObject<? extends Objectable> body = desired.clone();
+        body.getValue().removeOperationalItems();
+        return XmlPretty.tidyRoot(prismContext.xmlSerializer().serialize(body));
+    }
+
     private Outcome planCreate(String restType, String oid, PrismObject<? extends Objectable> desired)
             throws SchemaException {
         if (createIfAbsent) {
             LOG.debug("{} {}: CREATE (create-if-absent)", restType, oid);
             return new Outcome(Action.CREATE, restType, oid, 0, "would create",
-                    null, ApplyCommand.createBody(prismContext, desired), null, List.of());
+                    null, createBody(prismContext, desired), null, List.of());
         }
         if (oid != null && !oid.isBlank()) {
             return fail(restType, oid, "does not exist, and --no-create-if-absent rules out creating it");
@@ -217,6 +255,23 @@ final class Reconciler {
                 return outcome.oid;
             default:
                 return outcome.oid;
+        }
+    }
+
+    /**
+     * The one change a planned outcome stands for, as {@code --format} names it: the PATCH body (empty when
+     * the object is in sync), or for an object that does not exist yet the POST body — whatever the format,
+     * since a create has no delta to summarise. {@code null} for a unit that was skipped or failed.
+     */
+    String render(Outcome outcome, String format) throws SchemaException {
+        switch (outcome.action) {
+            case CREATE:
+                return outcome.createBody;
+            case PATCH:
+            case IN_SYNC:
+                return DeltaOutput.render(prismContext, outcome.delta, format);
+            default:
+                return null;
         }
     }
 

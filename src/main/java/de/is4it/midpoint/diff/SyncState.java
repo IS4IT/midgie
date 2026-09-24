@@ -144,7 +144,7 @@ final class SyncState {
         table.setLifecycleState("active");   // documentary: an unset state already resolves to active
         table.setIndestructible(true);       // midPoint's model layer then refuses a delete
 
-        String body = ApplyCommand.createBody(prismContext, table.asPrismObject());
+        String body = Reconciler.createBody(prismContext, table.asPrismObject());
         LOG.debug("creating {}", TABLE_NAME);
         return client.createObject(REST_TYPE, body);
     }

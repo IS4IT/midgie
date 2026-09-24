@@ -338,7 +338,7 @@ public class InitCommand implements Callable<Integer> {
         String answer = interactive
                 ? console.readLine("Write %s and trust it for later runs? [y/N] ", writeCacert)
                 : null;
-        switch (ApplyCommand.decideConfirmation(assumeYes, interactive, answer)) {
+        switch (Confirmation.decide(assumeYes, interactive, answer)) {
             case PROCEED:
                 break;
             case ABORTED:

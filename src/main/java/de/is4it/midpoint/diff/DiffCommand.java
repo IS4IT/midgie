@@ -6,6 +6,7 @@
 package de.is4it.midpoint.diff;
 
 import java.io.File;
+import java.util.List;
 import java.util.concurrent.Callable;
 
 import org.slf4j.Logger;
@@ -14,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
-import com.evolveum.midpoint.util.exception.SchemaException;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -29,7 +29,9 @@ import picocli.CommandLine.Parameters;
  * are the same object (same OID) at two points in time, and the delta transforms current &rarr; desired.
  *
  * <p>The current-state object comes either from a local CURRENT file (offline mode) or, with {@code --url},
- * fetched from a running midPoint over REST. Either way the diff itself runs locally via {@link DiffEngine}.
+ * from a running midPoint. A live diff is {@code deploy --dry-run --format} for that one object — see
+ * {@link #diffLive} — so an object that does not exist yet shows as the POST that would create it. Either
+ * way the diff itself runs locally via {@link DiffEngine}, and {@code diff} never writes to the server.
  * Exit codes: {@code 0} = no differences, {@code 1} = differences found (drift), {@code 2} = error.
  */
 @Command(
@@ -87,11 +89,11 @@ public class DiffCommand implements Callable<Integer> {
                     + "and the prism/framework logs.")
     boolean trace;
 
-    // Name-matching is the default; this opts out. See the note on ApplyCommand's copy for why this is a
+    // Name-matching is the default; this opts out. See the note on DeployCommand's copy for why this is a
     // separate --no-x option rather than picocli's `negatable`.
     @Option(names = "--no-match-by-name",
-            description = "Require an oid. In live mode an OID-less object is otherwise resolved on the "
-                    + "server by type+name (a single match), which is the default.")
+            description = "In live mode, skip an OID-less object instead of searching the server by type+name "
+                    + "and diffing the single match, which is the default.")
     boolean noMatchByName;
 
     // Accepted so that invocations written before this became the default keep parsing; inert.
@@ -99,9 +101,9 @@ public class DiffCommand implements Callable<Integer> {
             description = "Accepted for compatibility; matching by name is the default. No effect.")
     boolean matchByNameLegacy;
 
-    boolean matchByName() {
-        return !noMatchByName;
-    }
+    @Option(names = "--policy", paramLabel = "FILE",
+            description = "Per-object/-item diff-strategy policy file, as deploy takes it (live mode only).")
+    File policyFile;
 
     @Override
     public Integer call() {
@@ -117,64 +119,90 @@ public class DiffCommand implements Callable<Integer> {
 
         // A CURRENT file means offline; an explicit --url means live. A URL inherited only from
         // MIDPOINT_URL is a fallback that a CURRENT file overrides (so an env var doesn't break file diffs).
-        boolean live;
-        if (currentFile != null) {
-            if (connectionOptions.isExplicitUrl()) {
-                System.err.println("midgie: provide either a CURRENT file or --url, not both.");
+        if (currentFile == null) {
+            if (!connectionOptions.isLive()) {
+                System.err.println("midgie: offline diff needs a CURRENT file, "
+                        + "or set --url (or MIDPOINT_URL) for live mode.");
                 return EXIT_ERROR;
             }
-            if (Io.isStdin(desiredFile) && Io.isStdin(currentFile)) {
-                // stdin can only be drained once: the second parse got an empty string and failed with
-                // prism's "Index 0 out of bounds for length 0", which names neither stdin nor the mistake.
-                System.err.println("midgie: only one input can be read from stdin.");
-                return EXIT_ERROR;
-            }
-            if (strategy.smartRefs == StrategyOptions.SmartRefs.VERIFY) {
-                System.err.println("midgie: --smart-refs verify needs a running server to run the filter "
-                        + "against; use 'accept' or 'resolve' for an offline diff.");
-                return EXIT_ERROR;
-            }
-            live = false;
-        } else if (connectionOptions.isLive()) {
-            live = true;
-        } else {
-            System.err.println("midgie: offline diff needs a CURRENT file, "
-                    + "or set --url (or MIDPOINT_URL) for live mode.");
+            LOG.debug("diff mode: live (--url)");
+            return diffLive();
+        }
+        if (connectionOptions.isExplicitUrl()) {
+            System.err.println("midgie: provide either a CURRENT file or --url, not both.");
             return EXIT_ERROR;
         }
+        if (Io.isStdin(desiredFile) && Io.isStdin(currentFile)) {
+            // stdin can only be drained once: the second parse got an empty string and failed with
+            // prism's "Index 0 out of bounds for length 0", which names neither stdin nor the mistake.
+            System.err.println("midgie: only one input can be read from stdin.");
+            return EXIT_ERROR;
+        }
+        if (strategy.smartRefs == StrategyOptions.SmartRefs.VERIFY) {
+            System.err.println("midgie: --smart-refs verify needs a running server to run the filter "
+                    + "against; use 'accept' or 'resolve' for an offline diff.");
+            return EXIT_ERROR;
+        }
+        if (policyFile != null) {
+            System.err.println("midgie: --policy applies to a live diff, which reconciles the object as deploy "
+                    + "would; an offline diff compares the two files as they are.");
+            return EXIT_ERROR;
+        }
+        LOG.debug("diff mode: offline (CURRENT file)");
+        return diffOffline(strategy);
+    }
 
-        LOG.debug("diff mode: {}", live ? "live (--url)" : "offline (CURRENT file)");
-
+    /**
+     * A live diff is {@code deploy --dry-run --format} for one object, and is run as exactly that: the same
+     * discovery, target resolution, policy, reconciliation and notes, so the two cannot drift apart again.
+     * What {@code diff} adds is that it cannot write — it has no flag that leads to a PATCH — and that its
+     * stdout is the delta and nothing else.
+     */
+    private Integer diffLive() {
+        File desired = desiredFile;
         try {
-            // Before the schema read, which in live mode is a round trip: a path that does not exist or is
-            // not XML is knowable here, and waiting made a local mistake arrive as a connection error.
-            // currentFile is null in live mode, where the check is a no-op.
+            // Before anything else, as an offline diff does: deploy's discovery would report a missing or
+            // malformed file as a tree with no objects in it, which is true and names the wrong problem.
+            Io.checkInputFile(desiredFile);
+            if (Io.isStdin(desiredFile)) {
+                desired = Io.stdinToTempFile();
+            }
+        } catch (Exception e) {
+            System.err.println("midgie: " + (e.getMessage() != null ? e.getMessage() : e.toString()));
+            LOG.trace("diff failed", e);
+            return EXIT_ERROR;
+        }
+        DeployCommand preview = new DeployCommand();
+        preview.asDiff = true;
+        preview.paths = List.of(desired);
+        preview.strategyOptions = strategyOptions;
+        preview.schemaOptions = schemaOptions;
+        preview.connectionOptions = connectionOptions;
+        preview.dryRun = true;
+        preview.format = format;
+        preview.output = output;
+        preview.policyFile = policyFile;
+        preview.noMatchByName = noMatchByName;
+        preview.quiet = quiet;
+        preview.debug = debug;
+        preview.trace = trace;
+        return preview.call();
+    }
+
+    /** Two local files: no server, no policy, no tracking — just the delta that turns CURRENT into DESIRED. */
+    private Integer diffOffline(StrategyOptions.Resolved strategy) {
+        try {
+            // Before the schema read: a path that does not exist or is not XML is knowable here.
             Io.checkInputFile(desiredFile);
             Io.checkInputFile(currentFile);
 
-            // And before the client, because building it resolves the password — possibly by prompting, or
-            // by pulling it out of a password safe. Neither is worth doing for a run that cannot proceed.
-            MidpointRestClient client = null;
-            if (live) {
-                client = connectionOptions.newClient();
-                if (client == null) {
-                    return EXIT_ERROR;
-                }
-            }
-
-            PrismContext prismContext = schemaOptions.buildContext(live ? client : null);
-            if (live && !quiet) {
-                VersionSupport.warnIfMismatch(prismContext, client);
-            }
-
+            PrismContext prismContext = schemaOptions.buildContext(null);
             PrismObject<? extends Objectable> desired = Io.parseObject(prismContext, desiredFile);
-            PrismObject<? extends Objectable> current = live
-                    ? fetchLive(prismContext, client, desired)
-                    : Io.parseObject(prismContext, currentFile);
+            PrismObject<? extends Objectable> current = Io.parseObject(prismContext, currentFile);
 
             DiffEngine.DiffResult result = new DiffEngine(prismContext)
                     .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
-                            SmartReferences.checkFor(strategy, prismContext, client));
+                            SmartReferences.checkFor(strategy, prismContext, null));
 
             // Refuse (by default) to emit a merge delta that would overwrite an accrued value in place.
             if (!result.accruedInPlaceEditPaths().isEmpty() && !strategy.allowInplaceMerge) {
@@ -191,12 +219,6 @@ public class DiffCommand implements Callable<Integer> {
                 for (String path : result.smartReferencePaths()) {
                     System.err.println("midgie: note: '" + path + "' is a smart reference; the OID midPoint "
                             + "resolved its filter to is left in place.");
-                }
-                for (String path : result.incompleteSkippedPaths()) {
-                    System.err.println("midgie: warning: the server did not return '" + path
-                            + "' (it came back incomplete), so its values are unknown, not empty — midgie "
-                            + "will not patch an item it cannot see. Check the account's read authorization "
-                            + "for that item.");
                 }
                 for (String path : result.protectedSkippedPaths()) {
                     System.err.println("midgie: note: skipped protected value at '" + path
@@ -223,18 +245,5 @@ public class DiffCommand implements Callable<Integer> {
             LOG.trace("diff failed", e);
             return EXIT_ERROR;
         }
-    }
-
-    private PrismObject<? extends Objectable> fetchLive(
-            PrismContext prismContext, MidpointRestClient client, PrismObject<? extends Objectable> desired)
-            throws Exception {
-        LiveLookup.Target target =
-                LiveLookup.resolveCurrent(prismContext, client, desired, connectionOptions.oid, matchByName());
-        if (target.current == null) {
-            String where = (target.oid != null) ? "Object " + target.restType + "/" + target.oid
-                    : "A " + target.restType + " named '" + LiveLookup.nameOf(desired) + "'";
-            throw new SchemaException(where + " does not exist on the server.");
-        }
-        return target.current;
     }
 }

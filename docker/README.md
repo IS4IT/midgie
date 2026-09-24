@@ -1,8 +1,8 @@
 # Test rig: a real midPoint server (Docker Compose)
 
 Spins up a midPoint server backed by PostgreSQL so `midgie` can be exercised
-against a live repository over REST — the target for the upcoming `diff --url` and
-`apply` live modes. Adapted from the `connector-sap` rig (itself from
+against a live repository over REST — the target for the `diff --url` and `deploy`
+live modes. Adapted from the `connector-sap` rig (itself from
 [Evolveum/midpoint-docker](https://github.com/Evolveum/midpoint-docker)), stripped to
 just the midPoint + PostgreSQL stack.
 
@@ -67,7 +67,7 @@ java -jar target/midgie.jar diff desired.xml \
   --url http://localhost:12080/midpoint -u administrator -p T3stPw890uio
 
 # reconcile it (PATCH, or POST to create it if it is not there — the default)
-java -jar target/midgie.jar apply desired.xml \
+java -jar target/midgie.jar deploy desired.xml \
   --url http://localhost:12080/midpoint -u administrator -p T3stPw890uio
 ```
 
@@ -75,8 +75,8 @@ Or diff two local files offline (no server): `java -jar target/midgie.jar diff d
 
 ## Live integration tests
 
-`LiveIntegrationTest` drives the real CLI over REST against this rig (create-if-absent → diff → apply →
-idempotent re-apply, plus a no-drift check), covering the live paths the offline unit tests cannot. It is
+`LiveIntegrationTest` drives the real CLI over REST against this rig (create → diff → deploy →
+idempotent re-deploy, plus a no-drift check), covering the live paths the offline unit tests cannot. It is
 **self-gating**: when the rig is unreachable the tests skip, so `mvn test` stays green without docker.
 
 ```bash

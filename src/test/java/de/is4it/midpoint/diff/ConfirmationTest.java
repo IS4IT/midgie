@@ -12,37 +12,37 @@ import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
 
 import org.junit.jupiter.api.Test;
 
-import static de.is4it.midpoint.diff.ApplyCommand.Confirmation.ABORTED;
-import static de.is4it.midpoint.diff.ApplyCommand.Confirmation.NON_INTERACTIVE;
-import static de.is4it.midpoint.diff.ApplyCommand.Confirmation.PROCEED;
+import static de.is4it.midpoint.diff.Confirmation.ABORTED;
+import static de.is4it.midpoint.diff.Confirmation.NON_INTERACTIVE;
+import static de.is4it.midpoint.diff.Confirmation.PROCEED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Offline tests for the {@code apply} safety logic: the confirmation decision and the create-body strip. */
-class ApplyCommandTest {
+/** Offline tests for the write-safety logic: the confirmation decision and the create-body strip. */
+class ConfirmationTest {
 
     @Test
     void yesFlagAlwaysProceeds() {
-        assertEquals(PROCEED, ApplyCommand.decideConfirmation(true, false, null));
-        assertEquals(PROCEED, ApplyCommand.decideConfirmation(true, true, "n"), "--yes overrides a 'no' too");
+        assertEquals(PROCEED, Confirmation.decide(true, false, null));
+        assertEquals(PROCEED, Confirmation.decide(true, true, "n"), "--yes overrides a 'no' too");
     }
 
     @Test
     void nonInteractiveWithoutYesRefuses() {
-        assertEquals(NON_INTERACTIVE, ApplyCommand.decideConfirmation(false, false, null));
+        assertEquals(NON_INTERACTIVE, Confirmation.decide(false, false, null));
         // no console => the answer is irrelevant; still refuses without --yes
-        assertEquals(NON_INTERACTIVE, ApplyCommand.decideConfirmation(false, false, "y"));
+        assertEquals(NON_INTERACTIVE, Confirmation.decide(false, false, "y"));
     }
 
     @Test
     void interactivePromptHonoursTheAnswer() {
-        assertEquals(PROCEED, ApplyCommand.decideConfirmation(false, true, "y"));
-        assertEquals(PROCEED, ApplyCommand.decideConfirmation(false, true, "yes"));
-        assertEquals(PROCEED, ApplyCommand.decideConfirmation(false, true, "  Y "), "trimmed + case-insensitive");
-        assertEquals(ABORTED, ApplyCommand.decideConfirmation(false, true, "n"));
-        assertEquals(ABORTED, ApplyCommand.decideConfirmation(false, true, ""), "empty answer (default) aborts");
-        assertEquals(ABORTED, ApplyCommand.decideConfirmation(false, true, null));
+        assertEquals(PROCEED, Confirmation.decide(false, true, "y"));
+        assertEquals(PROCEED, Confirmation.decide(false, true, "yes"));
+        assertEquals(PROCEED, Confirmation.decide(false, true, "  Y "), "trimmed + case-insensitive");
+        assertEquals(ABORTED, Confirmation.decide(false, true, "n"));
+        assertEquals(ABORTED, Confirmation.decide(false, true, ""), "empty answer (default) aborts");
+        assertEquals(ABORTED, Confirmation.decide(false, true, null));
     }
 
     @Test
@@ -50,7 +50,7 @@ class ApplyCommandTest {
         PrismContext prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
         PrismObject<? extends Objectable> user = prismContext.parseObject(userWithMetadata());
 
-        String body = ApplyCommand.createBody(prismContext, user);
+        String body = Reconciler.createBody(prismContext, user);
 
         assertFalse(body.contains("createChannel"),
                 "operational metadata must be stripped from the create body:\n" + body);

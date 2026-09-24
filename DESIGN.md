@@ -159,19 +159,24 @@ the midPoint source tree.
 
 ## Commands / modes (layered)
 
-**v1 = the offline core.** Live and apply are thin adapters added in a second increment; `deploy` and
-`init` came later still. All four subcommands are listed here.
+**v1 = the offline core.** Live mode was a thin adapter added in a second increment; `deploy` and `init`
+came later still. There used to be a separate single-object `apply` as well; it duplicated `deploy`'s
+lookup, diff and output with small differences nobody had chosen, and was folded into it — one file is a
+tree of one.
 
-- `midgie diff <desired.xml> <live.xml>` → itemDelta XML on stdout. No REST, no server.
-- `midgie diff <desired.xml> --url <url> --user <u> --password <p> [--oid <oid>]` → GET the
-  current object (type + OID read from the desired file if not given), diff, emit itemDelta.
-- `midgie apply <desired.xml> --url … [--no-create-if-absent]` → diff then
-  `PATCH /ws/rest/{type}/{oid}`; when the search finds nothing, `POST /ws/rest/{type}` the whole
-  object (operational/metadata items stripped first). This is the reconciler. Because it writes, it shows
-  the pending change and confirms first: it prompts interactively, or refuses in a non-interactive session
-  unless `--yes`/`-y` is given. `--dry-run` prints the delta and changes nothing.
-- `midgie deploy <tree> [--url …]` → discover a folder tree, sort it by dependency, and print the apply
-  order or reconcile it object by object. Its own section below.
+- `midgie diff <desired.xml> <live.xml>` → itemDelta XML on stdout. No REST, no server, no policy.
+- `midgie diff <desired.xml> --url <url> --user <u> --password <p> [--oid <oid>] [--policy <file>]` →
+  exactly `deploy <desired.xml> --dry-run --format xml` (`DiffCommand.diffLive` builds that `DeployCommand`
+  with `asDiff` set, which drops the plan rows and the tracking-setup notes from the output). So the lookup,
+  the policy, the reconciliation and the payload cannot drift apart from `deploy`'s; an absent object shows
+  as its `POST` body (exit 1). `diff` itself has no writing flag.
+- `midgie deploy <path...> [--url …]` → discover files and folders, sort the objects by dependency, and print
+  the apply order or reconcile them object by object: `PATCH /ws/rest/{type}/{oid}`, or `POST
+  /ws/rest/{type}` the whole object (operational/metadata items stripped first) when the search finds
+  nothing. Because it writes, it shows the pending change and confirms first, or refuses in a
+  non-interactive session unless `--yes`/`-y` is given. `--dry-run --format xml|json|summary [-o FILE]`
+  hands over the change of a run holding exactly one object, and `--oid` addresses such a run's object.
+  Its own section below.
 - **Config file (`midgie.properties`)** → defaults for any option, so the settings that never change for an
   environment (server, account, CA certificate) leave the command line. Read from `/etc/midgie/midgie.properties`, then
   `$HOME/.midgie.properties`, then a file named by `$MIDGIE_CONF`/`-Dmidgie.conf`, and **merged per key** with
@@ -245,7 +250,7 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   value with a desired value and emit a deep **in-place edit** (e.g. `assignment/2/targetRef`) that merge
   cannot express as a union — so the accrued value is silently overwritten. The engine detects that
   **per delta** (`DiffResult.accruedInPlaceEditPaths`, comparing the edited container-id against the desired
-  object) and both `diff` and `apply` **refuse by default** (exit 2), naming the offending paths.
+  object) and both `diff` and `deploy` **refuse by default** (exit 2), naming the offending paths.
   `--allow-inplace-merge` downgrades the refusal to a warning and proceeds. An in-place edit of a value that
   *is* present in desired is a legitimate managed update and is not flagged.
 
@@ -283,16 +288,17 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 - The desired (and offline live) object may be read from stdin by passing `-` as the path.
 - `--debug` / `-v` raises the log level to DEBUG on stderr for troubleshooting (stdout stays the payload).
 - Exit-code contract (lets CI gate on drift without parsing output):
-  - `diff` and `apply --dry-run`: `0` = no differences · `1` = differences found / would change · `2` = error.
-  - `apply` (real write): `0` = success (applied, created, already in sync, or user-declined) · `2` = error.
-- `--quiet` / `-q` drops advisory notes/warnings and (for `apply`) status lines, keeping the delta payload,
+  - `diff` and `deploy --dry-run`: `0` = no differences · `1` = differences found / would change · `2` = error
+    (for a live `diff`, also an object that was skipped and so has no change to show).
+  - `deploy` (real write): `0` = success (applied, created, already in sync, or user-declined) · `2` = error.
+- `--quiet` / `-q` drops advisory notes/warnings and (for `deploy`) status lines, keeping the delta payload,
   error messages, and the exit code — for clean pipeline output.
 
 ## Packaging & license
 
 - Maven, Java 17, fat JAR via `maven-shade-plugin` (needs a JVM; GraalVM native is impractical given
   prism's reflection/JAXB). Dependencies: `com.evolveum.midpoint.infra:schema` (pulls prism), picocli,
-  JUnit 5; live/apply use the JDK 11+ `java.net.http` client — no extra dependency.
+  JUnit 5; the live modes use the JDK 11+ `java.net.http` client — no extra dependency.
 - **Launcher `bin/midgie`.** On JDK 23+, classgraph (a transitive prism dependency) calls the
   terminally-deprecated `sun.misc.Unsafe::invokeCleaner` to unmap memory-mapped schema jars during prism
   bootstrap, which prints JEP 498 warnings. Those go to the *native* stderr (fd 2), bypassing `System.err`,
@@ -315,7 +321,8 @@ That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — app
 1. **Offline `diff` core** — engine + two-layer schema loading + `--scope`/`--multivalue`/`--equivalence`
    + `ObjectModificationType`/`summary` output + exit codes. Independently testable and useful.
 2. **Live fetch** — `--url` GET of the current object, then diff.
-3. **`apply`** — `PATCH`, and `POST` when the object is absent (`--no-create-if-absent` fails instead).
+3. **Writing** — `PATCH`, and `POST` when the object is absent (`--no-create-if-absent` fails instead). Built
+   as a single-object `apply` first, later folded into `deploy`.
 
 ## Verification
 
@@ -329,7 +336,7 @@ That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — app
    authoritative.
 4. *Extension schema:* an object using a custom `extension` attribute diffs correctly with
    `--schema-dir`/`--schema`, and falls back to raw handling without it (document the fallback).
-5. *Live/apply (increment 2+3):* against a running midPoint, `apply` a one-field change to
+5. *Live (increment 2+3):* against a running midPoint, `deploy` a one-field change to
    `administrator` → only `fullName` changes, assignments/metadata intact; re-run → no-op (idempotent).
    a fresh OID creates once, then no-ops.
 
@@ -337,9 +344,9 @@ That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — app
 
 > **Status: built.** Read-only discovery + schema-aware dependency sort, the per-object apply loop (`--dry-run`, `--create-if-absent`, `--match-by-name`), `--retry`, the `--plan`/`--apply-plan` saved-change modes, and the `--policy` strategy file. See TODO.md section H. Now that `deploy` applies, the tool does more than "diff", so it was renamed **midgie** (a wee Scots midge); only the Java package `de.is4it.midpoint.diff` keeps the old name for now.
 
-Apply a whole tree of desired-state object XML to a live server, in dependency order, reusing the `diff`/`apply` engine — **one JVM bootstrap** for the whole run. midPoint's prism bootstrap costs ~1.5 s, so a shell loop invoking the tool once per file would pay that per object; an in-process subcommand pays it once and can sort with prism's precise reference walk instead of a text heuristic. **Structure-agnostic**: objects are discovered by content, so the config repo can use any folder layout the team likes. The deploy model is **per object**: the files describing one object are combined and applied together (one `itemDelta` per object, however many files it took), and *schema extensions follow the same model* — an extension is a `SchemaType` object deployed like any other, so schema files are first-class nodes in the same dependency sort.
+Apply a whole tree of desired-state object XML to a live server, in dependency order, reusing the `diff` engine — **one JVM bootstrap** for the whole run. midPoint's prism bootstrap costs ~1.5 s, so a shell loop invoking the tool once per file would pay that per object; an in-process subcommand pays it once and can sort with prism's precise reference walk instead of a text heuristic. **Structure-agnostic**: objects are discovered by content, so the config repo can use any folder layout the team likes. The deploy model is **per object**: the files describing one object are combined and applied together (one `itemDelta` per object, however many files it took), and *schema extensions follow the same model* — an extension is a `SchemaType` object deployed like any other, so schema files are first-class nodes in the same dependency sort.
 
-`midgie deploy <path...> [--url <url>] [creds/TLS/retry — the same mixins as diff/apply] [flags]` (paths are files or directories, walked recursively).
+`midgie deploy <path...> [--url <url>] [creds/TLS/retry — the same mixins as diff] [flags]` (paths are files or directories, walked recursively).
 
 ### Increment 1 (built): read-only discovery + schema-aware dependency sort
 
@@ -352,7 +359,7 @@ The plan prints one line per apply unit — that is, per object (`seq  type  oid
 
 ### Increment 2 (built): the apply loop + `--dry-run`
 
-3. **Apply in order.** With `--url`, reconcile each unit — one per **object** — in the sorted order: resolve the current object via a `POST {type}/search` (by OID, or by type+name when it has none, unless `--no-match-by-name` — a search so a missing object is an empty result, not a 404 that makes midPoint log an `ObjectNotFoundException`), diff the combined desired object (`--scope present`), then PATCH — or POST to create it, which is the default; under `--no-create-if-absent` a missing OID object fails and a missing OID-less object is skipped instead. One request per object, so a create is atomic (the whole object is POSTed, not a partial one patched into shape afterwards) and there is no window in which half of it is applied. Sequential, so each unit sees prior writes (a role is created before the user that references it). Writing is gated: a single up-front confirmation by default (`--yes` bypasses, `--confirm-each-apply` prompts per change, `--dry-run` previews without writing; a non-interactive session without `--yes` refuses). Per-unit result lines (created/patched/in-sync/skipped/failed) + a summary; `--quiet` keeps only errors and the exit code. Exit `0`/`2` on apply, `0` in-sync / `1` would-change / `2` on `--dry-run`. A transport/auth failure aborts; a per-object rejection is recorded and the run continues (best-effort). The `Reconciler` reuses `DiffEngine`, `ApplyCommand.createBody`, `LiveTarget`, and the new `MidpointRestClient.searchObjects`.
+3. **Apply in order.** With `--url`, reconcile each unit — one per **object** — in the sorted order: resolve the current object via a `POST {type}/search` (by OID, or by type+name when it has none, unless `--no-match-by-name` — a search so a missing object is an empty result, not a 404 that makes midPoint log an `ObjectNotFoundException`), diff the combined desired object (`--scope present`), then PATCH — or POST to create it, which is the default; under `--no-create-if-absent` a missing OID object fails and a missing OID-less object is skipped instead. One request per object, so a create is atomic (the whole object is POSTed, not a partial one patched into shape afterwards) and there is no window in which half of it is applied. Sequential, so each unit sees prior writes (a role is created before the user that references it). Writing is gated: a single up-front confirmation by default (`--yes` bypasses, `--confirm-each-apply` prompts per change, `--dry-run` previews without writing; a non-interactive session without `--yes` refuses). Per-unit result lines (created/patched/in-sync/skipped/failed) + a summary; `--quiet` keeps only errors and the exit code. Exit `0`/`2` on apply, `0` in-sync / `1` would-change / `2` on `--dry-run`. A transport/auth failure aborts; a per-object rejection is recorded and the run continues (best-effort). The `Reconciler` reuses `DiffEngine`, `LiveTarget`, and the new `MidpointRestClient.searchObjects`, and is the only planner: `diff --url` runs through it too.
 
 ### Increment 3 (built): retry, saved plans, and the strategy policy
 

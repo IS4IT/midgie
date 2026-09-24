@@ -190,7 +190,7 @@ class InitCommandTest {
         String written = Files.readString(target, StandardCharsets.UTF_8);
         assertTrue(written.contains("#rollback-plan ="), "the key a deployment most needs: " + written);
         assertTrue(written.contains("#scope = present"), written);
-        assertTrue(written.contains("#midgie.deploy.policy ="), written);
+        assertTrue(written.contains("#policy ="), written);
 
         // The keys that decide where credentials go are omitted, not commented out -- a commented '#url ='
         // would break the uncomment-everything contract and read as an invitation besides.

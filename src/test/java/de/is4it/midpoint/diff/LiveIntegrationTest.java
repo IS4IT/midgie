@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * End-to-end tests against a running midPoint (the {@code docker/} rig). They drive the real CLI over
- * REST, so they cover the live paths — {@code diff --url}, {@code apply}, create-if-absent, idempotency —
+ * REST, so they cover the live paths — {@code diff --url}, single-file {@code deploy}, create-if-absent, idempotency —
  * that the offline unit tests cannot. When the rig is unreachable the whole class is skipped, so
  * {@code mvn test} stays green without docker.
  *
@@ -95,8 +95,8 @@ class LiveIntegrationTest {
         // re-proposed the whole table and the deploy never converged. Only a live server produces that
         // marker, so this is the test that would have caught it.
         File table = writeLookupTable(dir, "v1", "Abgelaufen");
-        assertEquals(0, run("apply", table.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
-                "--create-if-absent", "--yes").exit);
+        assertEquals(0, run("deploy", table.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes").exit);
 
         CliResult second = run("diff", table.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--format", "summary");
@@ -109,7 +109,7 @@ class LiveIntegrationTest {
         assertEquals(1, drift.exit, drift.err);
         assertTrue(drift.out.contains("label"), "the changed row label must surface: " + drift.out);
 
-        assertEquals(0, run("apply", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes").exit);
+        assertEquals(0, run("deploy", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes").exit);
         assertEquals(0, run("diff", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--format", "summary").exit, "and it settles after applying");
 
@@ -125,8 +125,8 @@ class LiveIntegrationTest {
         // multi-valued container must produce a deep in-place PATCH that midPoint accepts, leaving the
         // repository-assigned container ids — and everything hanging off them, metadata included — alone.
         File created = writeKeyedPanels(dir, "v1", 20);
-        assertEquals(0, run("apply", created.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
-                "--create-if-absent", "--yes").exit);
+        assertEquals(0, run("deploy", created.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes").exit);
         List<String> idsBefore = containerIds(client.getObject("users", TEST_OID));
         assertEquals(3, idsBefore.size(), "expected the page and its two panels to carry ids: " + idsBefore);
 
@@ -137,7 +137,7 @@ class LiveIntegrationTest {
         assertTrue(diff.out.contains("panel/") && diff.out.contains("displayOrder"),
                 "auto must reach the panel in place rather than replace the page, got: " + diff.out);
 
-        assertEquals(0, run("apply", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes").exit);
+        assertEquals(0, run("deploy", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes").exit);
         String after = client.getObject("users", TEST_OID);
         assertEquals(idsBefore, containerIds(after), "midPoint must keep the container ids across the edit");
         assertTrue(after.contains("<displayOrder>25</displayOrder>"), "and hold the new value:\n" + after);
@@ -149,22 +149,22 @@ class LiveIntegrationTest {
         // The contrast that makes the above worth asserting: under the previous default the same edit
         // replaces the whole page, so midPoint assigns fresh ids to it and to both panels.
         File again = writeKeyedPanels(dir, "v3", 30);
-        assertEquals(0, run("apply", again.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+        assertEquals(0, run("deploy", again.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--equivalence", "real-value", "--yes").exit);
         assertNotEquals(idsBefore, containerIds(client.getObject("users", TEST_OID)),
                 "real-value is expected to churn the container ids — that is what auto avoids");
     }
 
     @Test
-    void applyCreatesPatchesAndIsIdempotentOverRest(@TempDir Path dir) throws Exception {
+    void deployCreatesPatchesAndIsIdempotentForOneFile(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteTestUser(); // isolate from the other test's use of the shared OID
 
-        // 1) create-if-absent -> POST creates the object (--yes: the test runs non-interactively)
+        // 1) a missing object -> POST creates it (--yes: the test runs non-interactively)
         File v1 = writeUser(dir, "v1", "IT User One");
-        CliResult create = run("apply", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        CliResult create = run("deploy", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
         assertEquals(0, create.exit, create.err);
-        assertTrue(create.out.contains("Created"), "expected 'Created', got: " + create.out);
+        assertTrue(create.out.contains("created"), "expected 'created', got: " + create.out);
         assertTrue(client.getObject("users", TEST_OID).contains("IT User One"), "server should hold the created user");
 
         // 2) diff --url sees the drift and emits a replace of fullName
@@ -173,30 +173,30 @@ class LiveIntegrationTest {
         assertEquals(1, diff.exit, diff.err); // 1 == drift
         assertTrue(diff.out.contains("replace fullName"), "expected 'replace fullName', got: " + diff.out);
 
-        // 3) apply -> PATCH the change
-        CliResult apply = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
-        assertEquals(0, apply.exit, apply.err);
-        assertTrue(apply.out.contains("Applied"), "expected 'Applied', got: " + apply.out);
+        // 3) deploy -> PATCH the change
+        CliResult patch = run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        assertEquals(0, patch.exit, patch.err);
+        assertTrue(patch.out.contains("patched"), "expected 'patched', got: " + patch.out);
         assertTrue(client.getObject("users", TEST_OID).contains("IT User Two"), "server should hold the patched value");
 
-        // 4) re-apply the same desired state -> idempotent no-op (no PATCH). No --yes needed: a no-op
+        // 4) deploy the same desired state again -> idempotent no-op (no PATCH). No --yes needed: a no-op
         //    never reaches the confirmation.
-        CliResult again = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD);
+        CliResult again = run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD);
         assertEquals(0, again.exit, again.err);
-        assertTrue(again.out.contains("No changes"), "re-apply must be a no-op, got: " + again.out);
+        assertTrue(again.out.contains("in-sync"), "a re-deploy must be a no-op, got: " + again.out);
     }
 
     @Test
-    void applyWithoutYesRefusesInNonInteractiveSession(@TempDir Path dir) throws Exception {
+    void deployRefusesAPatchWithoutYesInNonInteractiveSession(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteTestUser();
 
-        // Create the user (with --yes), then try to apply a change WITHOUT --yes. The test JVM has no
-        // console, so apply must refuse (exit 2) and leave the value untouched.
-        run("apply", writeUser(dir, "a", "Refuse One").getPath(),
-                "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        // Create the user (with --yes), then try to deploy a change WITHOUT --yes. The test JVM has no
+        // console, so deploy must refuse (exit 2) and leave the value untouched.
+        run("deploy", writeUser(dir, "a", "Refuse One").getPath(),
+                "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
 
-        CliResult refused = run("apply", writeUser(dir, "b", "Refuse Two").getPath(),
+        CliResult refused = run("deploy", writeUser(dir, "b", "Refuse Two").getPath(),
                 "--url", HOST, "-u", USER, "-p", PASSWORD);
         assertEquals(2, refused.exit, refused.out + refused.err);
         assertTrue(refused.err.contains("--yes"), "should point the user at --yes, got: " + refused.err);
@@ -208,33 +208,45 @@ class LiveIntegrationTest {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteTestUser();
 
-        // create-if-absent --dry-run on a missing object -> would change -> exit 1, and it stays absent.
+        // --dry-run on a missing object -> would change -> exit 1, the POST body on stdout, and it stays
+        // absent. 'diff' says the same thing about it rather than failing with "does not exist".
         File v1 = writeUser(dir, "v1", "Dry One");
-        CliResult dryCreate = run("apply", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
-                "--create-if-absent", "--dry-run");
+        CliResult dryCreate = run("deploy", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--dry-run", "--format", "xml");
         assertEquals(1, dryCreate.exit, dryCreate.err);
+        assertTrue(dryCreate.out.contains("Dry One"), "the create body is the payload, got: " + dryCreate.out);
+        CliResult diffCreate = run("diff", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD);
+        assertEquals(1, diffCreate.exit, diffCreate.err);
+        assertEquals(dryCreate.out, diffCreate.out, "diff is deploy --dry-run --format for one object");
         assertFalse(testUserExists(), "dry-run must not create the object");
 
         // create it for real, then dry-run a change -> would change -> exit 1, delta printed, not applied.
-        run("apply", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
+        run("deploy", v1.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
         File v2 = writeUser(dir, "v2", "Dry Two");
-        CliResult dryPatch = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult dryPatch = run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--dry-run", "--format", "summary");
         assertEquals(1, dryPatch.exit, dryPatch.err);
         assertTrue(dryPatch.out.contains("replace fullName"), "dry-run prints the delta, got: " + dryPatch.out);
-        assertTrue(dryPatch.err.contains("NOT applied"), "advisory note expected without --quiet");
+        assertFalse(dryPatch.out.contains("Plan:"), "the plan rows must not land in the payload: " + dryPatch.out);
+        assertTrue(dryPatch.err.contains("Plan:"), "the plan summary moves to stderr, got: " + dryPatch.err);
         assertTrue(client.getObject("users", TEST_OID).contains("Dry One"), "dry-run must not change the object");
 
-        // same dry-run with --quiet -> exit 1, delta still on stdout, but no advisory note on stderr.
-        CliResult dryQuiet = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+        CliResult xmlDeploy = run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--dry-run", "--format", "xml");
+        CliResult xmlDiff = run("diff", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD);
+        assertEquals(xmlDeploy.exit, xmlDiff.exit);
+        assertEquals(xmlDeploy.out, xmlDiff.out, "the same PATCH body from both commands");
+
+        // same dry-run with --quiet -> exit 1, delta still on stdout, but no plan rows on stderr.
+        CliResult dryQuiet = run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--dry-run", "--format", "summary", "--quiet");
         assertEquals(1, dryQuiet.exit, dryQuiet.err);
         assertTrue(dryQuiet.out.contains("replace fullName"), "quiet keeps the delta payload");
-        assertFalse(dryQuiet.err.contains("NOT applied"), "quiet suppresses the advisory note, got: " + dryQuiet.err);
+        assertFalse(dryQuiet.err.contains("Plan:"), "quiet suppresses the plan rows, got: " + dryQuiet.err);
 
-        // apply for real, then dry-run again -> in sync -> exit 0.
-        run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
-        CliResult drySync = run("apply", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        // deploy for real, then dry-run again -> in sync -> exit 0.
+        run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        CliResult drySync = run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
         assertEquals(0, drySync.exit, drySync.err);
     }
 
@@ -428,35 +440,19 @@ class LiveIntegrationTest {
         assertEquals(1, matched.exit, matched.err);
         assertTrue(matched.out.contains("replace description"), matched.out);
 
-        // --no-match-by-name opts out, and then there is no OID to address.
+        // --no-match-by-name opts out: the object is found (a create must not duplicate its name) but not
+        // patched, so there is no change to show — an error, not an empty "in sync".
         CliResult optedOut = run("diff", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--no-match-by-name");
         assertEquals(2, optedOut.exit);
-        assertTrue(optedOut.err.contains("No OID to address"), optedOut.err);
+        assertTrue(optedOut.err.contains("--no-match-by-name rules out"), optedOut.err);
+        assertTrue(optedOut.out.isBlank(), "no payload for a skipped object: " + optedOut.out);
 
         // The old spelling still parses and still means "match by name" — scripts predate the default.
         CliResult legacy = run("diff", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--match-by-name", "--format", "summary");
         assertEquals(1, legacy.exit, legacy.err);
         assertTrue(legacy.out.contains("replace description"), legacy.out);
-    }
-
-    @Test
-    void applyMatchByNamePatchesAnOidlessObject(@TempDir Path dir) throws Exception {
-        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
-        deleteDeployObjects();
-
-        File seed = dir.resolve("seed.xml").toFile();
-        Files.writeString(seed.toPath(), role(DEPLOY_ROLE_OID, "IT Deploy Role", "orig"), StandardCharsets.UTF_8);
-        run("deploy", seed.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--create-if-absent", "--yes");
-
-        File oidless = dir.resolve("oidless.xml").toFile();
-        Files.writeString(oidless.toPath(), role(null, "IT Deploy Role", "changed"), StandardCharsets.UTF_8);
-        CliResult applied = run("apply", oidless.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
-                "--match-by-name", "--yes");
-        assertEquals(0, applied.exit, applied.err);
-        assertTrue(applied.out.contains("Applied"), applied.out);
-        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains("changed"), "the matched role was patched");
     }
 
     // --- helpers ---

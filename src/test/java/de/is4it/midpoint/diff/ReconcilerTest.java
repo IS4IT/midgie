@@ -133,7 +133,7 @@ class ReconcilerTest {
     }
 
     @Test
-    void oidlessWithCreateIfAbsentPatchesAnObjectThatIsAlreadyThere() throws Exception {
+    void oidlessWithCreateIfAbsentDoesNotDuplicateAnObjectThatIsAlreadyThere() throws Exception {
         // "Create objects that do not exist yet" has to ask whether they exist. Planning a CREATE without
         // ever looking made the second run of a pipeline POST the same object again, which midPoint rejects
         // as a duplicate name — so the documented idempotent re-run only held for OID-carrying objects.
@@ -141,8 +141,19 @@ class ReconcilerTest {
 
         Reconciler.Outcome outcome = plan(true, false, role(null, "Manager", "desired description"));
 
-        assertEquals(Reconciler.Action.PATCH, outcome.action, "the existing object is patched, not duplicated");
-        assertEquals("server-oid", outcome.oid, "and addressed by the OID the server knows it under");
+        // Nor is it patched: that would be matching by name, which --no-match-by-name ruled out.
+        assertEquals(Reconciler.Action.SKIP, outcome.action, "the existing object is neither duplicated nor patched");
+        assertTrue(outcome.detail.contains("--no-match-by-name"), outcome.detail);
+    }
+
+    @Test
+    void oidlessWithBothDefaultsPatchesTheObjectItFindsByName() throws Exception {
+        searchResponse = objectList(role("server-oid", "Manager", "live description"));
+
+        Reconciler.Outcome outcome = plan(true, true, role(null, "Manager", "desired description"));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action);
+        assertEquals("server-oid", outcome.oid, "addressed by the OID the server knows it under");
     }
 
     // --- helpers ---

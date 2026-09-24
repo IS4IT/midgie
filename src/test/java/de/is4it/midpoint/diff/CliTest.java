@@ -97,15 +97,15 @@ class CliTest {
     }
 
     @Test
-    void applyWithoutHostExitsTwo() {
-        Result r = run("apply", A);
+    void deployDryRunWithoutHostExitsTwo() {
+        Result r = run("deploy", A, "--dry-run");
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("--url"), r.err);
     }
 
     @Test
-    void applyHostWithoutPasswordExitsTwo() {
-        Result r = run("apply", A, "--url", DEAD_HOST, "--user", "u");
+    void liveDiffHostWithoutPasswordExitsTwo() {
+        Result r = run("diff", A, "--url", DEAD_HOST, "--user", "u");
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("--password"), r.err);
     }
@@ -168,8 +168,8 @@ class CliTest {
     }
 
     @Test
-    void applyChecksItsInputBeforeTheServerToo() {
-        Result r = run("apply", "/no/such/desired.xml", "--url", DEAD_HOST, "-u", "u", "-p", "p");
+    void liveDiffChecksItsInputBeforeTheServerToo() {
+        Result r = run("diff", "/no/such/desired.xml", "--url", DEAD_HOST, "-u", "u", "-p", "p");
 
         assertEquals(2, r.exit);
         assertTrue(r.err.contains("no such file or directory"), r.err);

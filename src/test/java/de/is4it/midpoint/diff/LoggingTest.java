@@ -78,7 +78,7 @@ class LoggingTest {
         root().setLevel(Level.INFO);
         ours().setLevel(Level.INFO);
 
-        Logging.enableFrom(new String[] {"apply", "x.xml", "--trace"});
+        Logging.enableFrom(new String[] {"deploy", "x.xml", "--trace"});
 
         assertEquals(Level.DEBUG, root().getLevel(), "the framework goes to DEBUG");
         assertEquals(Level.TRACE, ours().getLevel(), "and this tool's own loggers to TRACE");
