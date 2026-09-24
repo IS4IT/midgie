@@ -150,6 +150,23 @@ class NestedOwnershipTest {
         assertEquals("mapping/4/condition", tracked.keptNested().get(0).path().toString());
     }
 
+    @Test
+    void anItemAddedInsideAKeyedValueIsAddressedByTheServersId() throws Exception {
+        // prism builds the path of an item only desired holds from the desired value, which has no id: the
+        // add came out as 'mapping/lifecycleState', naming no mapping, and --scope present failed resolving it.
+        PrismObject<? extends Objectable> desired = template(mapping(null, "given", "")
+                + mapping(null, "family", "<lifecycleState>proposed</lifecycleState>"));
+        PrismObject<? extends Objectable> live = template(mapping(4L, "given", "") + mapping(7L, "family", ""));
+
+        for (boolean tracked : new boolean[] {false, true}) {
+            DiffEngine.DiffResult result = diff(desired, live, DiffEngine.Scope.PRESENT, tracked);
+            assertEquals(List.of("mapping/7/lifecycleState"), paths(result.delta()), "tracked=" + tracked);
+        }
+        assertEquals(null, desired.getValue().findContainer(
+                com.evolveum.midpoint.prism.path.ItemName.from(NS, "mapping")).getValues().get(1).getId(),
+                "the caller's desired object is left as it was");
+    }
+
     // --- helpers ---
 
     private static DiffEngine.DiffResult diff(PrismObject<? extends Objectable> desired,

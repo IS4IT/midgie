@@ -442,9 +442,79 @@ public final class DiffEngine {
         @SuppressWarnings("unchecked") // the two objects were verified to share a compile-time class
         PrismObject<O> desiredTyped = (PrismObject<O>) desired;
         if (!equivalence.isAuto()) {
-            return live.diff(desiredTyped, equivalence.fixedStrategy());
+            ParameterizedEquivalenceStrategy strategy = equivalence.fixedStrategy();
+            if (strategy.isConsideringNaturalKeys()) {
+                PrismObject<O> withIds = desiredTyped.clone();
+                adoptLiveIds(withIds.getValue(), live.getValue());
+                return live.diff(withIds, strategy);
+            }
+            return live.diff(desiredTyped, strategy);
         }
         return reconcileAuto(live, desiredTyped, choices);
+    }
+
+    /**
+     * Give each desired container value that pairs with a live one by natural key the live value's container
+     * id — on a copy of desired, for the {@code natural-keys} pass only.
+     *
+     * <p>prism pairs such values (a hand-written {@code mapping} has no id, the server's copy has one) and
+     * diffs inside them, but it builds the path of an item only desired holds from the <em>desired</em> value,
+     * so adding a {@code lifecycleState} to a mapping came out as {@code mapping/lifecycleState} — no id, a
+     * path that names no particular mapping and that prism itself refuses to resolve ("Attempt to get segment
+     * without an ID from a multi-valued container"). With the id adopted both sides agree and every path
+     * carries the server's id, which is also what the PATCH needs to address the value.
+     *
+     * <p>Pairing is {@link NaturalKeys#match}'s, id first and then key, each live value taken at most once.
+     * Nothing else about desired changes, and the real-value pass never sees the ids: there they would pair
+     * values the {@code auto} walk deliberately left to be matched by content.
+     */
+    private static void adoptLiveIds(PrismContainerValue<?> desired, PrismContainerValue<?> live) {
+        if (live == null) {
+            return;
+        }
+        for (Item<?, ?> item : desired.getItems()) {
+            if (item instanceof PrismContainer<?> container) {
+                ItemDefinition<?> definition = container.getDefinition();
+                if (definition != null && !definition.isOperational()) {
+                    adoptLiveIds(container, containerAt(live, item.getElementName()));
+                }
+            }
+        }
+    }
+
+    private static void adoptLiveIds(PrismContainer<?> desired, PrismContainer<?> live) {
+        if (live == null || desired.getValues().isEmpty()) {
+            return;
+        }
+        ItemDefinition<?> definition = desired.getDefinition();
+        if (definition != null && definition.isSingleValue()) {
+            if (!live.getValues().isEmpty()) {
+                adoptLiveIds(desired.getValues().get(0), live.getValues().get(0));
+            }
+            return;
+        }
+        Set<PrismContainerValue<?>> taken = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (PrismContainerValue<?> value : desired.getValues()) {
+            PrismContainerValue<?> match = NaturalKeys.match(live, value, value.getId());
+            if (match == null || taken.contains(match)) {
+                continue;
+            }
+            taken.add(match);
+            if (value.getId() == null && match.getId() != null) {
+                value.setId(match.getId());
+            }
+            adoptLiveIds(value, match);
+        }
+    }
+
+    /** {@link #adoptLiveIds} for the multi-valued container at {@code path}, reached through single values. */
+    private static void adoptLiveIdsAt(PrismObject<?> desired, PrismObject<?> live, ItemPath path) {
+        Item<?, ?> desiredItem = desired.findItem(path);
+        Item<?, ?> liveItem = live.findItem(path);
+        if (desiredItem instanceof PrismContainer<?> desiredContainer
+                && liveItem instanceof PrismContainer<?> liveContainer) {
+            adoptLiveIds(desiredContainer, liveContainer);
+        }
     }
 
     /**
@@ -465,11 +535,13 @@ public final class DiffEngine {
             PrismObject<O> live, PrismObject<O> desired, List<String> choices) {
 
         List<List<String>> naturalKeyPaths = new ArrayList<>();
+        PrismObject<O> withIds = desired.clone();
         int total = 0;
         for (NaturalKeys.AutoBucket bucket : NaturalKeys.autoBuckets(desired)) {
             total++;
             if (bucket.naturalKeySafe()) {
                 naturalKeyPaths.add(localNames(bucket.path()));
+                adoptLiveIdsAt(withIds, live, bucket.path());
                 choices.add(pathText(bucket.path()) + "=natural-keys");
             } else {
                 choices.add(pathText(bucket.path()) + "=real-value (" + bucket.reason() + ")");
@@ -480,11 +552,11 @@ public final class DiffEngine {
             return live.diff(desired, EquivalenceStrategy.REAL_VALUE);
         }
         if (naturalKeyPaths.size() == total) {
-            return live.diff(desired, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
+            return live.diff(withIds, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
         }
 
         ObjectDelta<O> natural =
-                live.diff(desired, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
+                live.diff(withIds, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
         ObjectDelta<O> real = live.diff(desired, EquivalenceStrategy.REAL_VALUE);
         retainBucket(natural, naturalKeyPaths, true);
         retainBucket(real, naturalKeyPaths, false);
