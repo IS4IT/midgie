@@ -58,6 +58,7 @@ class LiveIntegrationTest {
     private static final String DEPLOY_USER_OID = "a17e57e5-0000-0000-0000-0000000000d2";
     private static final String DEPLOY_MATCH_OID = "a17e57e5-0000-0000-0000-0000000000d3";
     private static final String LOOKUP_OID = "a17e57e5-0000-0000-0000-0000000000d4";
+    private static final String TEMPLATE_OID = "a17e57e5-0000-0000-0000-0000000000d5";
     // Built-in roles, only ever induced by the throwaway role, which nobody is assigned.
     private static final String SUPERUSER_ROLE_OID = "00000000-0000-0000-0000-000000000004";
     private static final String END_USER_ROLE_OID = "00000000-0000-0000-0000-000000000008";
@@ -553,7 +554,107 @@ class LiveIntegrationTest {
         assertEquals(1, owned.exit, owned.out + owned.err);
     }
 
+    @Test
+    void aTrackedTreeOwnsOnlyTheNestedItemsItDeployed(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
+
+        // Three mappings, paired by name. v1 deploys lifecycleState on 'given' and a description on 'full';
+        // 'family' carries neither.
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path file = tree.resolve("template.xml");
+        Files.writeString(file, template(templateMapping("given", "<lifecycleState>draft</lifecycleState>")
+                + templateMapping("family", "") + templateMapping("full", "<description>v1 text</description>")),
+                StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        git(tree, "config", "user.email", "test@example.invalid");
+        git(tree, "config", "user.name", "midgie test");
+        commit(tree, "v1");
+        Path plans = dir.resolve("rollback");
+        CliResult first = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--rollback-plan", plans.toString());
+        assertEquals(0, first.exit, first.out + first.err);
+        String deployed = client.getObject("objectTemplates", TEMPLATE_OID);
+        String givenId = mappingId(deployed, "given");
+        assertNotNull(givenId, deployed);
+
+        // Someone on the server gives 'family' a lifecycleState the tree never had, and rewrites the
+        // description the tree deployed on 'full' — here through an untracked file on explicit merge.
+        Path elsewhere = Files.createDirectories(dir.resolve("elsewhere"));
+        Files.writeString(elsewhere.resolve("admin.xml"), template(
+                templateMapping("family", "<lifecycleState>proposed</lifecycleState>")
+                        + templateMapping("full", "<description>admin text</description>")), StandardCharsets.UTF_8);
+        CliResult admin = run("deploy", elsewhere.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--multivalue", "merge", "--yes", "--no-rollback-plan");
+        assertEquals(0, admin.exit, admin.out + admin.err);
+
+        // v2 drops what v1 deployed on 'given' and 'full'.
+        Files.writeString(file, template(templateMapping("given", "") + templateMapping("family", "")
+                + templateMapping("full", "")), StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult preview = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--dry-run", "--format", "xml");
+        assertEquals(1, preview.exit, preview.out + preview.err);
+        assertTrue(preview.err.contains("keeps live value(s) the tree does not list")
+                && preview.err.contains("mapping/lifecycleState ×1"), "(a) kept and reported: " + preview.err);
+        assertTrue(preview.err.contains("mapping[name=full]/description")
+                && preview.err.contains("changed on the server after it was deployed"),
+                "(c) kept with a note: " + preview.err);
+        assertFalse(preview.out.contains("proposed") || preview.out.contains("admin text"),
+                "nothing someone else owns is in the PATCH: " + preview.out);
+
+        CliResult second = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--rollback-plan", plans.toString());
+        assertEquals(0, second.exit, second.out + second.err);
+        String live = client.getObject("objectTemplates", TEMPLATE_OID);
+        assertEquals(givenId, mappingId(live, "given"), "(b) the mapping survives with its id:\n" + live);
+        assertFalse(mapping(live, "given").contains("lifecycleState"), "(b) the dropped item is gone:\n" + live);
+        assertTrue(mapping(live, "family").contains("proposed"), "(a) the server's item stays:\n" + live);
+        assertTrue(mapping(live, "full").contains("admin text"), "(c) the changed item stays:\n" + live);
+        assertEquals(3, live.split("<mapping").length - 1, "no mapping removed or duplicated:\n" + live);
+
+        CliResult again = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        assertEquals(0, again.exit, "settled after one run: " + again.out + again.err);
+
+        // (d) The rollback puts back what the tree removed.
+        CliResult back = run("rollback", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--rollback-plan", plans.toString());
+        assertEquals(0, back.exit, back.out + back.err);
+        String restored = client.getObject("objectTemplates", TEMPLATE_OID);
+        assertTrue(mapping(restored, "given").contains("draft"), "rollback restores the item:\n" + restored);
+        assertEquals(givenId, mappingId(restored, "given"), restored);
+    }
+
     // --- helpers ---
+
+    private static String template(String mappings) {
+        return "<objectTemplate xmlns=\"" + NS + "\" oid=\"" + TEMPLATE_OID + "\">\n"
+                + "  <name>zz-it-template</name>\n" + mappings + "</objectTemplate>";
+    }
+
+    private static String templateMapping(String name, String extra) {
+        return "  <mapping>\n    <name>" + name + "</name>\n    <strength>weak</strength>\n    " + extra
+                + "\n    <expression><asIs/></expression>\n    <target><path>description</path></target>\n"
+                + "  </mapping>\n";
+    }
+
+    /** The XML of the mapping named {@code name} in a template, or an empty string. */
+    private static String mapping(String xml, String name) {
+        for (String chunk : xml.split("<mapping")) {
+            if (chunk.contains("<name>" + name + "</name>")) {
+                return chunk.substring(0, Math.max(chunk.indexOf("</mapping>"), 0));
+            }
+        }
+        return "";
+    }
+
+    /** The container id midPoint gave the mapping named {@code name}, or {@code null}. */
+    private static String mappingId(String xml, String name) {
+        java.util.regex.Matcher matcher =
+                java.util.regex.Pattern.compile("^ id=\"(\\d+)\"").matcher(mapping(xml, name));
+        return matcher.find() ? matcher.group(1) : null;
+    }
 
     private static boolean reachable() {
         try {
@@ -585,6 +686,7 @@ class LiveIntegrationTest {
         tryDelete("users", DEPLOY_USER_OID);
         tryDelete("roles", DEPLOY_ROLE_OID);
         tryDelete("roles", DEPLOY_MATCH_OID);
+        tryDelete("objectTemplates", TEMPLATE_OID);
         deleteByName("roles", COMBO_NAME);
     }
 
