@@ -866,8 +866,28 @@ class DiffCommandTest {
                 && (connectorRef.getValuesToDelete() == null || connectorRef.getValuesToDelete().isEmpty())
                 && connectorRef.getValuesToReplace() == null;
         assertFalse(addOnly, "a single-valued reference must never end up add-only: " + connectorRef);
-        assertTrue(result.mergeFallbackPaths().stream().anyMatch(p -> p.contains("connectorRef")),
-                "and the fallback to replace must be reported: " + result.mergeFallbackPaths());
+        assertTrue(result.mergeFallbackPaths().isEmpty(),
+                "one value has nothing for merge to keep, so there is no fallback to report: "
+                        + result.mergeFallbackPaths());
+    }
+
+    @Test
+    void underMergeOnlyMultiValuedItemsTheFileMentionsCanBeReportedAsAFallback(@TempDir Path dir) throws Exception {
+        // Merge is the default on a tracked tree, so this note is on every run: a changed single-valued item,
+        // or one --scope present drops because the file never mentions it, must not produce one.
+        File desired = write(dir, "desired.xml", "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"44444444-4444-4444-4444-444444444444\">\n"
+                + "  <name>Merge Noise</name>\n  <description>new</description>\n</role>");
+        File live = write(dir, "live.xml", "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " oid=\"44444444-4444-4444-4444-444444444444\">\n"
+                + "  <name>Merge Noise</name>\n  <description>old</description>\n"
+                + "  <riskLevel>high</riskLevel>\n</role>");
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.of(true, List.of()));
+
+        assertTrue(result.hasDrift(), "the description change is still sent: " + result.delta());
+        assertTrue(result.mergeFallbackPaths().isEmpty(), result.mergeFallbackPaths().toString());
     }
 
     @Test

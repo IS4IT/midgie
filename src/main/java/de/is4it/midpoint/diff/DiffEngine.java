@@ -284,6 +284,11 @@ public final class DiffEngine {
         // delta that is no longer there.
         recordOldValues(delta, live);
 
+        // The same for the merge fallbacks, which were collected before --scope present and the strips: an
+        // item the desired object does not even mention was otherwise reported as "left as replace" while
+        // nothing about it is sent.
+        mergeFallbacks = stillInDelta(mergeFallbacks, delta);
+
         // Merge promises accrued (live-only) values survive. Under an id/natural-key-considering strategy,
         // prism can pair a live-only value with a desired value and edit it in place (a deep delta merge
         // cannot express as a union), which silently overwrites the accrued value. Report those paths so
@@ -1091,6 +1096,18 @@ public final class DiffEngine {
      *
      * @return the paths of merge-requested items that could only be expressed as a replace
      */
+    /** The paths of {@code paths} that the delta still modifies. */
+    private static List<String> stillInDelta(List<String> paths, ObjectDelta<?> delta) {
+        if (paths.isEmpty()) {
+            return paths;
+        }
+        Set<String> remaining = new java.util.HashSet<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            remaining.add(mod.getPath().toString());
+        }
+        return paths.stream().filter(remaining::contains).toList();
+    }
+
     private static List<String> applyMerge(ObjectDelta<?> delta, MultiValueStrategy multiValue) {
         List<String> fallbacks = new ArrayList<>();
         List<ItemDelta<?, ?>> emptied = new ArrayList<>();
@@ -1101,7 +1118,9 @@ public final class DiffEngine {
             }
             ItemDefinition<?> definition = mod.getDefinition();
             if (definition != null && definition.isSingleValue()) {
-                fallbacks.add(mod.getPath().toString());
+                // Left as it is, delete side included — but not reported: a single-valued item has one value,
+                // so there is nothing for merge to keep and nothing it gave up. Reporting it named every
+                // changed field of every object once merge became the default on a tracked tree.
                 continue;
             }
             if (mod.getValuesToReplace() != null) {

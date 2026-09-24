@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **No more "merge does not apply there" warnings for every changed field.** Since a tracked tree runs on merge, each changed single-valued item (`executionState`, `ownerRef`, …) was reported as having "diffs to a whole-value replace; merge does not apply there" — although one value leaves merge nothing to keep, so nothing was given up. And the list was taken before `--scope present`, so items the file never mentions were named too, even on an object that was `in-sync`. Only a multi-valued item that is really sent as a whole-value replace is reported now.
+
 ## [0.13.0] - 2026-09-24
 
 ### Removed
