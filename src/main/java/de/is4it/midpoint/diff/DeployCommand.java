@@ -219,6 +219,9 @@ public class DeployCommand implements Callable<Integer> {
     /** Plan entries the operator declined under --confirm-each-apply; they are neither applied nor failed. */
     private int declinedEntries;
 
+    /** Names the OIDs in what this run writes for people to read: plan files, the rollback plan, a payload. */
+    private OidComments oidComments = new OidComments();
+
     /** The safety net being accumulated for this run; null when no writing pass will happen. */
     private RollbackPlan rollback;
 
@@ -445,6 +448,11 @@ public class DeployCommand implements Callable<Integer> {
             emitWarnings(localSchemas, schemaOrder, objectOrder, warnings);
             Reconciler reconciler = new Reconciler(prismContext, client, createIfAbsent(), matchByName());
             List<DeployObject> units = flatten(schemaOrder, objectOrder);
+            // Every object of the tree is named from the tree itself; only references beyond it are looked up.
+            oidComments = new OidComments(OidComments.serverLookup(prismContext, client));
+            for (DeployObject unit : units) {
+                oidComments.know(unit.oid(), unit.typeName(), unit.name());
+            }
             LOG.debug("{} apply unit(s); mode={}", units.size(), planDir != null ? "plan" : "apply");
 
             Tracking tracking = resolveTracking(prismContext, client);
@@ -466,7 +474,7 @@ public class DeployCommand implements Callable<Integer> {
 
             // Only a run that actually writes needs a net; --dry-run and --plan touch nothing.
             if (planDir == null && !dryRun && !noRollbackPlan) {
-                rollback = new RollbackPlan(prismContext, client);
+                rollback = new RollbackPlan(prismContext, client, oidComments);
             }
 
             Integer exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
@@ -481,6 +489,8 @@ public class DeployCommand implements Callable<Integer> {
                 markNotFullyApplied("some removals cannot be expressed");
                 exit = EXIT_ERROR;
             }
+            // Written after the apply: the tree's objects are on the server now, whatever the plan said.
+            oidComments.treeDeployed();
             writeRollbackPlan(client, tracking);
 
             if (exit == 0 && planDir == null && !dryRun) {
@@ -883,6 +893,9 @@ public class DeployCommand implements Callable<Integer> {
             if (format != null) {
                 Reconciler.Outcome outcome = preview.lastOutcome;
                 String payload = (outcome != null) ? reconciler.render(outcome, format) : null;
+                if (payload != null && payload.stripLeading().startsWith("<")) {
+                    payload = oidComments.annotate(payload, outcome.oid, units.get(0).typeName());
+                }
                 if (payload == null) {
                     // A skipped object has no change to hand over, and an empty payload with exit 0 would
                     // read as "in sync". The row saying why was a status line, which diff does not print.
@@ -1125,13 +1138,15 @@ public class DeployCommand implements Callable<Integer> {
                 switch (outcome.action) {
                     case CREATE:
                         PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid, unit.name(),
-                                PlanStore.Kind.CREATE, outcome.createBody);
+                                PlanStore.Kind.CREATE,
+                                oidComments.annotate(outcome.createBody, outcome.oid, unit.typeName()));
                         tally.created++;
                         reportUnit(unit, "would-create", "", false);
                         break;
                     case PATCH:
                         PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid, unit.name(),
-                                PlanStore.Kind.PATCH, outcome.modificationXml);
+                                PlanStore.Kind.PATCH,
+                                oidComments.annotate(outcome.modificationXml, outcome.oid, unit.typeName()));
                         tally.patched++;
                         reportUnit(unit, "would-patch", outcome.changes + " change(s)", false);
                         break;
@@ -1231,12 +1246,13 @@ public class DeployCommand implements Callable<Integer> {
                     continue;
                 }
                 if (entry.kind == PlanStore.Kind.CREATE) {
-                    client.createObject(entry.restType, entry.body);
+                    // Comments are for the reviewer; the server gets the change and nothing else.
+                    client.createObject(entry.restType, OidComments.strip(entry.body));
                     reportEntry(entry, "created", "", false);
                 } else {
-                    // The body is replayed byte for byte; it is only parsed to see whether it sets a
-                    // reference by filter, which decides the re-resolve option.
-                    client.patchObject(entry.restType, entry.oid, entry.body,
+                    // The body is replayed as reviewed, minus its comments; it is only parsed to see
+                    // whether it sets a reference by filter, which decides the re-resolve option.
+                    client.patchObject(entry.restType, entry.oid, OidComments.strip(entry.body),
                             PlanStore.setsReferenceByFilter(entry));
                     reportEntry(entry, "patched", "", false);
                 }

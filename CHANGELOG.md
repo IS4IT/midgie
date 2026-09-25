@@ -5,6 +5,16 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **OIDs are named in the XML midgie writes for people.** The `diff` payload, `deploy --dry-run --format xml`, `--plan` files and the rollback plan now carry a comment above each element that names an object by OID — `<!-- RoleType "Superuser" -->` above a `targetRef`, the object's own name above `<apti:oid>`. Objects of the tree are named from the tree, references beyond it from the server in one search per object type, cached for the run; an OID the server does not know is labelled `RoleType not found on the server`, which shows a dangling reference before it is sent — unless the tree holds it, which then reads `RoleType "Manager" (not on the server yet, deployed with this tree)`. An offline `diff` names only the object itself. Nothing is annotated inside a CDATA script, and a payload that would not parse with the comments is written without them.
+
+### Changed
+
+- **`--apply-plan` and `rollback` strip comments before sending.** The REST interface ignores them, but a reviewed plan may carry notes of its own, and what the server receives should be the change and nothing else. Stripping removes exactly what midgie inserted, so the body sent is the one that was computed.
+
 ## [0.14.0] - 2026-09-25
 
 ### Changed

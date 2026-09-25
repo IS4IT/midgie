@@ -243,7 +243,15 @@ public class DiffCommand implements Callable<Integer> {
                 }
             }
 
-            Io.writePayload(output, DeltaOutput.render(prismContext, result.delta(), format));
+            String payload = DeltaOutput.render(prismContext, result.delta(), format);
+            if ("xml".equalsIgnoreCase(format)) {
+                // No server offline, so only the object itself can be named; its references stay bare OIDs.
+                OidComments names = new OidComments();
+                names.know(desired.getOid(), desired.getCompileTimeClass() != null
+                        ? desired.getCompileTimeClass().getSimpleName() : null, LiveLookup.nameOf(desired));
+                payload = names.annotate(payload, desired.getOid(), null);
+            }
+            Io.writePayload(output, payload);
             return result.hasDrift() ? 1 : 0;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();

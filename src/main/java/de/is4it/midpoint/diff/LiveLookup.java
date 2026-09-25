@@ -7,7 +7,10 @@ package de.is4it.midpoint.diff;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import javax.xml.namespace.QName;
 
@@ -63,8 +66,32 @@ final class LiveLookup {
                 .item(ObjectType.F_NAME).eqPoly(name).matchingOrig().build());
     }
 
+    /**
+     * The names of the objects of {@code restType} among {@code oids}, by OID, in one search. An OID missing
+     * from the result is not on the server (or not visible to this account). Used only to name OIDs in
+     * comments, so the objects are not re-read for items the server withheld.
+     */
+    static Map<String, String> namesByOid(PrismContext prismContext, MidpointRestClient client, Class<?> clazz,
+            String restType, Collection<String> oids) throws SchemaException, IOException {
+        Map<String, String> names = new LinkedHashMap<>();
+        if (oids.isEmpty()) {
+            return names;
+        }
+        ObjectQuery query = prismContext.queryFor(containerable(clazz)).id(oids.toArray(new String[0])).build();
+        for (PrismObject<? extends Objectable> object : search(prismContext, client, restType, query, false)) {
+            names.put(object.getOid(), nameOf(object));
+        }
+        return names;
+    }
+
     private static List<PrismObject<? extends Objectable>> search(PrismContext prismContext,
             MidpointRestClient client, String restType, ObjectQuery query)
+            throws SchemaException, IOException {
+        return search(prismContext, client, restType, query, true);
+    }
+
+    private static List<PrismObject<? extends Objectable>> search(PrismContext prismContext,
+            MidpointRestClient client, String restType, ObjectQuery query, boolean complete)
             throws SchemaException, IOException {
         QueryType queryType = prismContext.getQueryConverter().createQueryType(query);
         String body = prismContext.xmlSerializer()
@@ -74,7 +101,8 @@ final class LiveLookup {
         List<PrismObject<? extends Objectable>> matches = new ArrayList<>();
         if (list != null) {
             for (ObjectType object : list.getObject()) {
-                matches.add(complete(prismContext, client, restType, object.asPrismObject()));
+                matches.add(complete ? complete(prismContext, client, restType, object.asPrismObject())
+                        : object.asPrismObject());
             }
         }
         LOG.trace("search {} → {} object(s)", restType, matches.size());

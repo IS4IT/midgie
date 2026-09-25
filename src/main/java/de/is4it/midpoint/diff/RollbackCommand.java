@@ -259,7 +259,8 @@ public class RollbackCommand implements Callable<Integer> {
         int failed = 0;
         for (PlanStore.Entry entry : entries) {
             try {
-                client.patchObject(entry.restType, entry.oid, entry.body,
+                // Comments are for the reviewer; the server gets the change and nothing else.
+                client.patchObject(entry.restType, entry.oid, OidComments.strip(entry.body),
                         PlanStore.setsReferenceByFilter(entry));
                 applied++;
                 status("  restored     " + entry.restType + "/" + entry.oid);

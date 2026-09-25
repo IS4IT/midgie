@@ -389,6 +389,14 @@ class LiveIntegrationTest {
         try (java.util.stream.Stream<Path> files = Files.list(plan)) {
             assertTrue(files.anyMatch(p -> p.toString().endsWith(".create.xml")), "expected create files");
         }
+        // The user's assignment names the role it points at — from the tree, and as one this deploy creates,
+        // since it is not on the server yet — and the comment does not stop the file from being replayed.
+        String userPlan;
+        try (java.util.stream.Stream<Path> files = Files.list(plan)) {
+            userPlan = Files.readString(files.filter(p -> p.toString().contains("-users-")).findFirst().orElseThrow());
+        }
+        assertTrue(userPlan.contains("<!-- RoleType \"IT Deploy Role\" (not on the server yet, deployed with this tree) -->"),
+                userPlan);
 
         // --apply-plan replays them: the role (lower sequence) is POSTed before the user that assigns it.
         CliResult applied = run("deploy", "--apply-plan", plan.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
@@ -495,6 +503,9 @@ class LiveIntegrationTest {
 
         CliResult diff = run("diff", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD);
         assertEquals(preview.out, diff.out, "diff reads the same history and sends the same body");
+        assertTrue(diff.out.contains("<!-- RoleType \"Superuser\" -->")
+                        && diff.out.contains("<!-- RoleType \"End user\" -->"),
+                "the references are named from the server: " + diff.out);
 
         CliResult second = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--yes", "--rollback-plan", plans.toString());
@@ -509,7 +520,13 @@ class LiveIntegrationTest {
         CliResult again = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
         assertEquals(0, again.exit, "settled after one run: " + again.out + again.err);
 
-        // The rollback plan holds one inverse for the object, removals included.
+        // The rollback plan holds one inverse for the object, removals included, named for the reviewer.
+        try (java.util.stream.Stream<Path> files = Files.walk(plans)) {
+            String inverse = Files.readString(files.filter(p -> p.toString().endsWith(".patch.xml")).findFirst()
+                    .orElseThrow());
+            assertTrue(inverse.contains("<!-- RoleType \"IT Deploy Role\" -->")
+                    && inverse.contains("<!-- RoleType \"Superuser\" -->"), inverse);
+        }
         CliResult back = run("rollback", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
                 "--rollback-plan", plans.toString());
         assertEquals(0, back.exit, back.out + back.err);

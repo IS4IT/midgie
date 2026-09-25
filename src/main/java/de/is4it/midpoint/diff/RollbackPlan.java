@@ -151,10 +151,17 @@ final class RollbackPlan {
     private final List<Item> items = new ArrayList<>();
     private final PrismContext prismContext;
     private final MidpointRestClient client;
+    private final OidComments oidComments;
 
     RollbackPlan(PrismContext prismContext, MidpointRestClient client) {
+        this(prismContext, client, new OidComments());
+    }
+
+    /** As above, naming the OIDs in the files it writes for whoever reviews the rollback. */
+    RollbackPlan(PrismContext prismContext, MidpointRestClient client, OidComments oidComments) {
         this.prismContext = prismContext;
         this.client = client;
+        this.oidComments = oidComments;
     }
 
     /**
@@ -259,7 +266,7 @@ final class RollbackPlan {
         int sequence = undoable.size();
         for (Item item : undoable) {
             PlanStore.write(dir, sequence--, width, item.restType, item.oid, item.name,
-                    PlanStore.Kind.PATCH, item.inverseXml);
+                    PlanStore.Kind.PATCH, oidComments.annotate(item.inverseXml, item.oid, null));
         }
         writeManifest(dir, server, deployment, revision);
         PlanStore.markComplete(dir);
