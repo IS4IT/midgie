@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -102,6 +103,42 @@ class ConfigDefaultsTest {
         assertEquals(null, withEnv.defaultValue(url), "the file stands aside for MIDPOINT_URL");
         assertEquals("https://from-the-file/midpoint", withoutEnv.defaultValue(url),
                 "and applies when the variable is not set");
+    }
+
+    @Test
+    void midpointPasswordBeatsEveryPasswordSettingInTheFile(@TempDir Path dir) throws Exception {
+        // The password order tries --password-env and --password-file before MIDPOINT_PASSWORD, so a file
+        // naming either would otherwise outrank the variable -- the one setting where the file won.
+        Path user = write(dir, "user.properties", "password-file = pw.txt", "password-env = VAULT_PW");
+        UnaryOperator<String> withPassword = name -> "MIDPOINT_PASSWORD".equals(name) ? "from-env" : null;
+
+        ConfigDefaults withEnv = ConfigDefaults.load(withPassword, dir.resolve("absent-site").toFile(),
+                user.toFile(), null);
+        ConfigDefaults withoutEnv = ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                user.toFile(), null);
+
+        assertNull(value(withEnv, "diff", "--password-file"), "the file stands aside for MIDPOINT_PASSWORD");
+        assertNull(value(withEnv, "diff", "--password-env"));
+        assertEquals(dir.resolve("pw.txt").toString(), value(withoutEnv, "diff", "--password-file"),
+                "and applies when the variable is not set");
+        assertEquals("VAULT_PW", value(withoutEnv, "diff", "--password-env"));
+    }
+
+    @Test
+    void aPasswordFileOnTheCommandLineStillBeatsMidpointPassword(@TempDir Path dir) throws Exception {
+        // Command line over environment, as for --url and --user: only the file's settings stand aside.
+        Path user = write(dir, "user.properties", "password-file = pw.txt");
+        ConfigDefaults defaults = ConfigDefaults.load(
+                name -> "MIDPOINT_PASSWORD".equals(name) ? "from-env" : null,
+                dir.resolve("absent-site").toFile(), user.toFile(), null);
+
+        CommandLine commandLine = Main.commandLine();
+        commandLine.setDefaultValueProvider(defaults);
+        CommandLine.ParseResult parsed =
+                commandLine.parseArgs("diff", "a.xml", "--url", "http://mp", "--password-file", "cli.txt");
+        DiffCommand diff = (DiffCommand) parsed.subcommand().commandSpec().userObject();
+
+        assertEquals(new java.io.File("cli.txt"), diff.connectionOptions.passwordFile);
     }
 
     @Test

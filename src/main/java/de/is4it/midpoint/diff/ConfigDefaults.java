@@ -165,11 +165,19 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      * variable for the <em>other</em> scheme suppresses a {@code proxy} in the file without replacing it, and
      * that run goes direct. Deliberate: a process launched with proxy variables has been told how this
      * machine reaches the network, and a file describing a different machine should not overrule it.
+     *
+     * <p>The password is one setting a file can spell three ways — {@code password}, {@code password-env},
+     * {@code password-file} — so {@code MIDPOINT_PASSWORD} stands all three down. Otherwise a file naming a
+     * password file would outrank the variable, since the password order tries both of those options before
+     * it, and the password would be the one setting where the file beats the environment. On the command
+     * line they still win, as {@code --url} and {@code --user} do.
      */
     private static final Map<String, List<String>> ENV_OVERRIDES = Map.of(
             "url", List.of("MIDPOINT_URL"),
             "user", List.of("MIDPOINT_USER"),
             "password", List.of("MIDPOINT_PASSWORD"),
+            "password-env", List.of("MIDPOINT_PASSWORD"),
+            "password-file", List.of("MIDPOINT_PASSWORD"),
             "proxy", List.of("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"),
             "no-proxy", List.of("no_proxy", "NO_PROXY"));
 

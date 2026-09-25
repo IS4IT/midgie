@@ -558,7 +558,7 @@ user = deployer
 
 Naming a file explicitly is the most deliberate of the three, so it sits on top; and because it was named on purpose, a path that does not exist is an error rather than a quiet skip. In a pod, `/etc/midgie/midgie.properties` is a ConfigMap mount and `$HOME/.midgie.properties` is yours if you [put `$HOME` on the volume](#helm-chart).
 
-**Keys** are option names without the dashes — `url`, `cacert`, `no-create-if-absent` — applying to every subcommand that has that option, or qualified with the command to narrow them (`midgie.deploy.scope`). **Precedence**: an option on the command line wins, then the `MIDPOINT_*` environment variables, then this file, then the option's built-in default. Environment beats file deliberately: a variable describes the process this run was launched into — a pod's deployment, typically — and a file on the same machine should not quietly redirect it somewhere else. The password is the exception: a `password-env` or `password-file` set in a file is an option, and the [password order](#connection-live-modes) puts both before `MIDPOINT_PASSWORD`.
+**Keys** are option names without the dashes — `url`, `cacert`, `no-create-if-absent` — applying to every subcommand that has that option, or qualified with the command to narrow them (`midgie.deploy.scope`). **Precedence**: an option on the command line wins, then the `MIDPOINT_*` environment variables, then this file, then the option's built-in default. Environment beats file deliberately: a variable describes the process this run was launched into — a pod's deployment, typically — and a file on the same machine should not quietly redirect it somewhere else. That holds for the password however a file spells it: `MIDPOINT_PASSWORD` stands aside a file's `password`, `password-env` and `password-file` alike, while `--password-env`/`--password-file` on the command line still come first.
 
 **Paths**: a relative file or directory in a config file — `cacert = ca.pem`, `policy = midgie.policy` — is read from **the directory that file is in**, not from wherever midgie is run, the way `.editorconfig` and `.gitignore` work. So `cacert = ca.pem` in `~/.midgie.properties` means `~/ca.pem`. A path on the command line stays relative to the working directory. (Up to 0.15, a relative path in a file was read from the working directory; use an absolute path if you relied on that.)
 
@@ -610,7 +610,7 @@ A CA certificate is the case worth spelling out. With `cacert` in the file, TLS 
 |---|---|
 | `MIDPOINT_URL` | `--url` |
 | `MIDPOINT_USER` | `--user` |
-| `MIDPOINT_PASSWORD` | password (after the `--password*` flags, before the prompt) |
+| `MIDPOINT_PASSWORD` | password (after the `--password*` flags on the command line, before the prompt; outranks any password setting in a config file) |
 | `MIDGIE_CONF` | path to the [config file](#config-file--midgieproperties) (also `-Dmidgie.conf`) |
 | `MIDGIE_JAR` | JAR path used by the `bin/midgie` launcher |
 | `XDG_STATE_HOME` | base of the default [rollback plan](#the-rollback-plan-always-on) directory (`$XDG_STATE_HOME/midgie/…`, else `~/.local/state/midgie/…`) |

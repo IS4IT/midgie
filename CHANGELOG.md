@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`MIDPOINT_PASSWORD` outranks every password setting in a config file.** The environment beats a config file for the URL and the user, but a file's `password-file` or `password-env` still won over `MIDPOINT_PASSWORD`, because the password order tries both of those options before the variable. A pod given `MIDPOINT_PASSWORD` could therefore end up authenticating with a password file named on the machine. The variable now stands all three keys down (`password`, `password-env`, `password-file`); `--password-env` and `--password-file` on the command line still come first.
+
 ## [0.16.0] - 2026-09-25
 
 ### Changed

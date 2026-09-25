@@ -228,7 +228,8 @@ tree of one.
   adds only what differs.
   A named path that does not exist is an error rather than a silent skip, and each key remembers which file
   it came from so a validation error names the right one. Keys are option names without dashes, optionally qualified
-  with a command; precedence is CLI > `MIDPOINT_*` env > file > built-in default. `ConfigDefaults` wraps
+  with a command; precedence is CLI > `MIDPOINT_*` env > file > built-in default, and `MIDPOINT_PASSWORD` stands down every
+  file key that supplies the password (`password`, `password-env`, `password-file`), not only `password`. `ConfigDefaults` wraps
   picocli's `PropertiesDefaultProvider` (which looks up `<qualified.command>.<key>` then `<key>`) and adds the
   env rule plus validation: an unknown key is an error, since a mistyped setting that silently does nothing is
   the failure mode the policy file's "matched no object" note exists to prevent, `yes` is refused
