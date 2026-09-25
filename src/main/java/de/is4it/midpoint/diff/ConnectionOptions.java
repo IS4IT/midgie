@@ -101,7 +101,7 @@ public final class ConnectionOptions {
     int timeoutSeconds;
 
     @Option(names = "--retries", paramLabel = "N", defaultValue = "0",
-            description = "Retry idempotent reads on 503/connection-refused/timeout, N times with backoff "
+            description = "Retry idempotent reads on 502/503/504/connection-refused/timeout, N times with backoff "
                     + "(useful while the server is starting).")
     int retries;
 
