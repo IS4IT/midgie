@@ -265,6 +265,7 @@ final class Policy {
         // layering, and replacing values the policy asked to merge.
         List<DiffEngine.MultiValueStrategy.PathRule> itemRules = new ArrayList<>();
         List<ApplyRules.Rule> applyRules = new ArrayList<>();
+        List<Rule> itemRulesOffered = new ArrayList<>();
 
         for (Rule rule : rules) {
             if (rule.itemLevel) {
@@ -279,6 +280,7 @@ final class Policy {
                 }
                 if (couldMatchIdentity(rule.selector, identity)) {
                     rule.matched = true;
+                    itemRulesOffered.add(rule);
                 }
                 continue;
             }
@@ -315,7 +317,8 @@ final class Policy {
         itemRules.addAll(baseline.multiValue.pathRules());
         DiffEngine.MultiValueStrategy multiValue =
                 DiffEngine.MultiValueStrategy.of(globalMerge, itemRules, identity);
-        logApplied(type, name, scopeRule, equivalenceRule, allowInplaceRule, smartRefsRule, globalMergeRule);
+        logApplied(type, name, oid, scopeRule, equivalenceRule, allowInplaceRule, smartRefsRule, globalMergeRule,
+                itemRulesOffered);
         return new StrategyOptions.Resolved(scope, equivalence, multiValue, allowInplace, smartRefs,
                 ApplyRules.of(applyRules, identity), false, baseline.tracked);
     }
@@ -327,9 +330,13 @@ final class Policy {
      * question: it names rules that reached nothing, and stays silent about the ones that did — so "was my
      * rule applied to this object?" had no answer at any log level. Nothing is logged for an object no rule
      * touched, which is most of a tree.
+     *
+     * <p>Item rules ({@code apply=}, a per-item {@code multivalue}) are named too, with the identity they were
+     * matched against — the type and name as this object was offered, which is what a rule that "matched no
+     * object" has to be compared with.
      */
-    private void logApplied(String type, String name, Rule scope, Rule equivalence, Rule allowInplace,
-            Rule smartRefs, Rule multivalue) {
+    private void logApplied(String type, String name, String oid, Rule scope, Rule equivalence, Rule allowInplace,
+            Rule smartRefs, Rule multivalue, List<Rule> itemRules) {
         if (!LOG.isDebugEnabled()) {
             return;
         }
@@ -341,14 +348,18 @@ final class Policy {
         addApplied(byRule, "allow-inplace-merge", allowInplace);
         addApplied(byRule, "smart-refs", smartRefs);
         addApplied(byRule, "multivalue", multivalue);
-        if (byRule.isEmpty()) {
+        if (byRule.isEmpty() && itemRules.isEmpty()) {
             return;
         }
         List<String> applied = new ArrayList<>();
         for (Map.Entry<Rule, List<String>> entry : byRule.entrySet()) {
             applied.add(String.join(", ", entry.getValue()) + " (" + at(entry.getKey()) + ")");
         }
-        LOG.debug("policy: {}/{} ← {}", type, name, String.join("; ", applied));
+        for (Rule rule : itemRules) {
+            applied.add(rule.source + " (" + at(rule) + ")");
+        }
+        LOG.debug("policy: {}/{}{} ← {}", type, name, (oid != null && !oid.isBlank()) ? " [" + oid + "]" : "",
+                String.join("; ", applied));
     }
 
     /** Where a rule lives, in the form an editor jumps to — the answer to "and where do I change it?". */

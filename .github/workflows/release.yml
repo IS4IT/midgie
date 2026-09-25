@@ -87,9 +87,13 @@ jobs:
           echo "REVISION=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Stamp the release version into the build
-        run: >
-          mvn -B -ntp org.codehaus.mojo:versions-maven-plugin:2.16.2:set
-          -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+        # versions:set rewrites pom.xml, and the build's own 'git describe --dirty' would then call the tag's
+        # checkout modified: every released JAR reported itself as '<version>-dirty'. The rewrite is part of
+        # the release, not a change to it, so git is told to leave pom.xml out of that question.
+        run: |
+          mvn -B -ntp org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+            -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+          git update-index --assume-unchanged pom.xml
 
       - name: Build & test
         run: mvn -B -ntp verify

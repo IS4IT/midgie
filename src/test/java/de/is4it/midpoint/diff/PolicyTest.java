@@ -216,6 +216,35 @@ class PolicyTest {
     }
 
     @Test
+    void theDebugLogNamesTheItemRulesOfferedAndTheIdentityTheyMatched(@TempDir Path dir) throws Exception {
+        // "matched no object" answers which rules reached nothing; this answers the opposite, per object, with
+        // the type and name the object was offered under — what such a rule has to be compared with.
+        Policy policy = load(dir, "# tasks", "TaskType/*/executionState  apply=on-create");
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(Policy.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        ch.qos.logback.classic.Level original = logger.getLevel();
+        logger.addAppender(appender);
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            policy.resolveFor("TaskType", "AD - Abgleich (Reconciliation)", OID, baseline());
+            policy.resolveFor("RoleType", "Manager", null, baseline());
+        } finally {
+            logger.setLevel(original);
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+        java.util.List<String> lines = appender.list.stream()
+                .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList();
+
+        assertEquals(java.util.List.of("policy: TaskType/AD - Abgleich (Reconciliation) [" + OID + "] ← "
+                + "TaskType/*/executionState  apply=on-create (" + dir.resolve("policy.txt") + ":2)"), lines,
+                "one line for the task, none for the role no rule reached");
+    }
+
+    @Test
     void aRuleThatMatchesNothingIsReported(@TempDir Path dir) throws Exception {
         // A typo'd type or a renamed object resolves silently to the CLI baseline, so a merge rule written
         // to protect accrued values quietly becomes replace and the deploy deletes them.

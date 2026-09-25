@@ -5,6 +5,16 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`-v` names the item rules a policy applies to each object.** It used to log only the object-level knobs, so whether an `apply=` or per-item `multivalue` rule reached an object had no answer at any log level — only the "matched no object" note for the ones that reached nothing. Each object an item rule is offered to now gets one line with the type, name and OID it was matched under, and each rule with its file and line: `policy: TaskType/AD - Abgleich (Reconciliation) [4467e039-…] ← TaskType/*/executionState  apply=on-create (midgie.policy:2)`.
+
+### Fixed
+
+- **Released JARs no longer report themselves as `-dirty`.** The release job stamps the version into `pom.xml` before building, and the build's `git describe --dirty` then saw a modified checkout, so `midgie --version` said `0.14.1-dirty` for the released 0.14.1. The job now tells git to leave that rewrite out of the question.
+
 ## [0.14.1] - 2026-09-25
 
 ### Added
