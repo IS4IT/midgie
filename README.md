@@ -53,7 +53,7 @@ stderr, so that launch flag is the only way to suppress them — running the JAR
 Each release also publishes **`is4it/midgie`** on Docker Hub, for `linux/amd64` and `linux/arm64` — the JRE, the `bin/midgie` launcher, and **git**, which midgie forks to derive a tree's deployment identity and to recover what it applied last time (without it, `deploy` still applies; only [removal detection](#detecting-what-you-removed-opt-in) goes dark). git can clone over HTTPS and SSH (`curl`, `openssh-client`, `less`), so the tree can be fetched in the container itself rather than by an init container, and `vi` is there to edit a file in place. It is a tool image: the entrypoint is `midgie`, so arguments are subcommands.
 
 ```bash
-docker run --rm -u "$(id -u):0" --mount type=bind,source="$PWD",target=/work is4it/midgie:0.7.1 diff a.xml b.xml
+docker run --rm -u "$(id -u):0" --mount type=bind,source="$PWD",target=/work is4it/midgie:0.16.0 diff a.xml b.xml
 
 # In a Job, command: is the entrypoint and args: the subcommand line.
 #   args: ["deploy", "/work", "--url", "https://mp/midpoint", "--yes"]
@@ -66,9 +66,9 @@ Two things in that line are not decoration. **`-u "$(id -u):0"`**: the image run
 For a shell — to run midgie by hand against a checkout in the pod — the container needs something long-running, since the entrypoint would otherwise print help and exit:
 
 ```bash
-kubectl run midgie --image=is4it/midgie:0.7.1 --restart=Never --command -- sleep infinity
+kubectl run midgie --image=is4it/midgie:0.16.0 --restart=Never --command -- sleep infinity
 kubectl exec -it midgie -- bash          # then: midgie deploy /work --url ...
-docker run -d --name midgie --entrypoint sleep is4it/midgie:0.7.1 infinity   # the docker equivalent
+docker run -d --name midgie --entrypoint sleep is4it/midgie:0.16.0 infinity   # the docker equivalent
 ```
 
 `docker run <image> bash` does *not* give a shell — it runs `midgie bash`, which is rejected as an unknown subcommand. Use `--entrypoint bash`.
@@ -97,9 +97,9 @@ gh workflow run Release -f tag=v0.4.3 -f update_latest=true  # ...and move :late
 `charts/midgie` puts that image in a namespace as a workbench you exec into, with a PersistentVolumeClaim for git checkouts so a clone survives restarts and image bumps. Every release attaches the packaged chart, versioned with the release, so it installs without a checkout:
 
 ```bash
-gh release download v0.7.1 -R IS4IT/midgie -p 'midgie-*.tgz'
+gh release download v0.16.0 -R IS4IT/midgie -p 'midgie-*.tgz'
 
-helm install midgie ./midgie-0.7.1.tgz -n midgie --create-namespace \
+helm install midgie ./midgie-0.16.0.tgz -n midgie --create-namespace \
   --set midpoint.url=https://mp.example/midpoint --set midpoint.user=administrator
 
 kubectl -n midgie exec -it deploy/midgie -- bash
@@ -155,7 +155,7 @@ helm upgrade midgie charts/midgie -n <namespace> -f charts/midgie/values-openshi
 
 ## Commands
 
-`midgie` has four subcommands. **`diff`** shows the change for a **single object** and never writes; **`deploy`** reconciles any number of **files and folders** — one file is a tree of one; **`rollback`** puts back what the last `deploy` changed; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see below). All read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`).
+`midgie` has four subcommands. **`diff`** shows the change for a **single object** and never writes; **`deploy`** reconciles any number of **files and folders** — one file is a tree of one; **`rollback`** puts back what the last `deploy` changed; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see below). `diff` and `deploy` read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`); `rollback` replays a saved plan and reads nothing from the tree.
 
 Every `init` step is opt-in, because each one writes something: `init` on its own prints its help and exits 2 rather than picking a step for you.
 
@@ -230,7 +230,7 @@ Plans go to `$XDG_STATE_HOME/midgie/<deployment>/<timestamp>/` by default, keepi
 
 #### Detecting what you removed (opt-in)
 
-Dropping a value from a file is invisible to an ordinary diff: `desired` simply stops mentioning it, and under `multivalue=merge` the delta comes out empty, so `diff` reports `No differences.` while the value lives on. midgie closes that with a **three-way** comparison — desired, live, and *last-applied* — the merge `kubectl apply` performs, but with last-applied tracked as ArgoCD does: one synced git revision per deployment, rather than a copy of every object stored on the object itself. A value present in last-applied but absent now is one you removed on purpose; a value the server holds that midgie never applied is accrued state and is left alone.
+Dropping a value from a file is invisible to an ordinary diff: `desired` simply stops mentioning it, and under `multivalue=merge` the delta comes out empty, so `diff` finds nothing to change while the value lives on. midgie closes that with a **three-way** comparison — desired, live, and *last-applied* — the merge `kubectl apply` performs, but with last-applied tracked in git rather than as a copy of every object stored on the object itself. A value present in last-applied but absent now is one you removed on purpose; a value the server holds that midgie never applied is accrued state and is left alone.
 
 Last-applied comes from **version control**: for every deployed file midgie records the git **blob id** of the content it applied, and `git cat-file` gives that content back. A blob id is the content's own hash — the same in every clone and worktree, and changed only when the file is — so that id is all that must be stored. Enable it once per server:
 
@@ -241,7 +241,7 @@ bin/midgie init --create-state --url https://mp.example/midpoint --user administ
 That creates a `midgie-state` lookup table which records, **per file**, what was last applied — whatever path you deploy: the whole repository, a folder, or one file. Deploys of different paths therefore never disagree about a file, and `deploy role.xml` is tracked like the folder around it. `deploy` never creates it — until you run `init --create-state`, the tree is untracked: deploy runs `--multivalue auto` as `replace` and notes that detection is off. Afterwards each deploy records what it applied, runs on `merge`, and **removes what the tree has dropped since** — with each object's change, behind the same confirmation:
 
 ```
-midgie: 1 value(s) deployed at 2d58fd5 are no longer declared by the tree (each object's change would remove its own).
+midgie: 1 value(s) deployed earlier are no longer declared by the tree (each object's change would remove its own).
 midgie: note: RoleType/Manager: removing 1 value(s) no longer declared by the tree:
 midgie:   subtype = legacy (was in roles/manager.xml)
 ```
@@ -357,7 +357,8 @@ The contract lets CI gate on drift without parsing output:
 | `deploy --dry-run` / `--plan` | nothing to change | would change something | error |
 | `deploy` (real apply) | all applied/in-sync/skipped/declined | — | a unit failed, or error |
 | `deploy` (offline, no `--url`) | printed the apply order | — | error |
-| `init` | the step ran (created, already present, or written) | — | error, or no step asked for |
+| `rollback` | restored, nothing to roll back, or declined | `--dry-run`: something would be restored | error, a refused plan (wrong server, stale), or a failed restore |
+| `init` | the step ran (created, already present, or written), or declined at the prompt | — | error, or no step asked for |
 
 ## Flags
 
@@ -479,7 +480,7 @@ restates verbatim counts as declared. The key-matched merge recipe above produce
 | `--proxy URL` | Forward proxy, `http://proxy.corp:3128` or `proxy.corp:3128` (or `https_proxy`/`http_proxy`). |
 | `--no-proxy HOSTS` | Comma-separated hosts that bypass it (or `no_proxy`). See below — it *replaces* the loopback default. |
 | `--proxy-user USER` | User for a proxy that demands Basic authentication. |
-| `--proxy-password`, `--proxy-password-env VAR`, `--proxy-password-file FILE` | Its password, same ladder and same preference as the account password. |
+| `--proxy-password`, `--proxy-password-env VAR`, `--proxy-password-file FILE` | Its password, in the account password's order minus `MIDPOINT_PASSWORD`: a `user:pass@` in `https_proxy`/`http_proxy` takes that place, and only when `--proxy-user` is not given. |
 | `--timeout SECONDS` | Per-request timeout (default 30). |
 | `--retries N` | Retry idempotent reads on `502`/`503`/`504`/connection-refused/timeout, `N` times with backoff (writes are never auto-retried). |
 
@@ -490,7 +491,7 @@ midgie deploy config/ --url https://mp.example/midpoint \
   --proxy http://proxy.corp:3128 --proxy-user alice --proxy-password-file /run/secrets/proxy-pw
 ```
 
-**Where the setting comes from**: `--proxy`, then `https_proxy`/`HTTPS_PROXY` for an https server or `http_proxy`/`HTTP_PROXY` for a plain one (either spelling; lowercase wins if both are set, as curl reads them), then the [config file](#config-file--midgieproperties). The two schemes are **separate settings and neither falls back to the other** — `http_proxy` alone leaves an `https://` server direct, exactly as it does for curl and git, so midgie and the tree's clone always agree on what gets proxied. The variables matter because the JVM reads none of them on its own — but the `git` inside the [container image](#container-image) does, so a pod given only `HTTPS_PROXY` used to clone its tree happily and then fail to reach midPoint. midgie now reads them itself, and the two halves behave the same.
+**Where the setting comes from**: `--proxy`, then `https_proxy`/`HTTPS_PROXY` for an https server or `http_proxy`/`HTTP_PROXY` for a plain one (either spelling; lowercase wins if both are set, as curl reads them), then the [config file](#config-file--midgieproperties) — which any of the four variables stands down, even the one for the other scheme. The two schemes are **separate settings and neither falls back to the other** — `http_proxy` alone leaves an `https://` server direct, exactly as it does for curl and git, so midgie and the tree's clone always agree on what gets proxied. The variables matter because the JVM reads none of them on its own — but the `git` inside the [container image](#container-image) does, so a pod given only `HTTPS_PROXY` used to clone its tree happily and then fail to reach midPoint. midgie now reads them itself, and the two halves behave the same.
 
 **Set nothing and nothing changes**: with no proxy configured midgie leaves the JDK's own proxy selector alone, so `JAVA_OPTS="-Dhttps.proxyHost=… -Dhttps.proxyPort=…"` still works as it always did. That route cannot carry credentials, though — `java.net.http` never reads `http.proxyUser` — so an authenticating proxy needs `--proxy`.
 
@@ -519,10 +520,10 @@ midgie deploy config/ --url https://mp.example/midpoint \
 | `--trace` | Everything `--debug` shows plus the detail behind it: per-file and per-value decisions, stack traces, full REST request/response bodies (**may include sensitive values**), and the framework logs. |
 | `--no-create-if-absent` | *(deploy)* Fail on an object that does not exist instead of creating it (and skip an OID-less one). Creating is the default. |
 | `--no-match-by-name` | *(diff, deploy)* Do not patch an OID-less object found by type + name — skip it instead. Resolving it by name (a single match) is the default. |
-| `--dry-run` | *(deploy)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
-| `-y, --yes` | *(deploy)* Apply without the interactive confirmation prompt (required non-interactively). |
+| `--dry-run` | *(deploy, rollback)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
+| `-y, --yes` | *(deploy, rollback)* Apply without the interactive confirmation prompt (required non-interactively). *(init)* Answer the `--write-cacert` trust prompt. |
 
-`deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--policy <file>`, `--rollback-plan <dir>` / `--no-rollback-plan`, `--no-prune`, and `--confirm-each-apply` — described in the `deploy` section above.
+`deploy` adds tree-level flags — `--retry`, `--plan <dir>` / `--apply-plan <dir>`, `--rollback-plan <dir>` / `--no-rollback-plan`, `--confirm-each-apply` and `--app <name>` — and shares `--policy <file>` and `--no-prune` with a live `diff`; all are described in the `deploy` section above.
 
 ## Config file — `midgie.properties`
 
@@ -535,7 +536,8 @@ user   = deployer
 cacert = /etc/ssl/corp-ca.pem
 scope  = present
 
-midgie.deploy.retry = true      # qualified with a command: only 'deploy' gets it
+# qualified with a command: only 'deploy' gets it
+midgie.deploy.retry = true
 ```
 
 ```bash
@@ -556,21 +558,21 @@ user = deployer
 
 Naming a file explicitly is the most deliberate of the three, so it sits on top; and because it was named on purpose, a path that does not exist is an error rather than a quiet skip. In a pod, `/etc/midgie/midgie.properties` is a ConfigMap mount and `$HOME/.midgie.properties` is yours if you [put `$HOME` on the volume](#helm-chart).
 
-**Keys** are option names without the dashes — `url`, `cacert`, `no-create-if-absent` — applying to every subcommand that has that option, or qualified with the command to narrow them (`midgie.deploy.scope`). **Precedence**: an option on the command line wins, then the `MIDPOINT_*` environment variables, then this file, then the option's built-in default. Environment beats file deliberately: a variable describes the process this run was launched into — a pod's deployment, typically — and a file on the same machine should not quietly redirect it somewhere else.
+**Keys** are option names without the dashes — `url`, `cacert`, `no-create-if-absent` — applying to every subcommand that has that option, or qualified with the command to narrow them (`midgie.deploy.scope`). **Precedence**: an option on the command line wins, then the `MIDPOINT_*` environment variables, then this file, then the option's built-in default. Environment beats file deliberately: a variable describes the process this run was launched into — a pod's deployment, typically — and a file on the same machine should not quietly redirect it somewhere else. The password is the exception: a `password-env` or `password-file` set in a file is an option, and the [password order](#connection-live-modes) puts both before `MIDPOINT_PASSWORD`.
 
 **Paths**: a relative file or directory in a config file — `cacert = ca.pem`, `policy = midgie.policy` — is read from **the directory that file is in**, not from wherever midgie is run, the way `.editorconfig` and `.gitignore` work. So `cacert = ca.pem` in `~/.midgie.properties` means `~/ca.pem`. A path on the command line stays relative to the working directory. (Up to 0.15, a relative path in a file was read from the working directory; use an absolute path if you relied on that.)
 
-`midgie <command> -v` names every file it read and which key came from which — keys and their source only, never values, since one of those keys is `password`:
+`midgie <command> -v` names every file it read, in the order it read them, and each key a later file overrides; `--trace` adds which file every key came from. Keys and their source only, never values, since one of those keys is `password`:
 
 ```
-config: 3 setting(s) from /home/you/.midgie.properties
 config: 2 setting(s) from /etc/midgie/midgie.properties
+config: 3 setting(s) from /home/you/.midgie.properties
 config:   user from /home/you/.midgie.properties overrides /etc/midgie/midgie.properties
-config: cacert <- /etc/midgie/midgie.properties
-config: url    <- /home/you/.midgie.properties
+config: cacert <- /etc/midgie/midgie.properties        (--trace)
+config: url <- /home/you/.midgie.properties            (--trace)
 ```
 
-Two things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. And **`yes` is refused**: it decides whether a run writes without asking, and a file on disk is not where a person confirms that — pass it on the command line. (`no-prune` may be set anywhere: it only ever deletes less.)
+Three things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. **A flag that has since become the default is refused** — `create-if-absent`, `match-by-name`, `prune` — with the `no-…` key that does work now, since the old key would sit there meaning nothing. And **`yes` is refused**: it decides whether a run writes without asking, and a file on disk is not where a person confirms that — pass it on the command line. (`no-prune` may be set anywhere: it only ever deletes less.)
 
 ### A `.midgie.properties` in the tree
 
@@ -585,7 +587,7 @@ policy        = midgie.policy
 rollback-plan = .midgie/nets
 ```
 
-`init --write-properties` writes the right template for wherever it lands — a path named `.midgie.properties` outside `$HOME` gets the stripped, tree-local one, anything else gets the full one. Give it a directory (or nothing, meaning `$PWD`) and it picks the name midgie would actually *read* there, so it cannot write a file that is silently never loaded:
+`init --write-properties` writes the right template for wherever it lands — any path named `.midgie.properties` other than your own `~/.midgie.properties` gets the stripped, tree-local one, anything else gets the full one. Give it a directory (or nothing, meaning `$PWD`) and it picks the name midgie would actually *read* there, so it cannot write a file that is silently never loaded:
 
 ```bash
 bin/midgie init --write-properties config/    # -> config/.midgie.properties, tree template
@@ -598,7 +600,7 @@ bin/midgie init --write-properties - | diff - ~/.midgie.properties   # what did 
 
 The disallowed keys are **omitted rather than commented out** — uncommenting a line in a midgie template must always yield a file midgie accepts, and a commented-out `url` would break that and read as an invitation. The header names them and says where they belong instead.
 
-Because it travels with somebody else's repository, this layer is **allowlisted** rather than denylisted — cloning an unfamiliar repo and running even a read would otherwise authenticate to whatever server its file names. It may set `rollback-plan`, `policy`, `scope`, `multivalue`, `equivalence`, `path`, `app`, `schema`, `schema-dir`, `no-match-by-name`, `no-create-if-absent`, `retry`, `smart-refs`, `allow-inplace-merge`, `no-live-schema` and `no-prune`. Anything else is an error naming the file — `url`, `user`, `password*`, `insecure` and `cacert` decide where credentials go, and `no-rollback-plan` would let a tree switch off its own safety net. A file may say *where* something goes, never *whether* a safety gate applies.
+Because it travels with somebody else's repository, this layer is **allowlisted** rather than denylisted — cloning an unfamiliar repo and running even a read would otherwise authenticate to whatever server its file names. It may set `rollback-plan`, `policy`, `scope`, `multivalue`, `equivalence`, `path`, `app`, `schema`, `schema-dir`, `no-match-by-name`, `no-create-if-absent`, `retry`, `smart-refs`, `allow-inplace-merge`, `no-live-schema` and `no-prune`. Anything else is an error naming the file — `url`, `user`, `password*`, `insecure`, `cacert` and `proxy*`/`no-proxy` decide where credentials go, and `no-rollback-plan` would let a tree switch off its own safety net. A file may say *where* something goes, never *whether* a safety gate applies.
 
 A CA certificate is the case worth spelling out. With `cacert` in the file, TLS verifies properly for every command with nothing extra typed, so `--insecure` stops being the path of least resistance.
 
@@ -611,6 +613,7 @@ A CA certificate is the case worth spelling out. With `cacert` in the file, TLS 
 | `MIDPOINT_PASSWORD` | password (after the `--password*` flags, before the prompt) |
 | `MIDGIE_CONF` | path to the [config file](#config-file--midgieproperties) (also `-Dmidgie.conf`) |
 | `MIDGIE_JAR` | JAR path used by the `bin/midgie` launcher |
+| `XDG_STATE_HOME` | base of the default [rollback plan](#the-rollback-plan-always-on) directory (`$XDG_STATE_HOME/midgie/…`, else `~/.local/state/midgie/…`) |
 | `https_proxy` / `HTTPS_PROXY` | `--proxy`, for an `https://` server. A `user:pass@` in it is used. See [Behind a proxy](#behind-a-proxy) |
 | `http_proxy` / `HTTP_PROXY` | the same, for a plain-`http://` server |
 | `no_proxy` / `NO_PROXY` | `--no-proxy` |
@@ -627,7 +630,7 @@ A CA certificate is the case worth spelling out. With `cacert` in the file, TLS 
   governs).
 - **Accrued in-place merge edits** — see `--allow-inplace-merge` above; refused by default.
 - **Smart references** — a reference written as a search filter instead of an OID, so the file stays portable across instances where the target's OID differs (`connectorRef` is the everyday case). midPoint resolves the filter **at import** and stores the OID; your file still says "filter". Diffed literally that reads as a change, and the resulting PATCH strips the OID — and a modify does *not* re-resolve the filter, so the object is left pointing at nothing. midgie therefore treats the resolved OID as satisfying the filter and reports **in-sync**, and any PATCH it does send for such a reference carries `?options=reevaluateSearchFilters` so midPoint rebinds it instead. `--smart-refs verify` confirms the OID by running the filter against the server first (a mismatch is then a real change); `--smart-refs resolve` always sends the file's form and lets midPoint re-resolve. Settable per object in `--policy` as `smart-refs=`.
-- **Base-schema version coupling** — the bundled `midpoint-schema` jar is the *compile-time* object model, so it must match the target midPoint's line (4.10, 4.11, …). Patch releases change the schema too — mostly by adding items, occasionally by changing a type, as 4.10.5 did for `PasswordType/hint` — so midgie is built against the **newest** patch of its line, which knows everything an older patch of that line sends. In live mode the tool reads the server's version (`GET /nodes/current`) and warns when it is on a different line, or on a **newer patch** than the bundled schema; an older patch on the same line is the safe direction and is only logged under `--debug`.
+- **Base-schema version coupling** — the bundled `midpoint-schema` jar is the *compile-time* object model, so it must match the target midPoint's line (4.10, 4.11, …). Patch releases change the schema too — mostly by adding items, occasionally by changing a type, as 4.10.5 did for `PasswordType/hint` — so midgie is built against the **newest** patch of its line, which knows everything an older patch of that line sends. A live `deploy` and `init` read the server's version (`GET /nodes/current`; not under `--quiet`) and warn when it is on a different line, or on a **newer patch** than the bundled schema; an older patch on the same line is the safe direction and is only logged under `--debug`.
 
 ## Schema handling
 
@@ -656,9 +659,10 @@ A Docker Compose rig under `docker/` brings up a real midPoint for the live inte
 rig being up), and `docker/tls/` adds an nginx TLS proxy + private CA to exercise `--cacert`/`--insecure`
 end to end. See [`docker/README.md`](docker/README.md) and [`docker/tls/README.md`](docker/tls/README.md).
 
-GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `mvn verify` on JDK 17 and 21
-(the rig-gated live tests self-skip) plus a [REUSE](https://reuse.software/) licence-compliance lint on
-every push and pull request.
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `mvn verify` on JDK 17, 21 and 25
+(the rig-gated live tests self-skip), builds the container image for amd64 and arm64, lints the Helm chart,
+and runs a [REUSE](https://reuse.software/) licence-compliance lint on every push to `main` and every pull
+request against it.
 
 ## License
 
