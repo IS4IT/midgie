@@ -230,7 +230,10 @@ tree of one.
   env rule plus validation: an unknown key is an error, since a mistyped setting that silently does nothing is
   the failure mode the policy file's "matched no object" note exists to prevent, and `yes`/`prune` are refused
   because a file is not where a person confirms a write or a delete. `insecure` is also read in `Main.main`,
-  before the hostname-verification latch, or it would half-apply.
+  before the hostname-verification latch, or it would half-apply. A relative value of a path-typed option
+  (declared `File`/`Path`, or an array of them — judged from the type, so a later option is covered) is
+  resolved against the directory of the file whose key supplied it, found in picocli's qualified-then-bare
+  order; the tree-local file is found by walking upward, so the working directory cannot be its base.
 - `midgie init …` → the one-off set-up steps, each behind its own flag: `--create-state` creates the
   `midgie-state` object that delete detection needs, `--write-policy` seeds a starter `--policy` file for a
   tree, `--write-cacert` fetches the chain a server presents and writes its issuers as the PEM `--cacert`

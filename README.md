@@ -558,6 +558,8 @@ Naming a file explicitly is the most deliberate of the three, so it sits on top;
 
 **Keys** are option names without the dashes — `url`, `cacert`, `no-create-if-absent` — applying to every subcommand that has that option, or qualified with the command to narrow them (`midgie.deploy.scope`). **Precedence**: an option on the command line wins, then the `MIDPOINT_*` environment variables, then this file, then the option's built-in default. Environment beats file deliberately: a variable describes the process this run was launched into — a pod's deployment, typically — and a file on the same machine should not quietly redirect it somewhere else.
 
+**Paths**: a relative file or directory in a config file — `cacert = ca.pem`, `policy = midgie.policy` — is read from **the directory that file is in**, not from wherever midgie is run, the way `.editorconfig` and `.gitignore` work. So `cacert = ca.pem` in `~/.midgie.properties` means `~/ca.pem`. A path on the command line stays relative to the working directory. (Up to 0.15, a relative path in a file was read from the working directory; use an absolute path if you relied on that.)
+
 `midgie <command> -v` names every file it read and which key came from which — keys and their source only, never values, since one of those keys is `password`:
 
 ```
@@ -573,6 +575,15 @@ Two things the file will not do. **A key that is not an option is an error**, na
 ### A `.midgie.properties` in the tree
 
 Some settings belong to the *deployment* rather than to the machine or the person — where its rollback plans go, which policy file it uses. midgie reads the nearest `.midgie.properties` at or above the working directory, stopping at the repository root, and it sits at the **lowest** precedence of the file layers: the tree suggests, your own files override. The file and the keys it supplied are printed at the start of the run, because a config that arrived with a checkout is the one nobody remembers is there.
+
+That is also how a tree brings its policy file along without anyone typing `--policy`:
+
+```properties
+# .midgie.properties at the repository root; both paths are read from here,
+# whichever subdirectory midgie runs in
+policy        = midgie.policy
+rollback-plan = .midgie/nets
+```
 
 `init --write-properties` writes the right template for wherever it lands — a path named `.midgie.properties` outside `$HOME` gets the stripped, tree-local one, anything else gets the full one. Give it a directory (or nothing, meaning `$PWD`) and it picks the name midgie would actually *read* there, so it cannot write a file that is silently never loaded:
 

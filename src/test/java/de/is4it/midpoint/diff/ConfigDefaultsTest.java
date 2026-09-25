@@ -185,7 +185,85 @@ class ConfigDefaultsTest {
 
         assertEquals("/mnt/nets", value(defaults, "deploy", "--rollback-plan"),
                 "a deployment is the only thing that knows where its net belongs");
-        assertEquals("deploy.policy", value(defaults, "deploy", "--policy"));
+        assertEquals(dir.resolve("deploy.policy").toString(), value(defaults, "deploy", "--policy"),
+                "a relative path is read from the tree file's directory");
+    }
+
+    // --- relative paths, which belong to the file they are written in ---
+
+    @Test
+    void aRelativePathInATreeFileIsReadFromTheFilesDirectory(@TempDir Path dir) throws Exception {
+        // The tree file is found by walking up from wherever midgie runs, so the working directory is exactly
+        // what a path in it cannot depend on: from a subdirectory, 'midgie.policy' named a file that is not there.
+        Path repo = Files.createDirectories(dir.resolve("repo"));
+        Path tree = write(repo, ".midgie.properties",
+                "policy = midgie.policy", "rollback-plan = .nets", "schema-dir = ../shared/schema",
+                "schema = /opt/schema/ext.xsd");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+        defaults.validate(Main.commandLine());
+
+        assertEquals(repo.resolve("midgie.policy").toString(), value(defaults, "deploy", "--policy"));
+        assertEquals(repo.resolve(".nets").toString(), value(defaults, "deploy", "--rollback-plan"));
+        assertEquals(dir.resolve("shared/schema").toString(), value(defaults, "deploy", "--schema-dir"),
+                "and normalised, so a note naming the path reads cleanly");
+        assertEquals("/opt/schema/ext.xsd", value(defaults, "deploy", "--schema"), "an absolute path is left alone");
+    }
+
+    @Test
+    void aRelativePathInTheUsersFileIsReadFromItsDirectory(@TempDir Path dir) throws Exception {
+        Path home = Files.createDirectories(dir.resolve("home"));
+        Path user = write(home, "user.properties", "cacert = ca.pem");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                user.toFile(), null);
+        defaults.validate(Main.commandLine());
+
+        assertEquals(home.resolve("ca.pem").toString(), value(defaults, "diff", "--cacert"));
+    }
+
+    @Test
+    void aQualifiedKeyResolvesAgainstTheFileThatSetIt(@TempDir Path dir) throws Exception {
+        // The qualified key and the bare one can come from different files; each path belongs to its own.
+        Path home = Files.createDirectories(dir.resolve("home"));
+        Path repo = Files.createDirectories(dir.resolve("repo"));
+        Path user = write(home, "user.properties", "midgie.deploy.policy = a.policy");
+        Path tree = write(repo, ".midgie.properties", "policy = b.policy");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                user.toFile(), tree.toFile());
+        defaults.validate(Main.commandLine());
+
+        assertEquals(home.resolve("a.policy").toString(), value(defaults, "deploy", "--policy"));
+        assertEquals(repo.resolve("b.policy").toString(), value(defaults, "diff", "--policy"));
+    }
+
+    @Test
+    void aPathOnTheCommandLineStaysRelativeToTheWorkingDirectory(@TempDir Path dir) throws Exception {
+        Path tree = write(dir, "tree.properties", "policy = midgie.policy");
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+
+        CommandLine commandLine = Main.commandLine();
+        commandLine.setDefaultValueProvider(defaults);
+        CommandLine.ParseResult parsed = commandLine.parseArgs("diff", "a.xml", "b.xml", "--policy", "x.policy");
+        DiffCommand diff = (DiffCommand) parsed.subcommand().commandSpec().userObject();
+
+        assertEquals(new java.io.File("x.policy"), diff.policyFile);
+    }
+
+    @Test
+    void aSettingThatIsNotAPathIsNotRewritten(@TempDir Path dir) throws Exception {
+        // '--path' holds item paths, not files: the type decides, not the name.
+        Path tree = write(dir, "tree.properties", "scope = full", "path = assignment=merge");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+        defaults.validate(Main.commandLine());
+
+        assertEquals("full", value(defaults, "deploy", "--scope"));
+        assertEquals("assignment=merge", value(defaults, "deploy", "--path"));
     }
 
     @Test

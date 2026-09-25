@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A relative path in a config file is read from that file's directory.** `policy = midgie.policy` in a `.midgie.properties` at the repository root used to be read from the working directory, so running midgie from a subdirectory found the properties file (the lookup walks upward) but then failed with no policy file at `midgie.policy`. Every file layer — site, user, `MIDGIE_CONF` and tree — now resolves a relative value of a file or directory option (`policy`, `cacert`, `rollback-plan`, `schema`, `schema-dir`, `password-file`, …) against its own directory, the way `.editorconfig` and `.gitignore` do. A path on the command line is unchanged. If `~/.midgie.properties` or `/etc/midgie/midgie.properties` holds a relative path that relied on the working directory, make it absolute.
+
 ## [0.15.0] - 2026-09-25
 
 ### Changed

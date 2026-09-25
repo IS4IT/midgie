@@ -51,6 +51,13 @@ import picocli.CommandLine.Model.OptionSpec;
  * up the qualified key first and falls back to the bare one; this class adds the precedence rule above and
  * the validation below.
  *
+ * <p><b>Paths</b>: a relative file or directory in any of these files — {@code policy = midgie.policy},
+ * {@code cacert = ca.pem} — is read from the directory of the file that sets it, the way {@code .editorconfig}
+ * and {@code .gitignore} are, not from wherever midgie happens to be run. The tree-local file is found by
+ * walking upward from the working directory, so the working directory is exactly what a path in it cannot
+ * depend on. A path given on the command line stays relative to the working directory, as any shell user
+ * expects.
+ *
  * <p><b>Every key is checked</b> against the options that actually exist, because a mistyped key is
  * otherwise a setting that silently does nothing — the same failure the policy file's "matched no object"
  * note exists to prevent. {@code yes} is refused outright: it decides whether a run writes without asking,
@@ -207,6 +214,10 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      *
      * <p>The walk stops at a repository root, so it cannot wander out of one checkout and into a parent
      * directory that happens to hold an unrelated file.
+     *
+     * <p>Since the file may be found from any subdirectory, a relative path in it is read from the file's own
+     * directory (see {@link #defaultValue}), so {@code policy = midgie.policy} at the repository root names the
+     * same file wherever in the checkout midgie is run.
      */
     private static File findTreeFile(File start) {
         File dir = start.getAbsoluteFile();
@@ -413,22 +424,64 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
 
     @Override
     public String defaultValue(ArgSpec argSpec) throws Exception {
-        if (argSpec.isOption()) {
-            String key = stripPrefix(((OptionSpec) argSpec).longestName());
-            if (REFUSED.contains(key)) {
-                return null;   // validate() already refused the file; belt and braces
-            }
-            for (String variable : ENV_OVERRIDES.getOrDefault(key, List.of())) {
-                String value = env.apply(variable);
-                if (value != null && !value.isBlank()) {
-                    // The environment describes the process this run was launched into; the file describes a
-                    // machine. Letting the file win would mean a pod's MIDPOINT_URL was quietly ignored.
-                    LOG.trace("config: {} not applied, {} is set", key, variable);
-                    return null;
-                }
+        if (!argSpec.isOption()) {
+            return delegate.defaultValue(argSpec);
+        }
+        OptionSpec option = (OptionSpec) argSpec;
+        String key = stripPrefix(option.longestName());
+        if (REFUSED.contains(key)) {
+            return null;   // validate() already refused the file; belt and braces
+        }
+        for (String variable : ENV_OVERRIDES.getOrDefault(key, List.of())) {
+            String value = env.apply(variable);
+            if (value != null && !value.isBlank()) {
+                // The environment describes the process this run was launched into; the file describes a
+                // machine. Letting the file win would mean a pod's MIDPOINT_URL was quietly ignored.
+                LOG.trace("config: {} not applied, {} is set", key, variable);
+                return null;
             }
         }
-        return delegate.defaultValue(argSpec);
+        String value = delegate.defaultValue(argSpec);
+        if (value == null || value.isBlank() || !isPathOption(option) || new File(value.trim()).isAbsolute()) {
+            return value;
+        }
+        File source = origin.get(keyUsedFor(option, key));
+        if (source == null) {
+            return value;
+        }
+        File base = source.getAbsoluteFile().getParentFile();
+        String resolved = base.toPath().resolve(value.trim()).normalize().toString();
+        LOG.trace("config: {} = {} is relative to {}, so {}", key, value, source, resolved);
+        return resolved;
+    }
+
+    /**
+     * Whether an option takes a file or directory, judged from its declared type so that an option added
+     * later is covered without a list here to keep in step. An array counts by its component type
+     * ({@code --schema} is repeatable).
+     */
+    private static boolean isPathOption(OptionSpec option) {
+        Class<?> type = option.type();
+        if (type.isArray()) {
+            type = type.getComponentType();
+        }
+        return File.class.equals(type) || java.nio.file.Path.class.equals(type);
+    }
+
+    /**
+     * The property key that supplied an option's value, in the order {@link CommandLine.PropertiesDefaultProvider}
+     * looks it up: qualified with the command first, then bare. Needed because the two may come from different
+     * files, and a relative path belongs to the file it is written in.
+     */
+    private String keyUsedFor(OptionSpec option, String key) {
+        CommandSpec command = option.command();
+        if (command != null) {
+            String qualified = command.qualifiedName(".") + "." + key;
+            if (properties.getProperty(qualified) != null) {
+                return qualified;
+            }
+        }
+        return key;
     }
 
     /**
