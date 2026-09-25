@@ -13,6 +13,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An item a policy rule protects is no longer called "never deployed".** On a tracked tree, a nested item held by an `apply=on-create` or `apply=if-absent` rule — whose removal the rule withheld — was counted in the kept note as something the tree never deployed. It is now listed where every other policy-held difference is: `left alone by the policy: mapping/lifecycleState (apply=on-create)`.
+
 - **Adding an item inside a keyed container value no longer fails.** prism built the path of such an item from the file's value, which has no container id, so adding a `lifecycleState` to a mapping matched by its name came out as `mapping/lifecycleState` and the object failed with "Attempt to get segment without an ID from a multi-valued container mapping". The item is now addressed through the server's id of the mapping.
 
 - **No more "merge does not apply there" warnings for every changed field.** Since a tracked tree runs on merge, each changed single-valued item (`executionState`, `ownerRef`, …) was reported as having "diffs to a whole-value replace; merge does not apply there" — although one value leaves merge nothing to keep, so nothing was given up. And the list was taken before `--scope present`, so items the file never mentions were named too, even on an object that was `in-sync`. Only a multi-valued item that is really sent as a whole-value replace is reported now.

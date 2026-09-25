@@ -426,7 +426,203 @@ class RemovalDetectorTest {
                 prismContext.parseObject(file.toFile()), current, strategy, removals, prune);
     }
 
+    // --- policy rules on nested items ---
+
+    @Test
+    void anOnCreateRuleOnANestedItemKeepsThatRemovalAndOnlyThatOne(@TempDir Path dir) throws Exception {
+        // Policy selectors match id-free paths, so a nested removal has to carry one: a rule written for
+        // mapping/lifecycleState must reach the lifecycleState dropped from a mapping, and nothing beside it.
+        List<RemovalDetector.Removal> removals = droppedFromMapping(dir,
+                "<lifecycleState>draft</lifecycleState><description>d</description>");
+        assertEquals(2, removals.size(), removals.toString());
+
+        List<RemovalDetector.Removal> kept = DeployCommand.withoutRestricted(
+                policy(dir, "ObjectTemplateType/*/mapping/lifecycleState apply=on-create"), baseline(), removals);
+
+        assertEquals(List.of("mapping[name=given]/description"), kept.stream().map(r -> r.path).toList(),
+                "the on-create item stays on the server, the other one is still removed");
+    }
+
+    @Test
+    void anIfAbsentRuleOnANestedItemKeepsThatRemovalAndOnlyThatOne(@TempDir Path dir) throws Exception {
+        List<RemovalDetector.Removal> removals = droppedFromMapping(dir,
+                "<lifecycleState>draft</lifecycleState><description>d</description>");
+
+        List<RemovalDetector.Removal> kept = DeployCommand.withoutRestricted(
+                policy(dir, "ObjectTemplateType/*/mapping/description apply=if-absent"), baseline(), removals);
+
+        assertEquals(List.of("mapping[name=given]/lifecycleState"), kept.stream().map(r -> r.path).toList());
+    }
+
+    @Test
+    void aRuleScopedToAnotherObjectDoesNotReachTheNestedRemoval(@TempDir Path dir) throws Exception {
+        List<RemovalDetector.Removal> removals = droppedFromMapping(dir, "<lifecycleState>draft</lifecycleState>");
+
+        List<RemovalDetector.Removal> kept = DeployCommand.withoutRestricted(
+                policy(dir, "ObjectTemplateType/Some Other Template/mapping/lifecycleState apply=on-create"),
+                baseline(), removals);
+
+        assertEquals(1, kept.size(), "a rule for another template must not protect this one: " + kept);
+    }
+
+    @Test
+    void aNestedItemAPolicyProtectsIsNeitherDeletedByTheDiffNorByTheRemoval(@TempDir Path dir) throws Exception {
+        // Through the whole plan, as deploy runs it: the removal is filtered by the policy first, and the diff
+        // itself must not delete the item either — tracked, it is undeclared nested state and kept.
+        List<RemovalDetector.Removal> removals = droppedFromMapping(dir, "<lifecycleState>draft</lifecycleState>");
+        Policy policy = policy(dir, "ObjectTemplateType/*/mapping/lifecycleState apply=on-create");
+        StrategyOptions.Resolved strategy = policy.resolveFor("ObjectTemplateType", "Removal Probe Template", OID,
+                trackedStrategy());
+        List<RemovalDetector.Removal> filtered = DeployCommand.withoutRestricted(policy, strategy, removals);
+
+        Reconciler.Outcome outcome = new Reconciler(prismContext, null, true, true).planAgainst(
+                prismContext.parseObject(dir.resolve("template.xml").toFile()),
+                prismContext.parseObject(template(NestedOwnershipTest.mapping(4L, "given",
+                        "<lifecycleState>draft</lifecycleState>"))),
+                strategy, filtered, true);
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, "nothing is sent: " + outcome.detail);
+        assertTrue(outcome.removing.isEmpty(), outcome.removing.toString());        // The tree deployed it; the rule, not "someone else's", is why it stays — and the note says so.
+        assertTrue(outcome.keptNested.isEmpty(), "not reported as never deployed: " + outcome.keptNested);
+        assertEquals(List.of("mapping/lifecycleState (apply=on-create)"), outcome.heldBack);
+    }
+
+    // --- keyed values nested two levels deep: a panel inside an object details page ---
+
+    @Test
+    void aPanelThatOnlyLostOneItemTwoLevelsDownIsNeverRemovedWhole(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("role.xml");
+        Files.writeString(file, role(gui(null, null, "<description>old</description>", null)), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, role(gui(null, null, "", null)), StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+
+        assertEquals(1, removals.size(), "one item, not a panel or a page: " + removals);
+        RemovalDetector.Removal removal = removals.get(0);
+        assertEquals(2, removal.steps.size(), "paired through the page and then the panel: " + removal.steps);
+        assertTrue(removal.path.contains("objectDetailsPage[type=")
+                && removal.path.endsWith("panel[identifier=first]/description"), removal.path);
+
+        // The delete is addressed through both of the server's ids.
+        ObjectDelta<?> prune = RemovalDetector.pruneDelta(prismContext, OID, removals,
+                prismContext.parseObject(role(gui(5L, 9L, "<description>old</description>", 10L))));
+        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+                prune.getModifications().stream().map(m -> m.getPath().toString()).toList());
+    }
+
+    @Test
+    void aPanelDroppedFromAPageIsRemovedWholeInsideThatPage(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("role.xml");
+        Files.writeString(file, role(gui(null, null, "", null)), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, role(onlySecondPanel()), StandardCharsets.UTF_8);
+
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+
+        assertEquals(1, removals.size(), removals.toString());
+        assertEquals(1, removals.get(0).steps.size(), "inside the page, which stays: " + removals.get(0).steps);
+        ObjectDelta<?> prune = RemovalDetector.pruneDelta(prismContext, OID, removals,
+                prismContext.parseObject(role(gui(5L, 9L, "", 10L))));
+        ItemDelta<?, ?> only = prune.getModifications().iterator().next();
+        assertEquals("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel", only.getPath().toString());
+        assertEquals(9L, ((com.evolveum.midpoint.prism.PrismContainerValue<?>)
+                only.getValuesToDelete().iterator().next()).getId(), "the server's own panel, by its id");
+    }
+
+    @Test
+    void twoLevelsDownThePlanFollowsTheSameThreeWayRule(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("role.xml");
+        Files.writeString(file, role(gui(null, null, "<description>old</description>", null)), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, role(gui(null, null, "", null)), StandardCharsets.UTF_8);
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+        PrismObject<? extends com.evolveum.midpoint.prism.Objectable> desired =
+                prismContext.parseObject(file.toFile());
+        Reconciler reconciler = new Reconciler(prismContext, null, true, true);
+
+        // Dropped by the tree, still as deployed on the server: removed — only the item, through both ids.
+        Reconciler.Outcome dropped = reconciler.planAgainst(desired,
+                prismContext.parseObject(role(gui(5L, 9L, "<description>old</description>", 10L))),
+                trackedStrategy(), removals, true);
+        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+                dropped.delta.getModifications().stream().map(m -> m.getPath().toString()).toList());
+
+        // Changed on the server after the deploy: kept, with a note.
+        Reconciler.Outcome changed = reconciler.planAgainst(desired,
+                prismContext.parseObject(role(gui(5L, 9L, "<description>theirs</description>", 10L))),
+                trackedStrategy(), removals, true);
+        assertEquals(Reconciler.Action.IN_SYNC, changed.action, changed.detail);
+        assertTrue(changed.warnings.stream().anyMatch(w -> w.contains("changed on the server after it was deployed")),
+                changed.warnings.toString());
+
+        // Never deployed by the tree (nothing in last-applied names it): kept and reported.
+        Reconciler.Outcome foreign = reconciler.planAgainst(desired,
+                prismContext.parseObject(role(gui(5L, 9L, "", 10L).replace("<identifier>second</identifier>",
+                        "<identifier>second</identifier><description>theirs</description>"))),
+                trackedStrategy(), removals, true);
+        assertEquals(Reconciler.Action.IN_SYNC, foreign.action, foreign.detail);
+        assertTrue(foreign.keptNested.stream().anyMatch(k -> k.startsWith(
+                "adminGuiConfiguration/objectDetails/objectDetailsPage/panel/description")), foreign.keptNested.toString());
+    }
+
     // --- helpers ---
+
+    /**
+     * Commit a template whose mapping 'given' holds {@code items}, then drop them from the file, and return
+     * what detection reports.
+     */
+    private static List<RemovalDetector.Removal> droppedFromMapping(Path dir, String items) throws Exception {
+        Path file = dir.resolve("template.xml");
+        Files.writeString(file, template(NestedOwnershipTest.mapping(null, "given", items)), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, template(NestedOwnershipTest.mapping(null, "given", "")), StandardCharsets.UTF_8);
+        return detect(dir, first, file);
+    }
+
+    private static Policy policy(Path dir, String rules) throws Exception {
+        Path policyFile = dir.resolve("midgie.policy");
+        Files.writeString(policyFile, rules + "\n", StandardCharsets.UTF_8);
+        return Policy.load(policyFile.toFile());
+    }
+
+    private static StrategyOptions.Resolved baseline() {
+        return new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.MultiValueStrategy.replaceAll(), false);
+    }
+
+    private static StrategyOptions.Resolved trackedStrategy() {
+        return new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.MultiValueStrategy.replaceAll(), false, StrategyOptions.SmartRefs.ACCEPT,
+                ApplyRules.none(), true).settleMultiValue(true).settleTracking(true);
+    }
+
+    /**
+     * A user details page holding panel 'first' (with {@code firstExtra}) and panel 'second'. Ids are given
+     * for a server's copy and left out for a file's.
+     */
+    private static String gui(Long pageId, Long firstId, String firstExtra, Long secondId) {
+        return "<adminGuiConfiguration><objectDetails><objectDetailsPage" + id(pageId) + ">"
+                + "<type xmlns:c=\"" + NS + "\">c:UserType</type>"
+                + "<panel" + id(firstId) + "><identifier>first</identifier>" + firstExtra + "</panel>"
+                + "<panel" + id(secondId) + "><identifier>second</identifier></panel>"
+                + "</objectDetailsPage></objectDetails></adminGuiConfiguration>";
+    }
+
+    private static String onlySecondPanel() {
+        return "<adminGuiConfiguration><objectDetails><objectDetailsPage>"
+                + "<type xmlns:c=\"" + NS + "\">c:UserType</type>"
+                + "<panel><identifier>second</identifier></panel>"
+                + "</objectDetailsPage></objectDetails></adminGuiConfiguration>";
+    }
+
+    private static String id(Long id) {
+        return (id != null) ? " id=\"" + id + "\"" : "";
+    }
 
     /** Run detection for the files currently present, comparing against {@code revision}. */
     @Test

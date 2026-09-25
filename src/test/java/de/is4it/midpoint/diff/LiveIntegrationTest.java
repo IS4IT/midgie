@@ -59,6 +59,7 @@ class LiveIntegrationTest {
     private static final String DEPLOY_MATCH_OID = "a17e57e5-0000-0000-0000-0000000000d3";
     private static final String LOOKUP_OID = "a17e57e5-0000-0000-0000-0000000000d4";
     private static final String TEMPLATE_OID = "a17e57e5-0000-0000-0000-0000000000d5";
+    private static final String GUI_ROLE_OID = "a17e57e5-0000-0000-0000-0000000000d6";
     // Built-in roles, only ever induced by the throwaway role, which nobody is assigned.
     private static final String SUPERUSER_ROLE_OID = "00000000-0000-0000-0000-000000000004";
     private static final String END_USER_ROLE_OID = "00000000-0000-0000-0000-000000000008";
@@ -626,7 +627,89 @@ class LiveIntegrationTest {
         assertEquals(givenId, mappingId(restored, "given"), restored);
     }
 
+    @Test
+    void twoLevelsDownATrackedTreeOwnsOnlyWhatItDeployed(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
+
+        // A role's user details page (keyed by type) holding two panels (keyed by identifier): every delete
+        // below has to be resolved through two of midPoint's container ids.
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path file = tree.resolve("role.xml");
+        Files.writeString(file, guiRole(panel("first", "<description>v1 text</description>") + panel("second", "")),
+                StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        git(tree, "config", "user.email", "test@example.invalid");
+        git(tree, "config", "user.name", "midgie test");
+        commit(tree, "v1");
+        CliResult first = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(0, first.exit, first.out + first.err);
+        String deployed = client.getObject("roles", GUI_ROLE_OID);
+        String pageId = idOf(deployed, "objectDetailsPage", "<type>");
+        String firstId = idOf(deployed, "panel", "<identifier>first</identifier>");
+        String secondId = idOf(deployed, "panel", "<identifier>second</identifier>");
+        assertNotNull(pageId, deployed);
+        assertNotNull(firstId, deployed);
+
+        // Someone gives the second panel a description the tree never had — through an untracked file on
+        // explicit merge, which leaves the first panel alone.
+        Path elsewhere = Files.createDirectories(dir.resolve("elsewhere"));
+        Files.writeString(elsewhere.resolve("admin.xml"), guiRole(panel("second", "<description>admin text</description>")),
+                StandardCharsets.UTF_8);
+        CliResult admin = run("deploy", elsewhere.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--multivalue", "merge", "--yes", "--no-rollback-plan");
+        assertEquals(0, admin.exit, admin.out + admin.err);
+
+        // v2 drops the description v1 deployed on the first panel.
+        Files.writeString(file, guiRole(panel("first", "") + panel("second", "")), StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult preview = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--dry-run", "--format", "xml");
+        assertEquals(1, preview.exit, preview.out + preview.err);
+        assertTrue(preview.out.contains("v1 text") && !preview.out.contains("admin text"),
+                "only what the tree deployed is in the PATCH: " + preview.out);
+        assertTrue(preview.err.contains("panel/description ×1"), "the server's item is kept and named: " + preview.err);
+
+        CliResult second = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(0, second.exit, second.out + second.err);
+        String live = client.getObject("roles", GUI_ROLE_OID);
+        assertFalse(live.contains("v1 text"), "the dropped item is gone:\n" + live);
+        assertTrue(live.contains("admin text"), "the server's item stays:\n" + live);
+        assertEquals(pageId, idOf(live, "objectDetailsPage", "<type>"), "the page keeps its id:\n" + live);
+        assertEquals(firstId, idOf(live, "panel", "<identifier>first</identifier>"), "the panel keeps its id:\n" + live);
+        assertEquals(secondId, idOf(live, "panel", "<identifier>second</identifier>"), live);
+        assertEquals(2, live.split("<panel").length - 1, "no panel removed or duplicated:\n" + live);
+
+        CliResult again = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        assertEquals(0, again.exit, "settled after one run: " + again.out + again.err);
+    }
+
     // --- helpers ---
+
+    private static String guiRole(String panels) {
+        return "<role xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\" oid=\"" + GUI_ROLE_OID + "\">\n"
+                + "  <name>zz-it-gui-role</name>\n  <adminGuiConfiguration><objectDetails><objectDetailsPage>\n"
+                + "    <type>c:UserType</type>\n" + panels
+                + "  </objectDetailsPage></objectDetails></adminGuiConfiguration>\n</role>";
+    }
+
+    private static String panel(String identifier, String extra) {
+        return "    <panel><identifier>" + identifier + "</identifier>" + extra + "</panel>\n";
+    }
+
+    /**
+     * The container id midPoint gave the {@code element} whose content (up to its first child element)
+     * contains {@code marker}, or {@code null}.
+     */
+    private static String idOf(String xml, String element, String marker) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("<" + element + " id=\"(\\d+)\">\\s*" + java.util.regex.Pattern.quote(marker))
+                .matcher(xml);
+        return matcher.find() ? matcher.group(1) : null;
+    }
 
     private static String template(String mappings) {
         return "<objectTemplate xmlns=\"" + NS + "\" oid=\"" + TEMPLATE_OID + "\">\n"
@@ -687,6 +770,7 @@ class LiveIntegrationTest {
         tryDelete("roles", DEPLOY_ROLE_OID);
         tryDelete("roles", DEPLOY_MATCH_OID);
         tryDelete("objectTemplates", TEMPLATE_OID);
+        tryDelete("roles", GUI_ROLE_OID);
         deleteByName("roles", COMBO_NAME);
     }
 

@@ -251,14 +251,15 @@ final class Reconciler {
         }
         PrismObject<? extends Objectable> after = project(current, delta);
         List<String> kept = keptOnMerge(desired, after, strategy);
-        List<String> keptNested = keptNested(result.keptNested(), current, after, removals);
+        List<String> heldBack = new ArrayList<>(held.paths);
+        List<String> keptNested = keptNested(result.keptNested(), current, after, removals, strategy, heldBack);
         if (!result.hasDrift() && judged.removing.isEmpty()) {
             LOG.debug("{} {}: IN_SYNC{}", restType, targetOid,
-                    held.paths.isEmpty() ? "" : ", left alone: " + held.paths);
+                    heldBack.isEmpty() ? "" : ", left alone: " + heldBack);
             // The (empty) delta rides along so a caller rendering this one object — 'diff', or 'deploy
             // --dry-run --format xml' — writes an empty ObjectModificationType rather than nothing.
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null,
-                    delta, warnings, held.paths, result.protectedSkippedPaths(), List.of(), judged.deferred, kept,
+                    delta, warnings, heldBack, result.protectedSkippedPaths(), List.of(), judged.deferred, kept,
                     keptNested);
         }
         int changes = delta.getModifications().size();
@@ -272,7 +273,7 @@ final class Reconciler {
         LOG.debug("{} {}: PATCH, {} change(s) ({} removal(s) from the tree): {}", restType, targetOid, changes,
                 judged.removing.size(), summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
-                delta, warnings, held.paths, result.protectedSkippedPaths(), judged.removing, judged.deferred,
+                delta, warnings, heldBack, result.protectedSkippedPaths(), judged.removing, judged.deferred,
                 kept, keptNested);
     }
 
@@ -322,10 +323,15 @@ final class Reconciler {
      * removed or left with a note of their own ("changed after it was deployed"). Counted per id-free item
      * path, so ten mappings an administrator gave a {@code lifecycleState} read as one entry,
      * {@code mapping/lifecycleState ×10}.
+     *
+     * <p>An item a policy {@code apply=} rule restricts is not counted either: the tree may well have deployed
+     * it, and its removal was withheld by the rule before it got here, so "it never deployed them" would send
+     * the reader looking in the wrong place. It goes to {@code heldBack} instead, named with its rule, which is
+     * where every other difference the policy leaves alone is reported.
      */
     private static List<String> keptNested(List<DiffEngine.KeptNested> keptByDiff,
             PrismObject<? extends Objectable> current, PrismObject<? extends Objectable> after,
-            List<RemovalDetector.Removal> removals) {
+            List<RemovalDetector.Removal> removals, StrategyOptions.Resolved strategy, List<String> heldBack) {
         if (keptByDiff.isEmpty() || after == null) {
             return List.of();
         }
@@ -339,6 +345,14 @@ final class Reconciler {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (DiffEngine.KeptNested kept : keptByDiff) {
             if (deployedPaths.stream().anyMatch(path -> path.equivalent(kept.path()))) {
+                continue;
+            }
+            ApplyRules.Mode mode = strategy.apply.modeOf(kept.path().removeIds());
+            if (mode != ApplyRules.Mode.ALWAYS) {
+                String label = idFreeText(kept.path()) + " (apply=" + mode.keyword + ")";
+                if (!heldBack.contains(label)) {
+                    heldBack.add(label);
+                }
                 continue;
             }
             Item<?, ?> item = after.findItem(kept.path());

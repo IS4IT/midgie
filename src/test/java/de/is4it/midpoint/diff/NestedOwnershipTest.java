@@ -167,7 +167,57 @@ class NestedOwnershipTest {
                 "the caller's desired object is left as it was");
     }
 
+    @Test
+    void twoLevelsDownAnItemOnlyTheServerHoldsIsKeptOnATrackedRun() throws Exception {
+        // A panel inside an object details page: both keyed, so the live path carries two ids, and each has
+        // to be resolved back to its desired value before "the file does not declare it" can be said.
+        PrismObject<? extends Objectable> desired = role(gui(null, null, ""));
+        PrismObject<? extends Objectable> live = role(gui(5L, 9L, "<description>server</description>"));
+
+        DiffEngine.DiffResult tracked = diff(desired, live, DiffEngine.Scope.PRESENT, true);
+        DiffEngine.DiffResult untracked = diff(desired, live, DiffEngine.Scope.PRESENT, false);
+
+        assertTrue(tracked.delta().isEmpty(), tracked.delta().toString());
+        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+                tracked.keptNested().stream().map(k -> k.path().toString()).collect(Collectors.toList()));
+        assertTrue(deletes(untracked.delta(), "adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+                "untracked, the file still decides: " + untracked.delta());
+    }
+
+    @Test
+    void twoLevelsDownAnAddedItemIsAddressedThroughBothOfTheServersIds() throws Exception {
+        PrismObject<? extends Objectable> desired = role(gui(null, null, "<description>mine</description>"));
+        PrismObject<? extends Objectable> live = role(gui(5L, 9L, ""));
+
+        for (boolean tracked : new boolean[] {false, true}) {
+            DiffEngine.DiffResult result = diff(desired, live, DiffEngine.Scope.PRESENT, tracked);
+            assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+                    paths(result.delta()), "tracked=" + tracked);
+        }
+    }
+
+    @Test
+    void twoLevelsDownADeclaredItemIsStillReplaced() throws Exception {
+        PrismObject<? extends Objectable> desired = role(gui(null, null, "<description>mine</description>"));
+        PrismObject<? extends Objectable> live = role(gui(5L, 9L, "<description>server</description>"));
+
+        DiffEngine.DiffResult tracked = diff(desired, live, DiffEngine.Scope.PRESENT, true);
+
+        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+                paths(tracked.delta()));
+        assertTrue(tracked.keptNested().isEmpty(), tracked.keptNested().toString());
+    }
+
     // --- helpers ---
+
+    /** A user details page holding one panel, 'first'; ids for a server's copy, none for a file's. */
+    private static String gui(Long pageId, Long panelId, String panelExtra) {
+        return "<adminGuiConfiguration><objectDetails><objectDetailsPage"
+                + (pageId != null ? " id=\"" + pageId + "\"" : "") + ">"
+                + "<type xmlns:c=\"" + NS + "\">c:UserType</type>"
+                + "<panel" + (panelId != null ? " id=\"" + panelId + "\"" : "") + "><identifier>first</identifier>"
+                + panelExtra + "</panel></objectDetailsPage></objectDetails></adminGuiConfiguration>";
+    }
 
     private static DiffEngine.DiffResult diff(PrismObject<? extends Objectable> desired,
             PrismObject<? extends Objectable> live, DiffEngine.Scope scope, boolean tracked) throws Exception {
