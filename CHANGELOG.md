@@ -5,11 +5,13 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.16.1] - 2026-09-25
 
 ### Fixed
 
 - **`MIDPOINT_PASSWORD` outranks every password setting in a config file.** The environment beats a config file for the URL and the user, but a file's `password-file` or `password-env` still won over `MIDPOINT_PASSWORD`, because the password order tries both of those options before the variable. A pod given `MIDPOINT_PASSWORD` could therefore end up authenticating with a password file named on the machine. The variable now stands all three keys down (`password`, `password-env`, `password-file`); `--password-env` and `--password-file` on the command line still come first.
+
+- **`--retries` help names every status it retries.** It said 503; the client retries 502, 503 and 504, as the README already said.
 
 ## [0.16.0] - 2026-09-25
 
@@ -493,7 +495,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/IS4IT/midgie/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/IS4IT/midgie/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/IS4IT/midgie/compare/v0.14.2...v0.15.0
 [0.14.2]: https://github.com/IS4IT/midgie/compare/v0.14.1...v0.14.2
