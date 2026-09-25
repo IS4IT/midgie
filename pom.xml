@@ -99,6 +99,14 @@
                 </configuration>
             </plugin>
 
+            <!-- Pinned so maven.compiler.release applies whatever Maven builds this: Maven 3.8's default
+                 compiler plugin (3.1) predates 'release' and falls back to Java 5, which JDK 17 rejects. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+
             <!-- Fat JAR. NOTE: prism/JAXB ship XSD catalogs + ServiceLoader files under
                  META-INF; if the shaded jar misbehaves at runtime, add the matching
                  AppendingTransformer entries (see CLAUDE.md "shade caveat"). -->
