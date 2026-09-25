@@ -177,7 +177,7 @@ bin/midgie diff desired.xml --url https://mp.example/midpoint --user administrat
 
 An explicit `CURRENT` file means offline; `--url` (or `MIDPOINT_URL`) means live — the two together are an error, and a URL inherited only from `MIDPOINT_URL` is a fallback that a `CURRENT` file overrides (so an env var never breaks a file diff).
 
-A live `diff` **is** `deploy --dry-run --format xml` for that one object, and runs through the same code: the same lookup, the same `--policy`, the same notes, byte-for-byte the same payload. An object that does not exist yet comes out as the `POST` body that would create it (exit `1`), not as an error. What `diff` adds is that it cannot write — it has no flag that leads to a `PATCH` — which is what you want from a drift check in CI or a read-only account. An offline diff compares the two files as they are, with no policy.
+A live `diff` **is** `deploy --dry-run --format xml` for that one object, and runs through the same code: the same lookup, the same `--policy`, the same notes, byte-for-byte the same payload. An object that does not exist yet comes out as the `POST` body that would create it (exit `1`), not as an error — always as XML, whatever `--format` says, since a create has no delta to summarise. What `diff` adds is that it cannot write — it has no flag that leads to a `PATCH` — which is what you want from a drift check in CI or a read-only account. An offline diff compares the two files as they are, with no policy.
 
 **OIDs are named for the reader.** Whatever midgie writes as XML for a person to read — the `diff` payload, `deploy --dry-run --format xml`, `--plan` files and the rollback plan — carries a comment above each element that names an object by OID:
 
@@ -189,7 +189,7 @@ A live `diff` **is** `deploy --dry-run --format xml` for that one object, and ru
             <targetRef oid="00000000-0000-0000-0000-000000000004" type="c:RoleType"/>
 ```
 
-Objects of the tree are named from the tree; references beyond it are looked up on the server, one search per object type. An OID the server does not know is labelled `RoleType not found on the server`, so a dangling reference shows before it is sent — unless the tree itself holds that object, which then reads `RoleType "Manager" (not on the server yet, deployed with this tree)`. An offline `diff` has no server and names only the object itself. The REST interface ignores comments, and `--apply-plan` and `rollback` strip them before sending anyway, so your own review notes in a plan file never reach the server either. `--format json` carries none.
+Objects of the tree are named from the tree; references beyond it are looked up on the server, one search per object type. An OID the server does not know is labelled `RoleType not found on the server`, so a dangling reference shows before it is sent — unless the tree itself holds that object, which then reads `RoleType "Manager" (not on the server yet, deployed with this tree)`. An offline `diff` has no server and names only the object itself. The REST interface ignores comments, and `--apply-plan` and `rollback` strip them before sending anyway, so your own review notes in a plan file never reach the server either. A `--format json` PATCH body carries none; the XML `POST` body for an object that does not exist yet carries them in every format.
 
 ### `deploy` — reconcile files and folders
 
@@ -513,7 +513,7 @@ midgie deploy config/ --url https://mp.example/midpoint \
 
 | flag | meaning |
 |---|---|
-| `--format xml\|json\|summary` | *(diff; deploy with `--dry-run` and one object)* `xml` (diff's default) / `json`: the `ObjectModificationType`, or the `POST` body for an object that does not exist yet. `summary`: a human-readable changed-path list. Under `deploy` the plan rows move to stderr. |
+| `--format xml\|json\|summary` | *(diff; deploy with `--dry-run` and one object)* `xml` (diff's default) / `json`: the `ObjectModificationType`. `summary`: a human-readable changed-path list. For an object that does not exist yet every format gives the `POST` body, as XML. Under `deploy` the plan rows move to stderr. |
 | `-o, --output FILE` | *(diff, deploy)* Write the `--format` output to `FILE` instead of stdout. |
 | `-q, --quiet` | Suppress advisory notes/status; keep the delta payload, errors, and exit code. |
 | `-v, --debug` | Follow what midgie is doing on stderr: one line per step (mode, connection, config files, schema registration, each REST call) and per object-level decision (the diff summary, the reconcile outcome, which policy rule applied). midgie's own loggers only — the prism/framework logs stay quiet. |
