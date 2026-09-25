@@ -487,7 +487,7 @@ class LiveIntegrationTest {
         CliResult first = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
                 "--rollback-plan", plans.toString());
         assertEquals(0, first.exit, first.err);
-        assertTrue(first.out.contains("Recorded the deployed files"), first.out);
+        assertTrue(first.out.contains("Recorded 1 applied object(s)"), first.out);
 
         // v2 drops 'beta' and retargets the inducement. A tracked tree is on merge by default, where the
         // retarget is an add of the new entry (an inducement has no key to match on), so only the removal of
@@ -717,7 +717,7 @@ class LiveIntegrationTest {
         CliResult first = run("deploy", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
                 "--no-rollback-plan");
         assertEquals(0, first.exit, first.out + first.err);
-        assertTrue(first.out.contains("Recorded the deployed files"), first.out);
+        assertTrue(first.out.contains("Recorded 1 applied object(s)"), first.out);
 
         // Dropping a value and deploying the one file again removes it: the file is tracked on its own.
         Files.writeString(file, trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
@@ -729,15 +729,54 @@ class LiveIntegrationTest {
         assertTrue(second.out.contains("1 value(s) removed"), "and counted in the summary: " + second.out);
 
         List<SyncState.Row> rows = stateRows();
-        SyncState.Row fileRow = rows.stream().filter(r -> r.key().endsWith("/roles/role.xml")
-                && !r.key().startsWith("deploy:")).findFirst().orElseThrow();
+        String ns = namespaceOf(tree);
+        SyncState.Row fileRow = rows.stream().filter(r -> r.key().equals(ns + "/roles/role.xml")).findFirst()
+                .orElseThrow();
         assertTrue(fileRow.value().contains("\"blob\":\"" + gitOut(tree, "rev-parse", "HEAD:roles/role.xml") + "\""),
                 fileRow.value());
         assertEquals("RoleType \"IT Deploy Role\"", fileRow.label());
-        SyncState.Row deployRow = rows.stream().filter(r -> r.key().startsWith("deploy:")
-                && r.key().endsWith("/roles/role.xml")).findFirst().orElseThrow();
+        SyncState.Row deployRow = rows.stream().filter(r -> r.key().equals("deploy:" + ns + "/roles/role.xml"))
+                .findFirst().orElseThrow();
         assertTrue(deployRow.value().contains("\"patched\":1") && deployRow.value().contains("\"removed\":1")
                 && deployRow.value().contains("\"by\":\"" + USER + "\""), deployRow.value());
+    }
+
+    @Test
+    void anObjectThatWasNotAppliedKeepsItsRecordWhileTheRestMovesOn(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Path roles = Files.createDirectories(tree.resolve("roles"));
+        Files.writeString(roles.resolve("a.xml"), trackedRole(List.of("alpha", "beta"), SUPERUSER_ROLE_OID),
+                StandardCharsets.UTF_8);
+        Files.writeString(roles.resolve("b.xml"), oidlessRole(COMBO_NAME, List.of("x", "y")), StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        String bAtV1 = gitOut(tree, "rev-parse", "HEAD:roles/b.xml");
+
+        // Both drop a value. Under --no-match-by-name the OID-less role, which exists by now, is skipped.
+        Files.writeString(roles.resolve("a.xml"), trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID),
+                StandardCharsets.UTF_8);
+        Files.writeString(roles.resolve("b.xml"), oidlessRole(COMBO_NAME, List.of("x")), StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult partly = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan", "--no-match-by-name");
+        assertEquals(0, partly.exit, partly.out + partly.err);
+        assertTrue(partly.out.contains("1 object(s) not applied keep their earlier record"), partly.out);
+        assertFalse(client.getObject("roles", DEPLOY_ROLE_OID).contains(">beta<"), "the applied one moved on");
+
+        List<SyncState.Row> rows = stateRows();
+        String ns = namespaceOf(tree);
+        assertTrue(rowFor(rows, ns + "/roles/a.xml").contains(gitOut(tree, "rev-parse", "HEAD:roles/a.xml")),
+                "a's row records v2");
+        assertTrue(rowFor(rows, ns + "/roles/b.xml").contains(bAtV1), "b's row still records v1");
+
+        // So a later full run still finds what b dropped.
+        CliResult later = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(0, later.exit, later.out + later.err);
+        assertTrue(later.out.contains("1 value(s) removed"), "y is removed now: " + later.out);
     }
 
     @Test
@@ -764,9 +803,9 @@ class LiveIntegrationTest {
         assertFalse(client.getObject("roles", DEPLOY_ROLE_OID).contains(">beta<"), "beta is removed");
 
         List<String> keys = stateRows().stream().map(SyncState.Row::key).toList();
-        assertTrue(keys.stream().anyMatch(k -> k.endsWith("/roles/b.xml")), keys.toString());
-        assertFalse(keys.stream().anyMatch(k -> k.endsWith("/roles/a.xml") && !k.startsWith("deploy:")),
-                "the old path's row has been dealt with and is gone: " + keys);
+        String ns = namespaceOf(tree);
+        assertTrue(keys.contains(ns + "/roles/b.xml"), keys.toString());
+        assertFalse(keys.contains(ns + "/roles/a.xml"), "the old path's row has been dealt with and is gone: " + keys);
     }
 
     @Test
@@ -806,7 +845,7 @@ class LiveIntegrationTest {
                 "--no-rollback-plan").exit);
 
         // Rewind the table to what an earlier version wrote: one row for the tree, holding its commit.
-        String namespace = gitOut(tree, "rev-list", "--max-parents=0", "HEAD").substring(0, 12);
+        String namespace = namespaceOf(tree);
         PrismContext prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
         com.evolveum.midpoint.prism.PrismObject<? extends com.evolveum.midpoint.prism.Objectable> table =
                 SyncState.find(prismContext, client);
@@ -1017,6 +1056,24 @@ class LiveIntegrationTest {
         }
         return xml.append("  <inducement>\n    <targetRef oid=\"").append(inducedRoleOid)
                 .append("\" type=\"RoleType\"/>\n  </inducement>\n</role>").toString();
+    }
+
+    private static String oidlessRole(String name, List<String> subtypes) {
+        StringBuilder xml = new StringBuilder("<role xmlns=\"" + NS + "\">\n  <name>" + name + "</name>\n");
+        for (String subtype : subtypes) {
+            xml.append("  <subtype>").append(subtype).append("</subtype>\n");
+        }
+        return xml.append("</role>").toString();
+    }
+
+    /** The value of the row keyed {@code key}. The table is shared by every test, so keys are matched exactly. */
+    private static String rowFor(List<SyncState.Row> rows, String key) {
+        return rows.stream().filter(r -> r.key().equals(key)).map(SyncState.Row::value).findFirst().orElse("");
+    }
+
+    /** What a test repository's rows are keyed under: its short root commit. */
+    private static String namespaceOf(Path repo) throws Exception {
+        return gitOut(repo, "rev-list", "--max-parents=0", "HEAD").substring(0, 12);
     }
 
     /** A fresh git repository for a tracked tree, with the server's state table in place. */

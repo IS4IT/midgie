@@ -208,13 +208,11 @@ public class DeployCommand implements Callable<Integer> {
     private StrategyOptions.Resolved globalStrategy;
     private Policy policy;
     /**
-     * Why this run did not land the whole tree, or {@code null} when it did. A declined prompt, a declined
-     * unit and a skipped unit all mean part of the desired state never reached the server — and both of the
-     * things that follow the apply assume it did. Pruning would delete "leftovers" computed against a tree
-     * that was never applied, and recording the revision would move the baseline past removals nobody acted
-     * on, making them undetectable for ever.
+     * The objects this run applied completely — created, patched or found in sync, with every removal it meant
+     * to send. Only their files' rows move forward: a row moved past an object that failed, was skipped or
+     * declined, or kept a removal back, would make what it dropped undetectable for ever.
      */
-    private String notFullyApplied;
+    private final Set<DeployObject> appliedUnits = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
     /** Set when last-applied cannot be recovered at all, so no comparison this run means anything. */
     private boolean detectionBroken;
@@ -231,8 +229,11 @@ public class DeployCommand implements Callable<Integer> {
     /** Each object's removals, which its own PATCH carries unless --no-prune. */
     private final Map<DeployObject, List<RemovalDetector.Removal>> removalsByUnit = new IdentityHashMap<>();
 
-    /** Paths of gone files whose recorded content this run dealt with; their rows go when it succeeds. */
-    private final Set<String> consumedPaths = new LinkedHashSet<>();
+    /** For each object, the paths of the files it was compared against as last applied. */
+    private Map<DeployObject, List<String>> comparedPaths = Map.of();
+
+    /** Paths of gone files whose object left the tree; reported, so their rows have nothing left to say. */
+    private final Set<String> orphanPaths = new LinkedHashSet<>();
 
     /** What the writing passes did, for the deploy: row; failed is settled once retries are over. */
     private final Tally sent = new Tally();
@@ -242,12 +243,6 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Removals that cannot be turned into a delete; they fail the run so the revision stays put. */
     private final List<RemovalDetector.Removal> unprunable = new ArrayList<>();
-
-    private void markNotFullyApplied(String reason) {
-        if (notFullyApplied == null) {
-            notFullyApplied = reason;
-        }
-    }
 
     @Override
     public Integer call() {
@@ -497,8 +492,10 @@ public class DeployCommand implements Callable<Integer> {
             reportUnmatchedPolicyRules();
 
             if (!unprunable.isEmpty() && planDir == null && !dryRun) {
-                // Left unsaid, the revision would advance past these and they would never be offered again.
-                markNotFullyApplied("some removals cannot be expressed");
+                // Left unsaid, the object's rows would move past these and they would never be offered again.
+                for (RemovalDetector.Removal removal : unprunable) {
+                    appliedUnits.remove(removal.unit);
+                }
                 exit = EXIT_ERROR;
             }
             // Written after the apply: the tree's objects are on the server now, whatever the plan said.
@@ -506,12 +503,7 @@ public class DeployCommand implements Callable<Integer> {
             writeRollbackPlan(client, tracking);
 
             if (planDir == null && !dryRun && sentSomething) {
-                boolean fullyApplied = exit == 0 && notFullyApplied == null && !detectionBroken;
-                if (!fullyApplied && tracking.canRecord() && notFullyApplied != null) {
-                    note("note: not recording what was applied — " + notFullyApplied
-                            + "; anything dropped from the tree stays detectable on the next run.");
-                }
-                recordState(prismContext, client, tracking, units, fullyApplied);
+                recordState(prismContext, client, tracking, units);
             }
             return exit;
         } catch (Exception e) {
@@ -631,7 +623,7 @@ public class DeployCommand implements Callable<Integer> {
                     + "rows from " + SyncState.TABLE_NAME + ".");
             return List.of();
         }
-        consumedPaths.addAll(detector.claimedPaths());
+        comparedPaths = detector.comparedPaths();
         for (RemovalDetector.Orphan orphan : detector.orphaned()) {
             String movedTo = files.movedTo(orphan.objectLabel, orphan.paths);
             if (movedTo != null) {
@@ -642,7 +634,7 @@ public class DeployCommand implements Callable<Integer> {
             }
             // The whole object left the tree. midgie does not delete objects, and taking one apart value by
             // value would strip its name, so say it plainly and leave the decision to the operator.
-            consumedPaths.addAll(orphan.paths);
+            orphanPaths.addAll(orphan.paths);
             note("note: " + orphan.objectLabel + " is no longer declared by the tree (" + orphan.sourceFile
                     + " was removed); its object is left untouched — delete it yourself if that is intended.");
         }
@@ -825,20 +817,40 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     /**
-     * Write this run to {@code midgie-state}: a row per deployed file when the tree was applied completely,
-     * and a {@code deploy:} row per deployed path in any case — one PATCH of individual rows.
+     * Write this run to {@code midgie-state}, as one PATCH of individual rows: the rows of the files of every
+     * object it applied completely, and a {@code deploy:} row per deployed path. An object that failed, was
+     * skipped or declined, or kept a removal back keeps its files' rows as they were, so what it dropped stays
+     * detectable on the next run; the rest of the tree moves on regardless.
      */
     private void recordState(PrismContext prismContext, MidpointRestClient client, Tracking tracking,
-            List<DeployObject> units, boolean fullyApplied) {
+            List<DeployObject> units) {
         if (!tracking.canRecord()) {
             return;
         }
         try {
-            List<String> notes = new ArrayList<>();
-            SyncState.Changes changes = fullyApplied
-                    ? tracking.files.changesAfter(units, consumedPaths, notes) : new SyncState.Changes();
-            for (String line : notes) {
-                note("note: " + line + ".");
+            List<DeployObject> applied = new ArrayList<>();
+            Set<String> consumed = new LinkedHashSet<>(orphanPaths);
+            Set<String> notApplied = new LinkedHashSet<>();
+            for (DeployObject unit : units) {
+                if (appliedUnits.contains(unit)) {
+                    applied.add(unit);
+                    consumed.addAll(comparedPaths.getOrDefault(unit, List.of()));
+                } else {
+                    for (File file : unit.sourceFiles()) {
+                        String path = tracking.files.pathOf(file);
+                        if (path != null) {
+                            notApplied.add(path);
+                        }
+                    }
+                }
+            }
+            SyncState.Changes changes = new SyncState.Changes();
+            if (!detectionBroken) {
+                List<String> notes = new ArrayList<>();
+                changes = tracking.files.changesAfter(applied, consumed, notApplied, notes);
+                for (String line : notes) {
+                    note("note: " + line + ".");
+                }
             }
             String value = FileTracking.deployValue(tracking.currentRevision, connectionOptions.account(),
                     VersionSupport.toolVersion(), sent.created, sent.patched, sent.inSync, sent.removed,
@@ -847,9 +859,12 @@ public class DeployCommand implements Callable<Integer> {
                 changes.set(tracking.files.deployKeyOf(scope), value, null);
             }
             SyncState.apply(prismContext, client, tracking.table, changes);
-            if (fullyApplied) {
-                status("Recorded the deployed files at " + GitRevision.abbreviate(tracking.currentRevision)
-                        + " in " + SyncState.TABLE_NAME + ".");
+            if (!detectionBroken && !applied.isEmpty()) {
+                int left = units.size() - applied.size();
+                status("Recorded " + applied.size() + " applied object(s) at "
+                        + GitRevision.abbreviate(tracking.currentRevision) + " in " + SyncState.TABLE_NAME + "."
+                        + (left > 0 ? " " + left + " object(s) not applied keep their earlier record, so what "
+                                + "they dropped stays detectable." : ""));
             }
         } catch (Exception e) {
             // Bookkeeping must never fail a deploy that already succeeded.
@@ -1018,15 +1033,10 @@ public class DeployCommand implements Callable<Integer> {
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune());
                 Reconciler.Action action = outcome.action;
                 tally.lastOutcome = outcome;
-                if (!preview && outcome.removalsDeferred) {
-                    markNotFullyApplied("some removals were left for the next run");
-                }
-
                 if (!preview && perUnitPrompt
                         && (action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH)) {
                     if (!promptEach(action, outcome)) {
                         tally.skipped++;
-                        markNotFullyApplied("one or more units were declined");
                         reportUnit(unit, "skipped", "declined", false);
                         continue;
                     }
@@ -1038,6 +1048,11 @@ public class DeployCommand implements Callable<Integer> {
                     }
                 }
                 record(tally, unit, action, outcome, preview);
+                boolean landed = action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH
+                        || action == Reconciler.Action.IN_SYNC;
+                if (!preview && landed && !outcome.removalsDeferred) {
+                    appliedUnits.add(unit);
+                }
             } catch (Exception e) {
                 if (isFatal(e)) {
                     throw e;
@@ -1085,9 +1100,6 @@ public class DeployCommand implements Callable<Integer> {
                 break;
             case SKIP:
                 tally.skipped++;
-                if (!preview) {
-                    markNotFullyApplied("one or more units were skipped");
-                }
                 reportUnit(unit, preview ? "skip" : "skipped", safe(outcome.detail), false);
                 break;
             case FAIL:
@@ -1303,7 +1315,6 @@ public class DeployCommand implements Callable<Integer> {
                     // Counted, not forgotten: the summary derives "applied" from the entry count, so an
                     // unrecorded decline was reported as a write that never happened.
                     declinedEntries++;
-                    markNotFullyApplied("one or more plan entries were declined");
                     reportEntry(entry, "skipped", "declined", false);
                     continue;
                 }
@@ -1389,7 +1400,6 @@ public class DeployCommand implements Callable<Integer> {
             case PROCEED:
                 return null;
             case ABORTED:
-                markNotFullyApplied("the apply was declined");
                 System.err.println("midgie: aborted — nothing was applied.");
                 return 0;
             case NON_INTERACTIVE:

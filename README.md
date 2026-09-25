@@ -276,7 +276,7 @@ value  {"at":"2026-09-25T12:10:53Z","commit":"9c41…","by":"administrator","mid
         "created":2,"patched":3,"in-sync":37,"removed":4,"skipped":0,"failed":0}
 ```
 
-A deploy declined at the prompt writes nothing; one that failed or skipped objects still writes its `deploy:` row, but moves no file row forward, so what it did not apply stays detectable.
+Rows move forward **per object**: the files of every object the run applied — created, patched or found in sync — get their rows updated, while an object that failed, was skipped or declined, or kept a removal back keeps its files' rows as they were, so what it dropped stays detectable on the next run. The `deploy:` row is written by every run that sent something, failures included; a deploy declined at the prompt writes nothing.
 
 **Moves and partial deploys.** An object's last-applied is the combination of its files, each as its own row records it. A file that no longer exists anywhere still counts — the old path of a renamed file — so renaming a file and dropping a value in the same commit is applied correctly even when you deploy only the new path. A file that still exists *outside* what you deploy counts on neither side: deploying `roles/` when the role has a second file in `extra/` applies only that part, says so (`… also has 1 file(s) outside the deployed path`), and never reads the other file's values as removed. An object that left the deployed files is reported as gone — or, when a row shows where it lives now, as moved there.
 

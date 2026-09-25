@@ -111,7 +111,10 @@ the midPoint source tree.
   (a bare commit sha) are read once for files without a row (`git show <rev>:<path>` plus `deletedSince` for
   files deleted since) and deleted when a run covers their path. A `deploy:` row per deployed path records the
   last run — when, commit, account, midgie version, and the summary counts — for every real deploy that sent
-  something; file rows move forward only when the tree was applied completely. A blob or commit the
+  something. File rows move forward **per object**: only the files of an object this run applied completely
+  (created, patched or in sync, no removal deferred or inexpressible — `DeployCommand.appliedUnits`) get new
+  rows; a gone file's row is deleted only if the object that compared against it was applied, and an earlier
+  version's tree row only if no object under it was left out, since a left-out object may still need it. A blob or commit the
   repository no longer holds stops detection for the run, as an unreachable revision did. The removal set is what last-applied holds and desired no longer does, compared item by item (`RemovalDetector.collect`, see "Ownership below the top level" below). It works per **object**
   on both sides — the union of the files describing it now against the union of the files that described it
   at that revision, deleted ones included — which is what makes it correct for objects assembled from several

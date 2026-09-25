@@ -294,7 +294,7 @@ final class RemovalDetector {
     private final History history;
     private final String lastRevision;   // what last-applied is, in words, for the log
     private final List<Orphan> orphaned = new ArrayList<>();
-    private final Set<String> claimedPaths = new LinkedHashSet<>();
+    private final Map<DeployObject, List<String>> comparedPaths = new java.util.IdentityHashMap<>();
 
     /** Last-applied is the tree as it was at one commit: {@code lastRevision}. */
     RemovalDetector(PrismContext prismContext, GitRevision git, String lastRevision) {
@@ -345,7 +345,7 @@ final class RemovalDetector {
             if (previous == null) {
                 continue; // an object that did not exist at the recorded revision
             }
-            claimedPaths.addAll(previous.paths);
+            comparedPaths.put(unit, List.copyOf(previous.paths));
             PrismObject<? extends Objectable> before = previous.union();
             if (before == null) {
                 continue;
@@ -562,9 +562,9 @@ final class RemovalDetector {
         return paths;
     }
 
-    /** The paths whose last-applied content an object of this run was compared against. */
-    Set<String> claimedPaths() {
-        return claimedPaths;
+    /** Per object of this run, the paths whose last-applied content it was compared against. */
+    Map<DeployObject, List<String>> comparedPaths() {
+        return comparedPaths;
     }
 
     /** Objects whose every fragment left the tree; reported so the operator can retire them deliberately. */

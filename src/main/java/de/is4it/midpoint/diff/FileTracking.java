@@ -222,11 +222,13 @@ final class FileTracking {
     }
 
     /**
-     * The row changes a fully applied run makes: a row for every file of its objects, rows removed for files
-     * that are gone and whose content this run has dealt with ({@code consumed}), and earlier versions' tree
-     * rows it now covers completely.
+     * The row changes after a run: a row for every file of the objects it applied ({@code units}), rows
+     * removed for files that are gone and whose content an applied object has dealt with ({@code consumed}),
+     * and earlier versions' tree rows it now covers — unless a file under one belongs to an object that was
+     * not applied ({@code notApplied}), which may still need that row to recover what it last applied.
      */
-    SyncState.Changes changesAfter(List<DeployObject> units, Set<String> consumed, List<String> notes) {
+    SyncState.Changes changesAfter(List<DeployObject> units, Set<String> consumed, Set<String> notApplied,
+            List<String> notes) {
         SyncState.Changes changes = new SyncState.Changes();
         String now = Instant.now().truncatedTo(ChronoUnit.SECONDS).toString();
         List<String> uncommitted = new ArrayList<>();
@@ -259,7 +261,7 @@ final class FileTracking {
             }
         }
         for (TreeRow tree : trees.values()) {
-            if (coveredByScope(tree.path())) {
+            if (coveredByScope(tree.path()) && notApplied.stream().noneMatch(path -> under(path, tree.path()))) {
                 changes.delete(tree.key());
             }
         }
@@ -340,6 +342,10 @@ final class FileTracking {
             }
         }
         return false;
+    }
+
+    private static boolean under(String path, String tree) {
+        return tree.isEmpty() || path.equals(tree) || path.startsWith(tree + "/");
     }
 
     /** Whether this run covers everything under {@code path}, so a tree row there has nothing left to answer. */

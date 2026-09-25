@@ -124,7 +124,7 @@ class FileTrackingTest {
                 new SyncState.Row(2L, ns(dir) + "/roles", v1, "tree row under the run"),
                 new SyncState.Row(3L, ns(dir), v1, "tree row above the run"));
         List<String> notes = new ArrayList<>();
-        SyncState.Changes changes = tracking.changesAfter(units(file), Set.of("roles/gone.xml"), notes);
+        SyncState.Changes changes = tracking.changesAfter(units(file), Set.of("roles/gone.xml"), Set.of(), notes);
 
         String[] row = changes.set.get(ns(dir) + "/roles/manager.xml");
         assertTrue(row != null && row[0].contains("\"blob\":\"" + git(dir).blobAtHead("roles/manager.xml") + "\""),
@@ -138,6 +138,26 @@ class FileTrackingTest {
     }
 
     @Test
+    void anEarlierVersionsTreeRowStaysWhileAnObjectUnderItWasNotApplied(@TempDir Path dir) throws Exception {
+        // The object that failed has no row of its own yet: the tree row is still how the next run recovers
+        // what it last applied.
+        Path applied = write(dir, "roles/a.xml", role("11111111-0000-0000-0000-000000000001", "A", "x"));
+        write(dir, "roles/b.xml", role("11111111-0000-0000-0000-000000000002", "B", "y"));
+        Assumptions.assumeTrue(commit(dir, "v1"), "git is not usable here");
+        String v1 = git(dir).head();
+        FileTracking tracking = tracking(dir, List.of("roles"), new SyncState.Row(2L, ns(dir) + "/roles", v1, "tree"));
+
+        SyncState.Changes partly = tracking.changesAfter(units(applied), Set.of(), Set.of("roles/b.xml"),
+                new ArrayList<>());
+        SyncState.Changes fully = tracking.changesAfter(units(applied), Set.of(), Set.of(), new ArrayList<>());
+
+        assertTrue(partly.set.containsKey(ns(dir) + "/roles/a.xml"), "the applied object's file moves on");
+        assertFalse(partly.set.containsKey(ns(dir) + "/roles/b.xml"), "the other one's does not");
+        assertTrue(partly.delete.isEmpty(), "and the tree row stays for it: " + partly.delete);
+        assertEquals(Set.of(ns(dir) + "/roles"), fully.delete);
+    }
+
+    @Test
     void anUnchangedFileKeepsItsTimestampAndAnEditedOneIsMarkedDirty(@TempDir Path dir) throws Exception {
         Path file = write(dir, "roles/manager.xml", role("11111111-0000-0000-0000-000000000001", "Manager", "x"));
         Assumptions.assumeTrue(commit(dir, "v1"), "git is not usable here");
@@ -145,12 +165,12 @@ class FileTrackingTest {
         SyncState.Row existing = new SyncState.Row(1L, ns(dir) + "/roles/manager.xml",
                 "{\"blob\":\"" + blob + "\",\"at\":\"2026-01-01T00:00:00Z\"}", "RoleType \"Manager\"");
 
-        String unchanged = tracking(dir, List.of(""), existing).changesAfter(units(file), Set.of(), new ArrayList<>())
+        String unchanged = tracking(dir, List.of(""), existing).changesAfter(units(file), Set.of(), Set.of(), new ArrayList<>())
                 .set.get(ns(dir) + "/roles/manager.xml")[0];
         assertTrue(unchanged.contains("2026-01-01T00:00:00Z"), "its content reached the server then: " + unchanged);
 
         write(dir, "roles/manager.xml", role("11111111-0000-0000-0000-000000000001", "Manager", "edited"));
-        String dirty = tracking(dir, List.of(""), existing).changesAfter(units(file), Set.of(), new ArrayList<>())
+        String dirty = tracking(dir, List.of(""), existing).changesAfter(units(file), Set.of(), Set.of(), new ArrayList<>())
                 .set.get(ns(dir) + "/roles/manager.xml")[0];
         assertTrue(dirty.contains("\"dirty\":true") && !dirty.contains("2026-01-01"), dirty);
     }
@@ -162,7 +182,7 @@ class FileTrackingTest {
         Path fresh = write(dir, "roles/fresh.xml", role("11111111-0000-0000-0000-000000000009", "Fresh", "f"));
 
         List<String> notes = new ArrayList<>();
-        SyncState.Changes changes = tracking(dir, List.of("")).changesAfter(units(fresh), Set.of(), notes);
+        SyncState.Changes changes = tracking(dir, List.of("")).changesAfter(units(fresh), Set.of(), Set.of(), notes);
 
         assertTrue(changes.set.isEmpty(), changes.set.toString());
         assertTrue(notes.get(0).contains("roles/fresh.xml"), notes.toString());
