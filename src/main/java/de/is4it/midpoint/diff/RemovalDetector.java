@@ -267,22 +267,61 @@ final class RemovalDetector {
     static final class Orphan {
         final String objectLabel;
         final String sourceFile;
+        final List<String> paths;   // the repository paths that described it
 
-        Orphan(String objectLabel, String sourceFile) {
+        Orphan(String objectLabel, String sourceFile, List<String> paths) {
             this.objectLabel = objectLabel;
             this.sourceFile = sourceFile;
+            this.paths = List.copyOf(paths);
         }
     }
 
-    private final PrismContext prismContext;
-    private final GitRevision git;
-    private final String lastRevision;
-    private final List<Orphan> orphaned = new ArrayList<>();
+    /**
+     * One file as it was last applied: its repository path, its content then, and whether the path lies inside
+     * what this run deploys. A file outside it can still describe an object of this run — the old path of a
+     * file moved into the tree — but on its own it is none of this run's business, so it is never reported as
+     * an orphan here.
+     */
+    record Snapshot(String path, String content, boolean inScope) {
+    }
 
+    /** Where last-applied comes from: the file contents this run's objects were last deployed as. */
+    interface History {
+        List<Snapshot> snapshots(List<DeployObject> units);
+    }
+
+    private final PrismContext prismContext;
+    private final History history;
+    private final String lastRevision;   // what last-applied is, in words, for the log
+    private final List<Orphan> orphaned = new ArrayList<>();
+    private final Set<String> claimedPaths = new LinkedHashSet<>();
+
+    /** Last-applied is the tree as it was at one commit: {@code lastRevision}. */
     RemovalDetector(PrismContext prismContext, GitRevision git, String lastRevision) {
+        this(prismContext, atRevision(git, lastRevision), "revision " + lastRevision);
+    }
+
+    RemovalDetector(PrismContext prismContext, History history, String description) {
         this.prismContext = prismContext;
-        this.git = git;
-        this.lastRevision = lastRevision;
+        this.history = history;
+        this.lastRevision = description;
+    }
+
+    /**
+     * The history of a tree deployed as a whole at one commit: its files as they were then, plus the ones
+     * deleted since — all inside the tree.
+     */
+    static History atRevision(GitRevision git, String revision) {
+        return units -> {
+            List<Snapshot> snapshots = new ArrayList<>();
+            for (String path : lastAppliedPaths(git, revision, units)) {
+                String content = git.fileAt(revision, path);
+                if (content != null && !content.isBlank()) {
+                    snapshots.add(new Snapshot(path, content, true));
+                }
+            }
+            return snapshots;
+        };
     }
 
     /**
@@ -306,6 +345,7 @@ final class RemovalDetector {
             if (previous == null) {
                 continue; // an object that did not exist at the recorded revision
             }
+            claimedPaths.addAll(previous.paths);
             PrismObject<? extends Objectable> before = previous.union();
             if (before == null) {
                 continue;
@@ -314,7 +354,7 @@ final class RemovalDetector {
         }
 
         for (LastApplied previous : lastApplied) {
-            if (previous.claimed) {
+            if (previous.claimed || !previous.inScope) {
                 continue;
             }
             // Nothing in the tree declares this object any more. Its values are not individually "removed" —
@@ -322,7 +362,7 @@ final class RemovalDetector {
             // mangled object behind. Deleting objects is deliberately out of scope, so say so and leave it.
             PrismObject<? extends Objectable> before = previous.union();
             if (before != null) {
-                orphaned.add(new Orphan(identityKeyOf(before), previous.sourceLabel()));
+                orphaned.add(new Orphan(identityKeyOf(before), previous.sourceLabel(), previous.paths));
             }
         }
 
@@ -344,13 +384,15 @@ final class RemovalDetector {
         private final List<String> paths = new ArrayList<>();
         private final Set<String> keys = new LinkedHashSet<>();
         private boolean claimed;
+        private boolean inScope;
         private boolean united;
         private PrismObject<? extends Objectable> union;
 
-        void add(PrismObject<? extends Objectable> object, String path) {
+        void add(PrismObject<? extends Objectable> object, String path, boolean pathInScope) {
             objects.add(object);
             paths.add(path);
             keys.addAll(identityKeysOf(object));
+            inScope |= pathInScope;
         }
 
         /** The combined object, or {@code null} when its files contradict each other past combining. */
@@ -458,10 +500,11 @@ final class RemovalDetector {
     private List<LastApplied> lastAppliedObjects(List<DeployObject> units) {
         Map<String, LastApplied> byKey = new LinkedHashMap<>();
         List<LastApplied> groups = new ArrayList<>();
-        for (String path : lastAppliedPaths(units)) {
-            PrismObject<? extends Objectable> object = parseAt(path);
+        for (Snapshot snapshot : history.snapshots(units)) {
+            String path = snapshot.path();
+            PrismObject<? extends Objectable> object = parse(snapshot);
             if (object == null) {
-                continue; // a file that did not exist yet, or cannot be read as an object
+                continue; // cannot be read as an object
             }
             List<String> keys = identityKeysOf(object);
             LastApplied group = null;
@@ -475,7 +518,7 @@ final class RemovalDetector {
                 group = new LastApplied();
                 groups.add(group);
             }
-            group.add(object, path);
+            group.add(object, path, snapshot.inScope());
             // Under every form it identifies itself by, since two files of one object need not agree on
             // which one they use.
             for (String key : group.keys) {
@@ -499,7 +542,7 @@ final class RemovalDetector {
     }
 
     /** Repository-relative paths that described objects at the recorded revision: today's plus the deleted. */
-    private List<String> lastAppliedPaths(List<DeployObject> units) {
+    private static List<String> lastAppliedPaths(GitRevision git, String lastRevision, List<DeployObject> units) {
         List<String> paths = new ArrayList<>();
         Set<String> present = new LinkedHashSet<>();
         for (DeployObject unit : units) {
@@ -517,6 +560,11 @@ final class RemovalDetector {
             }
         }
         return paths;
+    }
+
+    /** The paths whose last-applied content an object of this run was compared against. */
+    Set<String> claimedPaths() {
+        return claimedPaths;
     }
 
     /** Objects whose every fragment left the tree; reported so the operator can retire them deliberately. */
@@ -711,15 +759,11 @@ final class RemovalDetector {
         return definition != null && definition.isMandatory();
     }
 
-    private PrismObject<? extends Objectable> parseAt(String repoRelativePath) {
-        String content = git.fileAt(lastRevision, repoRelativePath);
-        if (content == null || content.isBlank()) {
-            return null;
-        }
+    private PrismObject<? extends Objectable> parse(Snapshot snapshot) {
         try {
-            return prismContext.parseObject(content);
+            return prismContext.parseObject(snapshot.content());
         } catch (Exception e) {
-            LOG.trace("could not parse {} at revision {}", repoRelativePath, lastRevision, e);
+            LOG.trace("could not parse {} as last applied ({})", snapshot.path(), lastRevision, e);
             return null;
         }
     }

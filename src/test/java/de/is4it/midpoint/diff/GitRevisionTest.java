@@ -64,18 +64,18 @@ class GitRevisionTest {
     }
 
     @Test
-    void asingleFileHasNoIdentityOfItsOwn(@TempDir Path dir) throws Exception {
-        // Deploying one file is not deploying its directory. Keying it by the parent tree would record the
-        // whole tree as applied at this revision, so the next full deploy would compare against a point at
-        // which most of it was never applied and miss every removal made in between.
+    void aSingleFileHasAnIdentityOfItsOwnNotItsDirectorys(@TempDir Path dir) throws Exception {
+        // Deploying one file is not deploying its directory, so it must never be keyed as the directory — but it
+        // is a deployment of its own, keyed by its own path, the way a subfolder is.
         Files.writeString(dir.resolve("role.xml"), "<x/>", StandardCharsets.UTF_8);
         Assumptions.assumeTrue(initRepository(dir), "git is not usable here");
 
         DeploymentIdentity file = DeploymentIdentity.of(dir.resolve("role.xml").toFile(), null);
-        assertFalse(file.isAvailable(), "a single file must not inherit the tree's identity");
-        assertTrue(file.unavailableReason().contains("--app"), file.unavailableReason());
-
-        assertTrue(DeploymentIdentity.of(dir.toFile(), null).isAvailable(), "the directory still has one");
+        DeploymentIdentity tree = DeploymentIdentity.of(dir.toFile(), null);
+        assertTrue(file.isAvailable(), file.unavailableReason());
+        assertTrue(file.key().endsWith("/role.xml"), file.key());
+        assertFalse(file.key().equals(tree.key()), "never the directory's key: " + file.key());
+        assertEquals(tree.namespace(), file.namespace(), "but the same repository's rows");
         assertEquals("my-app", DeploymentIdentity.of(dir.resolve("role.xml").toFile(), "my-app").key(),
                 "and --app can name such a deployment deliberately");
     }

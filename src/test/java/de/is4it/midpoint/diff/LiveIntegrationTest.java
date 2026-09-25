@@ -487,7 +487,7 @@ class LiveIntegrationTest {
         CliResult first = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
                 "--rollback-plan", plans.toString());
         assertEquals(0, first.exit, first.err);
-        assertTrue(first.out.contains("Recorded revision"), first.out);
+        assertTrue(first.out.contains("Recorded the deployed files"), first.out);
 
         // v2 drops 'beta' and retargets the inducement. A tracked tree is on merge by default, where the
         // retarget is an add of the new entry (an inducement has no key to match on), so only the removal of
@@ -704,6 +704,136 @@ class LiveIntegrationTest {
         assertEquals(0, again.exit, "settled after one run: " + again.out + again.err);
     }
 
+    // --- per-file tracking ---
+
+    @Test
+    void aSingleFileDeployIsTrackedLikeItsFolder(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Path file = Files.createDirectories(tree.resolve("roles")).resolve("role.xml");
+        Files.writeString(file, trackedRole(List.of("alpha", "beta"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        CliResult first = run("deploy", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(0, first.exit, first.out + first.err);
+        assertTrue(first.out.contains("Recorded the deployed files"), first.out);
+
+        // Dropping a value and deploying the one file again removes it: the file is tracked on its own.
+        Files.writeString(file, trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult second = run("deploy", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(0, second.exit, second.out + second.err);
+        assertFalse(client.getObject("roles", DEPLOY_ROLE_OID).contains(">beta<"), "the dropped value is removed");
+        assertTrue(second.out.contains("1 value(s) removed"), "and counted in the summary: " + second.out);
+
+        List<SyncState.Row> rows = stateRows();
+        SyncState.Row fileRow = rows.stream().filter(r -> r.key().endsWith("/roles/role.xml")
+                && !r.key().startsWith("deploy:")).findFirst().orElseThrow();
+        assertTrue(fileRow.value().contains("\"blob\":\"" + gitOut(tree, "rev-parse", "HEAD:roles/role.xml") + "\""),
+                fileRow.value());
+        assertEquals("RoleType \"IT Deploy Role\"", fileRow.label());
+        SyncState.Row deployRow = rows.stream().filter(r -> r.key().startsWith("deploy:")
+                && r.key().endsWith("/roles/role.xml")).findFirst().orElseThrow();
+        assertTrue(deployRow.value().contains("\"patched\":1") && deployRow.value().contains("\"removed\":1")
+                && deployRow.value().contains("\"by\":\"" + USER + "\""), deployRow.value());
+    }
+
+    @Test
+    void aRenameWithADroppedValueIsAppliedByDeployingTheNewPathAlone(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Path roles = Files.createDirectories(tree.resolve("roles"));
+        Files.writeString(roles.resolve("a.xml"), trackedRole(List.of("alpha", "beta"), SUPERUSER_ROLE_OID),
+                StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        // Renamed and edited in one commit; only the new path is deployed. The old path's row is what says beta
+        // was deployed, so it has to be found although its path lies outside what this run deploys.
+        git(tree, "mv", "roles/a.xml", "roles/b.xml");
+        Files.writeString(roles.resolve("b.xml"), trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID),
+                StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult moved = run("deploy", roles.resolve("b.xml").toString(), "--url", HOST, "-u", USER, "-p",
+                PASSWORD, "--yes", "--no-rollback-plan");
+        assertEquals(0, moved.exit, moved.out + moved.err);
+        assertFalse(client.getObject("roles", DEPLOY_ROLE_OID).contains(">beta<"), "beta is removed");
+
+        List<String> keys = stateRows().stream().map(SyncState.Row::key).toList();
+        assertTrue(keys.stream().anyMatch(k -> k.endsWith("/roles/b.xml")), keys.toString());
+        assertFalse(keys.stream().anyMatch(k -> k.endsWith("/roles/a.xml") && !k.startsWith("deploy:")),
+                "the old path's row has been dealt with and is gone: " + keys);
+    }
+
+    @Test
+    void deployingPartOfAnObjectSaysSoAndReadsNothingElseAsRemoved(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Files.writeString(Files.createDirectories(tree.resolve("roles")).resolve("role.xml"),
+                "<role xmlns=\"" + NS + "\" oid=\"" + DEPLOY_ROLE_OID + "\">\n  <name>IT Deploy Role</name>\n"
+                        + "  <subtype>alpha</subtype>\n</role>", StandardCharsets.UTF_8);
+        Files.writeString(Files.createDirectories(tree.resolve("extra")).resolve("role-extra.xml"),
+                "<role xmlns=\"" + NS + "\" oid=\"" + DEPLOY_ROLE_OID + "\">\n  <name>IT Deploy Role</name>\n"
+                        + "  <subtype>beta</subtype>\n</role>", StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        CliResult part = run("deploy", tree.resolve("roles").toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes", "--no-rollback-plan");
+        assertEquals(0, part.exit, part.out + part.err);
+        assertTrue(part.err.contains("also has 1 file(s) outside the deployed path (extra/role-extra.xml)"),
+                part.err);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains(">beta<"),
+                "what the other file contributes is not read as removed");
+    }
+
+    @Test
+    void aTreeRowFromAnEarlierVersionIsReadOnceAndReplacedByFileRows(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Files.writeString(Files.createDirectories(tree.resolve("roles")).resolve("role.xml"),
+                trackedRole(List.of("alpha", "beta"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        String v1 = gitOut(tree, "rev-parse", "HEAD");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        // Rewind the table to what an earlier version wrote: one row for the tree, holding its commit.
+        String namespace = gitOut(tree, "rev-list", "--max-parents=0", "HEAD").substring(0, 12);
+        PrismContext prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
+        com.evolveum.midpoint.prism.PrismObject<? extends com.evolveum.midpoint.prism.Objectable> table =
+                SyncState.find(prismContext, client);
+        SyncState.Changes rewind = new SyncState.Changes();
+        for (SyncState.Row row : SyncState.rows(table)) {
+            if (row.key().startsWith(namespace) || row.key().startsWith("deploy:" + namespace)) {
+                rewind.delete(row.key());
+            }
+        }
+        SyncState.apply(prismContext, client, table, rewind);
+        SyncState.Changes legacy = new SyncState.Changes();
+        legacy.set(namespace, v1, "an earlier version's tree row");
+        SyncState.apply(prismContext, client, SyncState.find(prismContext, client), legacy);
+
+        Files.writeString(tree.resolve("roles/role.xml"), trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID),
+                StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult upgraded = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(0, upgraded.exit, upgraded.out + upgraded.err);
+        assertFalse(client.getObject("roles", DEPLOY_ROLE_OID).contains(">beta<"),
+                "the tree row's commit told what was applied, so beta is removed");
+        List<String> keys = stateRows().stream().map(SyncState.Row::key).toList();
+        assertFalse(keys.contains(namespace), "the tree row is replaced: " + keys);
+        assertTrue(keys.contains(namespace + "/roles/role.xml"), "by a row for the file: " + keys);
+    }
+
     // --- helpers ---
 
     private static String guiRole(String panels) {
@@ -889,9 +1019,35 @@ class LiveIntegrationTest {
                 .append("\" type=\"RoleType\"/>\n  </inducement>\n</role>").toString();
     }
 
+    /** A fresh git repository for a tracked tree, with the server's state table in place. */
+    private static Path trackedRepo(Path dir) throws Exception {
+        assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        git(tree, "config", "user.email", "test@example.invalid");
+        git(tree, "config", "user.name", "midgie test");
+        return tree;
+    }
+
+    private static List<SyncState.Row> stateRows() throws Exception {
+        PrismContext prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
+        return SyncState.rows(SyncState.find(prismContext, client));
+    }
+
     private static void commit(Path repo, String message) throws Exception {
         git(repo, "add", "-A");
         git(repo, "commit", "-qm", message);
+    }
+
+    /** git's trimmed stdout, for the commands whose answer a test needs. */
+    private static String gitOut(Path repo, String... args) throws Exception {
+        List<String> command = new ArrayList<>();
+        command.add("git");
+        command.addAll(List.of(args));
+        Process process = new ProcessBuilder(command).directory(repo.toFile()).start();
+        String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+        process.waitFor();
+        return out;
     }
 
     private static int git(Path repo, String... args) throws Exception {

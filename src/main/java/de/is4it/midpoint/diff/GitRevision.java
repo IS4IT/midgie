@@ -189,6 +189,75 @@ final class GitRevision {
     }
 
     /**
+     * The blob id of {@code repoRelativePath} as committed at HEAD, or {@code null} when the file is not
+     * committed (new and never added) or git cannot tell.
+     *
+     * <p>Always the committed id, never a hash of the working file: line-ending conversion
+     * ({@code core.autocrlf}, {@code .gitattributes}) can make the file on disk differ from what is committed,
+     * and only the committed id is the same in every clone.
+     */
+    String blobAtHead(String repoRelativePath) {
+        String out = run(true, "rev-parse", "--verify", "--quiet", "HEAD:" + repoRelativePath);
+        return (out != null && out.matches("[0-9a-f]{40}|[0-9a-f]{64}")) ? out : null;
+    }
+
+    /** Whether this repository holds the blob {@code id} — false for an id that is not one, too. */
+    boolean hasBlob(String id) {
+        return isBlobId(id) && run(true, "cat-file", "-e", id + "^{blob}") != null;
+    }
+
+    /** The content of the blob {@code id}, or {@code null} when the repository does not hold it. */
+    String blob(String id) {
+        return isBlobId(id) ? run(true, "cat-file", "blob", id) : null;
+    }
+
+    /**
+     * Whether the working copy of {@code repoRelativePath} differs from HEAD — edited, staged, or never
+     * committed at all.
+     */
+    boolean isModified(String repoRelativePath) {
+        String status = run("-c", "core.quotePath=false", "status", "--porcelain", "--", ":(top)" + repoRelativePath);
+        return status != null && !status.isBlank();
+    }
+
+    /** Whether {@code repoRelativePath} exists in the working tree. */
+    boolean existsInWorkTree(String repoRelativePath) {
+        String top = cached("toplevel", "rev-parse", "--show-toplevel");
+        return top != null && !top.isBlank() && new File(top, repoRelativePath).exists();
+    }
+
+    /**
+     * As {@link #deletedSince(String)}, restricted to {@code repoRelativeDir} (the repository root when empty)
+     * rather than to the directory this object was created for.
+     */
+    List<String> deletedSince(String revision, String repoRelativeDir) {
+        List<String> paths = new ArrayList<>();
+        if (!isCommitish(revision)) {
+            LOG.trace("refusing to diff against '{}': not a commit sha", revision);
+            return paths;
+        }
+        String out = run("-c", "core.quotePath=false", "-c", "diff.relative=false",
+                "diff", "--diff-filter=D", "--name-only", "-M", "-z", revision, "--",
+                ":(top)" + (repoRelativeDir.isEmpty() ? "." : repoRelativeDir));
+        if (out != null) {
+            for (String path : out.split("\0")) {
+                if (!path.isBlank()) {
+                    paths.add(path);
+                }
+            }
+        }
+        return paths;
+    }
+
+    /**
+     * Whether {@code id} is safe to hand to git as a blob id. Like a revision it comes off the network, from a
+     * row of the state table, so it must be a bare object id and nothing git could read as an option.
+     */
+    private static boolean isBlobId(String id) {
+        return id != null && id.matches("[0-9a-fA-F]{40}|[0-9a-fA-F]{64}");
+    }
+
+    /**
      * The content of {@code repoRelativePath} as of {@code revision}, or {@code null} when the file did not
      * exist then (a file added since) or the revision is unreachable.
      */
@@ -250,6 +319,15 @@ final class GitRevision {
             return null;
         }
         return path.substring(root.length() + 1).replace(File.separatorChar, '/');
+    }
+
+    /** As {@link #repoRelative}, with the repository root itself as {@code ""} rather than {@code null}. */
+    String scopeOf(File file) {
+        String top = cached("toplevel", "rev-parse", "--show-toplevel");
+        if (top != null && !top.isBlank() && canonical(new File(top)).equals(canonical(file))) {
+            return "";
+        }
+        return repoRelative(file);
     }
 
     private static String canonical(File file) {

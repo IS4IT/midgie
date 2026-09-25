@@ -147,6 +147,11 @@ public final class ConnectionOptions {
         return url() != null;
     }
 
+    /** The midPoint account this run uses, for the record of who deployed; {@code null} when none is set. */
+    String account() {
+        return user();
+    }
+
     private String user() {
         if (userOption != null) {
             return userOption;

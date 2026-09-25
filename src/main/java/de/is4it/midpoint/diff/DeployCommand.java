@@ -10,11 +10,14 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 
@@ -227,6 +230,15 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Each object's removals, which its own PATCH carries unless --no-prune. */
     private final Map<DeployObject, List<RemovalDetector.Removal>> removalsByUnit = new IdentityHashMap<>();
+
+    /** Paths of gone files whose recorded content this run dealt with; their rows go when it succeeds. */
+    private final Set<String> consumedPaths = new LinkedHashSet<>();
+
+    /** What the writing passes did, for the deploy: row; failed is settled once retries are over. */
+    private final Tally sent = new Tally();
+
+    /** Whether a writing pass ran at all — a run declined or refused at the prompt sent nothing. */
+    private boolean sentSomething;
 
     /** Removals that cannot be turned into a delete; they fail the run so the revision stays put. */
     private final List<RemovalDetector.Removal> unprunable = new ArrayList<>();
@@ -493,13 +505,13 @@ public class DeployCommand implements Callable<Integer> {
             oidComments.treeDeployed();
             writeRollbackPlan(client, tracking);
 
-            if (exit == 0 && planDir == null && !dryRun) {
-                if (notFullyApplied == null && !detectionBroken) {
-                    recordRevision(prismContext, client, tracking);
-                } else if (tracking.canRecord() && notFullyApplied != null) {
-                    note("note: not recording the deployed revision — " + notFullyApplied
+            if (planDir == null && !dryRun && sentSomething) {
+                boolean fullyApplied = exit == 0 && notFullyApplied == null && !detectionBroken;
+                if (!fullyApplied && tracking.canRecord() && notFullyApplied != null) {
+                    note("note: not recording what was applied — " + notFullyApplied
                             + "; anything dropped from the tree stays detectable on the next run.");
                 }
+                recordState(prismContext, client, tracking, units, fullyApplied);
             }
             return exit;
         } catch (Exception e) {
@@ -512,27 +524,27 @@ public class DeployCommand implements Callable<Integer> {
 
     // --- delete detection (three-way merge against what was deployed last time) ---
 
-    /** What this run knows about tracking: the tree's identity, the state object, and the last revision. */
+    /** What this run knows about tracking: the deployment's identity, the state object, and its rows. */
     private static final class Tracking {
         final DeploymentIdentity identity;
         final PrismObject<? extends Objectable> table;
-        final String lastRevision;
+        final FileTracking files;          // null when this run is not tracked
         final String currentRevision;
 
-        Tracking(DeploymentIdentity identity, PrismObject<? extends Objectable> table,
-                String lastRevision, String currentRevision) {
+        Tracking(DeploymentIdentity identity, PrismObject<? extends Objectable> table, FileTracking files,
+                String currentRevision) {
             this.identity = identity;
             this.table = table;
-            this.lastRevision = lastRevision;
+            this.files = files;
             this.currentRevision = currentRevision;
         }
 
         boolean canRecord() {
-            return table != null && identity != null && identity.isAvailable() && currentRevision != null;
+            return table != null && files != null && currentRevision != null;
         }
 
         boolean canDetect() {
-            return canRecord() && lastRevision != null;
+            return canRecord();
         }
     }
 
@@ -543,13 +555,6 @@ public class DeployCommand implements Callable<Integer> {
      */
     private Tracking resolveTracking(PrismContext prismContext, MidpointRestClient client) {
         File tree = (paths != null && !paths.isEmpty()) ? paths.get(0) : null;
-        if (paths != null && paths.size() > 1) {
-            // Identity, the revision and the "deleted since" query are all rooted at one tree. Deploying
-            // several at once would record the first one's revision as if it covered them all, quietly
-            // hiding removals in the rest — so say so rather than half-tracking.
-            trackingNote("note: tracking follows " + tree + " only; removals in the other path(s) are not detected. "
-                    + "Deploy each tree separately, or pass --app to track them as one.");
-        }
         DeploymentIdentity identity = DeploymentIdentity.of(tree, app);
         if (!identity.isAvailable()) {
             trackingNote("note: removals cannot be detected — " + identity.unavailableReason() + ".");
@@ -582,43 +587,85 @@ public class DeployCommand implements Callable<Integer> {
         GitRevision git = identity.git();
         String current = git.head();
         if (current != null && git.isDirty()) {
-            current = current + "-dirty";
-            trackingNote("note: the tree has uncommitted changes; recording revision " + GitRevision.abbreviate(current)
-                    + ", which does not describe exactly what was deployed.");
+            trackingNote("note: the tree has uncommitted changes; a changed file is recorded as its committed "
+                    + "version, marked dirty, which does not describe exactly what was deployed.");
         }
-        String last = SyncState.revisionOf(table, identity.key());
-        LOG.debug("tracking {}: last={}, current={}", identity.key(), last, current);
-        return new Tracking(identity, table, last, current);
+        // The paths this run deploys, as the repository knows them: every file row inside them is this
+        // run's to read and to write, and no other.
+        List<String> scopes = new ArrayList<>();
+        for (File path : paths) {
+            String scope = git.scopeOf(path);
+            if (scope == null) {
+                trackingNote("note: " + path + " is outside the repository of " + tree + "; its files are not "
+                        + "tracked.");
+            } else {
+                scopes.add(scope);
+            }
+        }
+        FileTracking files = new FileTracking(git, identity.namespace(), scopes, SyncState.rows(table));
+        LOG.debug("tracking {}: current={}, scope={}", identity.key(), current, scopes);
+        return new Tracking(identity, table, files, current);
     }
 
-    /** Values deployed at the recorded revision that the tree no longer declares, or an empty list. */
+    /**
+     * Values deployed earlier that the tree no longer declares, or an empty list. Also says where an object
+     * that left the deployed files went, and when an object has files outside what this run deploys.
+     */
     private List<RemovalDetector.Removal> findRemovals(PrismContext prismContext, Tracking tracking,
             List<DeployObject> units) {
         if (!tracking.canDetect()) {
             return List.of();
         }
-        GitRevision git = tracking.identity.git();
-        String base = baseRevision(tracking.lastRevision);
-        if (!git.hasRevision(base)) {
-            // Every git show against an unreachable revision fails exactly as it does for a file that did not
-            // exist yet, so without this check the run would print nothing, look clean, and then record a new
-            // baseline — turning "we cannot tell what was removed" into "nothing was removed", permanently.
+        FileTracking files = tracking.files;
+        RemovalDetector detector =
+                new RemovalDetector(prismContext, files.history(), "the file rows of " + SyncState.TABLE_NAME);
+        List<RemovalDetector.Removal> detected = detector.detect(units);
+        if (!files.unreadable().isEmpty()) {
+            // A content git can no longer produce reads exactly like a file that did not exist yet, so without
+            // this the run would find nothing, look clean, and then record new rows — turning "we cannot tell
+            // what was removed" into "nothing was removed", permanently.
             detectionBroken = true;
-            warn("the last deployed revision " + GitRevision.abbreviate(base) + " is not in this repository (history rewritten, "
-                    + "squash-merged, or fetched shallow), so removals cannot be detected this run. "
-                    + "Nothing will be removed and the recorded revision is left alone. To start over, "
-                    + "delete the '" + tracking.identity.key() + "' row from " + SyncState.TABLE_NAME + ".");
+            warn("what was last applied is not in this repository for " + String.join(", ", files.unreadable())
+                    + " (history rewritten, squash-merged, or fetched shallow), so removals cannot be detected "
+                    + "this run. Nothing will be removed and no rows are written. To start over, delete those "
+                    + "rows from " + SyncState.TABLE_NAME + ".");
             return List.of();
         }
-        RemovalDetector detector = new RemovalDetector(prismContext, git, base);
-        List<RemovalDetector.Removal> removals = withoutRestricted(policy, globalStrategy, detector.detect(units));
+        consumedPaths.addAll(detector.claimedPaths());
         for (RemovalDetector.Orphan orphan : detector.orphaned()) {
+            String movedTo = files.movedTo(orphan.objectLabel, orphan.paths);
+            if (movedTo != null) {
+                // Not gone, moved: its old content stays recorded until a deploy of the new place reads it.
+                note("note: " + orphan.objectLabel + " moved from " + orphan.sourceFile + " to " + movedTo
+                        + "; deploy that path to apply what changed with the move.");
+                continue;
+            }
             // The whole object left the tree. midgie does not delete objects, and taking one apart value by
             // value would strip its name, so say it plainly and leave the decision to the operator.
+            consumedPaths.addAll(orphan.paths);
             note("note: " + orphan.objectLabel + " is no longer declared by the tree (" + orphan.sourceFile
                     + " was removed); its object is left untouched — delete it yourself if that is intended.");
         }
-        return removals;
+        Set<String> deployed = new HashSet<>();
+        for (DeployObject unit : units) {
+            for (File file : unit.sourceFiles()) {
+                String path = files.pathOf(file);
+                if (path != null) {
+                    deployed.add(path);
+                }
+            }
+        }
+        for (DeployObject unit : units) {
+            List<String> others = files.otherFilesOf(unit, deployed);
+            if (!others.isEmpty()) {
+                // Deploying part of an object applies only that part: what the other files contribute is
+                // neither sent nor read as removed, but the operator should know the object is split.
+                note("note: " + unit.objectPath() + " also has " + others.size() + " file(s) outside the "
+                        + "deployed path (" + String.join(", ", others) + "); deploying part of an object "
+                        + "applies only that part.");
+            }
+        }
+        return withoutRestricted(policy, globalStrategy, detected);
     }
 
     /**
@@ -655,8 +702,7 @@ public class DeployCommand implements Callable<Integer> {
         if (removals.isEmpty()) {
             return;
         }
-        String summary = removals.size() + " value(s) deployed at " + GitRevision.abbreviate(tracking.lastRevision)
-                + " are no longer declared by the tree";
+        String summary = removals.size() + " value(s) deployed earlier are no longer declared by the tree";
         if (!prune()) {
             note(summary + " (reported only: --no-prune).");
             return;
@@ -759,10 +805,7 @@ public class DeployCommand implements Callable<Integer> {
      * tree does not mention is left alone unless the tree deployed it and dropped it since.
      */
     private void settleMultiValue(Tracking tracking) {
-        // Several paths without --app are tracked under the first one only, so the rest would get merge's
-        // keeping without the removals that make it safe.
-        boolean singleIdentity = paths == null || paths.size() <= 1 || app != null;
-        boolean tracked = tracking.canRecord() && !detectionBroken && singleIdentity;
+        boolean tracked = tracking.canRecord() && !detectionBroken;
         globalStrategy = globalStrategy.settleTracking(tracked);
         if (!globalStrategy.multiValueAuto) {
             return;
@@ -781,26 +824,38 @@ public class DeployCommand implements Callable<Integer> {
         return removalsByUnit.getOrDefault(unit, List.of());
     }
 
-    /** Record the revision just deployed, so the next run can tell what has been removed since. */
-    private void recordRevision(PrismContext prismContext, MidpointRestClient client, Tracking tracking) {
+    /**
+     * Write this run to {@code midgie-state}: a row per deployed file when the tree was applied completely,
+     * and a {@code deploy:} row per deployed path in any case — one PATCH of individual rows.
+     */
+    private void recordState(PrismContext prismContext, MidpointRestClient client, Tracking tracking,
+            List<DeployObject> units, boolean fullyApplied) {
         if (!tracking.canRecord()) {
             return;
         }
         try {
-            SyncState.record(prismContext, client, tracking.table, tracking.identity.key(),
-                    tracking.currentRevision, tracking.identity.label());
-            status("Recorded revision " + GitRevision.abbreviate(tracking.currentRevision) + " for " + tracking.identity.key() + ".");
+            List<String> notes = new ArrayList<>();
+            SyncState.Changes changes = fullyApplied
+                    ? tracking.files.changesAfter(units, consumedPaths, notes) : new SyncState.Changes();
+            for (String line : notes) {
+                note("note: " + line + ".");
+            }
+            String value = FileTracking.deployValue(tracking.currentRevision, connectionOptions.account(),
+                    VersionSupport.toolVersion(), sent.created, sent.patched, sent.inSync, sent.removed,
+                    sent.skipped, sent.failed);
+            for (String scope : tracking.files.scopes()) {
+                changes.set(tracking.files.deployKeyOf(scope), value, null);
+            }
+            SyncState.apply(prismContext, client, tracking.table, changes);
+            if (fullyApplied) {
+                status("Recorded the deployed files at " + GitRevision.abbreviate(tracking.currentRevision)
+                        + " in " + SyncState.TABLE_NAME + ".");
+            }
         } catch (Exception e) {
             // Bookkeeping must never fail a deploy that already succeeded.
-            note("warning: could not record the deployed revision: " + safe(e.getMessage()));
-            LOG.trace("recording the revision failed", e);
+            note("warning: could not record what was deployed: " + safe(e.getMessage()));
+            LOG.trace("recording the deployment failed", e);
         }
-    }
-
-    /** A dirty marker is not a git revision; compare against the commit it was based on. */
-    private static String baseRevision(String revision) {
-        return revision.endsWith("-dirty") ? revision.substring(0, revision.length() - "-dirty".length())
-                : revision;
     }
 
     /** The strategy for one object: the CLI flags, with any matching {@code --policy} knob layered on. */
@@ -929,19 +984,25 @@ public class DeployCommand implements Callable<Integer> {
             }
         }
         Tally applied = pass(reconciler, units, false, confirmEachApply);
+        sentSomething = true;
+        sent.addCounts(applied);
         List<DeployObject> failed = applied.failedUnits;
         if (retry && !failed.isEmpty()) {
             // Summarise after the retry rounds, not before: a run whose retries fixed everything used to end
             // on a line saying units had failed while exiting 0.
             emitSummary(applied, false);
-            failed = retryUntilStable(failed,
-                    remaining -> pass(reconciler, remaining, false, confirmEachApply).failedUnits);
+            failed = retryUntilStable(failed, remaining -> {
+                Tally again = pass(reconciler, remaining, false, confirmEachApply);
+                sent.addCounts(again);
+                return again.failedUnits;
+            });
             status(failed.isEmpty()
                     ? "Done after retry: all units applied."
                     : "Done after retry: " + failed.size() + " unit(s) still failing.");
         } else {
             emitSummary(applied, false);
         }
+        sent.failed = failed.size();
         return failed.isEmpty() ? 0 : EXIT_ERROR;
     }
 
@@ -1013,6 +1074,7 @@ public class DeployCommand implements Callable<Integer> {
                 break;
             case PATCH:
                 tally.patched++;
+                tally.removed += outcome.removing.size();
                 String detail = (outcome.changes > 0 ? outcome.changes + " change(s): " : "")
                         + safe(outcome.detail);
                 reportUnit(unit, preview ? "would-patch" : "patched", detail, false);
@@ -1407,10 +1469,12 @@ public class DeployCommand implements Callable<Integer> {
 
     private void emitSummary(Tally tally, boolean preview) {
         status(preview
-                ? String.format("Plan: %d to create, %d to patch, %d in-sync, %d skipped, %d error(s).",
-                        tally.created, tally.patched, tally.inSync, tally.skipped, tally.failed)
-                : String.format("Done: %d created, %d patched, %d in-sync, %d skipped, %d failed.",
-                        tally.created, tally.patched, tally.inSync, tally.skipped, tally.failed));
+                ? String.format("Plan: %d to create, %d to patch, %d in-sync, %d value(s) to remove, %d skipped, "
+                        + "%d error(s).", tally.created, tally.patched, tally.inSync, tally.removed, tally.skipped,
+                        tally.failed)
+                : String.format("Done: %d created, %d patched, %d in-sync, %d value(s) removed, %d skipped, "
+                        + "%d failed.", tally.created, tally.patched, tally.inSync, tally.removed, tally.skipped,
+                        tally.failed));
     }
 
     private void reportUnit(DeployObject unit, String label, String detail, boolean error) {
@@ -1549,11 +1613,21 @@ public class DeployCommand implements Callable<Integer> {
         int inSync;
         int skipped;
         int failed;
+        int removed;   // values dropped from the tree that a PATCH deleted
         final List<DeployObject> failedUnits = new ArrayList<>();
         Reconciler.Outcome lastOutcome;   // what --format renders, when the run holds one object
 
         int changed() {
             return created + patched;
+        }
+
+        /** Add what another pass did — the retry rounds after the first — leaving failed to the caller. */
+        void addCounts(Tally other) {
+            created += other.created;
+            patched += other.patched;
+            inSync += other.inSync;
+            skipped += other.skipped;
+            removed += other.removed;
         }
     }
 }

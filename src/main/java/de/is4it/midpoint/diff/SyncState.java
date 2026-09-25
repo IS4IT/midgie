@@ -6,7 +6,13 @@
 package de.is4it.midpoint.diff;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,17 +20,27 @@ import org.slf4j.LoggerFactory;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
-import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
+import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.prism.delta.builder.S_ItemEntry;
+import com.evolveum.midpoint.prism.path.ItemPath;
+import com.evolveum.midpoint.prism.polystring.PolyString;
 import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.LookupTableRowType;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.LookupTableType;
 import com.evolveum.prism.xml.ns._public.types_3.PolyStringType;
 
 /**
- * midgie's deployment state on the server: a {@code LookupTableType} named {@value #TABLE_NAME} holding one
- * row per deployed tree — {@code key} = the tree's stable identity, {@code value} = the revision last applied,
- * {@code label} = a human hint. It is what lets a later run recover <em>last-applied</em> and so tell a value
- * you deliberately removed from one that merely accrued on the server.
+ * midgie's deployment state on the server: a {@code LookupTableType} named {@value #TABLE_NAME}. It is what lets
+ * a later run recover <em>last-applied</em> and so tell a value you deliberately removed from one that merely
+ * accrued on the server. Its rows are read and written by {@link FileTracking}:
+ * <ul>
+ *   <li>one row per deployed <b>file</b> — {@code key} = the repository's root commit plus the file's path in
+ *       it, {@code label} = the object the file described, {@code value} = a small JSON document holding the
+ *       git blob id of the content last applied;</li>
+ *   <li>one {@code deploy:} row per deployed path, recording the last run from it;</li>
+ *   <li>rows written by earlier versions, one per deployed tree, whose {@code value} is a bare commit sha —
+ *       read once more when their files are first deployed with per-file rows, then removed.</li>
+ * </ul>
  *
  * <p>The object is <b>never created implicitly</b>: {@code deploy} only uses a table that already exists, and
  * {@code midgie init --create-state} is the one thing that creates it. That way midgie never leaves an
@@ -57,10 +73,11 @@ final class SyncState {
             Created and maintained by midgie (https://github.com/IS4IT/midgie), a schema-aware configuration \
             deployment tool. midPoint itself never reads this object.
 
-            Each row records one deployed configuration tree:
-              key   - a stable identity for that tree (its repository's root commit plus the path within it)
-              value - the configuration revision most recently applied to this server
-              label - a human-readable hint of which tree that is
+            Each row records one deployed configuration file:
+              key   - a stable identity for that file (its repository's root commit plus the path within it)
+              value - which version of the file was most recently applied to this server, and when
+              label - the object the file describes
+            Rows whose key starts with 'deploy:' record the last deployment from a path: when, from which             commit, by which account, and how many objects it created, patched or left in sync.
 
             midgie reads this to work out which configuration values it deployed previously, so that a value \
             you removed from the source tree can be told apart from one that accrued on the server. \
@@ -117,19 +134,6 @@ final class SyncState {
         return (table != null) ? ((LookupTableType) table.asObjectable()).getLifecycleState() : null;
     }
 
-    /** The revision recorded for {@code key}, or {@code null} when this tree has never been deployed. */
-    static String revisionOf(PrismObject<? extends Objectable> table, String key) {
-        if (table == null) {
-            return null;
-        }
-        for (LookupTableRowType row : ((LookupTableType) table.asObjectable()).getRow()) {
-            if (key.equals(row.getKey())) {
-                return row.getValue();
-            }
-        }
-        return null;
-    }
-
     /**
      * Create the state table. Only {@code midgie init --create-state} calls this. Returns the new OID, or
      * {@code null} when the server did not report one.
@@ -149,43 +153,104 @@ final class SyncState {
         return client.createObject(REST_TYPE, body);
     }
 
-    /**
-     * Record {@code revision} for {@code key}, adding the row or updating it in place. The patch is derived
-     * by diffing a modified copy against the fetched table, so no delta is hand-built.
-     */
-    static void record(PrismContext prismContext, MidpointRestClient client,
-            PrismObject<? extends Objectable> table, String key, String revision, String label)
-            throws SchemaException, IOException {
-        @SuppressWarnings("unchecked")
-        PrismObject<? extends Objectable> desired = (PrismObject<? extends Objectable>) table.clone();
-        LookupTableType desiredTable = (LookupTableType) desired.asObjectable();
+    /** One row of the state table, as read. */
+    record Row(Long id, String key, String value, String label) {
+    }
 
-        LookupTableRowType target = null;
-        for (LookupTableRowType row : desiredTable.getRow()) {
-            if (key.equals(row.getKey())) {
-                target = row;
-                break;
+    /** Every row of {@code table} (fetched with its rows, see {@link #find}), in the order the server gave them. */
+    static List<Row> rows(PrismObject<? extends Objectable> table) {
+        List<Row> rows = new ArrayList<>();
+        if (table == null) {
+            return rows;
+        }
+        for (LookupTableRowType row : ((LookupTableType) table.asObjectable()).getRow()) {
+            rows.add(new Row(row.getId(), row.getKey(), row.getValue(),
+                    (row.getLabel() != null) ? row.getLabel().getOrig() : null));
+        }
+        return rows;
+    }
+
+    /**
+     * Rows to write in one PATCH: each {@code set} adds a row or, when one with that key exists, replaces its
+     * value and label; each {@code delete} removes a row by key.
+     */
+    static final class Changes {
+        final Map<String, String[]> set = new LinkedHashMap<>();   // key -> {value, label}
+        final Set<String> delete = new LinkedHashSet<>();
+
+        void set(String key, String value, String label) {
+            set.put(key, new String[] {value, label});
+            delete.remove(key);
+        }
+
+        void delete(String key) {
+            if (!set.containsKey(key)) {
+                delete.add(key);
             }
         }
-        if (target == null) {
-            target = new LookupTableRowType();
-            target.setKey(key);
-            desiredTable.getRow().add(target);
-        }
-        target.setValue(revision);
-        if (label != null && !label.isBlank()) {
-            target.setLabel(new PolyStringType(label));
-        }
 
-        DiffEngine.DiffResult result = new DiffEngine(prismContext).diff(desired, table,
-                EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.FULL,
-                DiffEngine.MultiValueStrategy.replaceAll());
-        if (!result.hasDrift()) {
-            LOG.debug("{} already records {} at {}", TABLE_NAME, key, revision);
+        boolean isEmpty() {
+            return set.isEmpty() && delete.isEmpty();
+        }
+    }
+
+    /**
+     * Write {@code changes} as one PATCH of individual rows — added whole, updated by their container id,
+     * removed by it. Each run touches only the rows it has something to say about, so two deploys at the same
+     * time do not overwrite each other's rows, as replacing the table's rows wholesale would.
+     */
+    static void apply(PrismContext prismContext, MidpointRestClient client,
+            PrismObject<? extends Objectable> table, Changes changes) throws SchemaException, IOException {
+        if (changes.isEmpty()) {
             return;
         }
-        client.patchObject(REST_TYPE, table.getOid(),
-                DeltaOutput.toModificationXml(prismContext, result.delta()));
-        LOG.debug("recorded {} = {} in {}", key, revision, TABLE_NAME);
+        Map<String, Row> byKey = new LinkedHashMap<>();
+        for (Row row : rows(table)) {
+            byKey.putIfAbsent(row.key(), row);
+        }
+        S_ItemEntry delta = prismContext.deltaFor(LookupTableType.class);
+        int written = 0;
+        for (Map.Entry<String, String[]> entry : changes.set.entrySet()) {
+            Row existing = byKey.get(entry.getKey());
+            String value = entry.getValue()[0];
+            String label = entry.getValue()[1];
+            if (existing == null || existing.id() == null) {
+                LookupTableRowType row = new LookupTableRowType();
+                row.setKey(entry.getKey());
+                row.setValue(value);
+                if (label != null) {
+                    row.setLabel(new PolyStringType(label));
+                }
+                delta = delta.item(LookupTableType.F_ROW).add(row.asPrismContainerValue());
+                written++;
+                continue;
+            }
+            if (!Objects.equals(existing.value(), value)) {
+                delta = delta.item(ItemPath.create(LookupTableType.F_ROW, existing.id(), LookupTableRowType.F_VALUE))
+                        .replace(value);
+                written++;
+            }
+            if (label != null && !label.equals(existing.label())) {
+                delta = delta.item(ItemPath.create(LookupTableType.F_ROW, existing.id(), LookupTableRowType.F_LABEL))
+                        .replace(PolyString.fromOrig(label));
+                written++;
+            }
+        }
+        for (String key : changes.delete) {
+            Row existing = byKey.get(key);
+            if (existing != null && existing.id() != null) {
+                LookupTableRowType row = new LookupTableRowType();
+                row.setId(existing.id());
+                delta = delta.item(LookupTableType.F_ROW).delete(row.asPrismContainerValue());
+                written++;
+            }
+        }
+        if (written == 0) {
+            LOG.debug("{} already records everything this run would write", TABLE_NAME);
+            return;
+        }
+        ObjectDelta<LookupTableType> objectDelta = delta.asObjectDelta(table.getOid());
+        client.patchObject(REST_TYPE, table.getOid(), DeltaOutput.toModificationXml(prismContext, objectDelta));
+        LOG.debug("wrote {} row change(s) to {}", written, TABLE_NAME);
     }
 }

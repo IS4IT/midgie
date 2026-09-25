@@ -92,9 +92,27 @@ the midPoint source tree.
 - *Items the server withholds* — midPoint does not return some items unless asked, marking them `incomplete="true"`; `LookupTableType/row` is the case that bites, `jpegPhoto` another. "Not sent" must never be read as "empty", or a lookup table re-proposes its whole contents every run and rows nobody can see are quietly in line for deletion. Which items those are is not in the bundled schema (midPoint decides it in its repository layer), so `LiveLookup` follows the server's own marker: an object that comes back carrying one is re-read with `?include=<path>`, and only such an object pays the second request. Anything still incomplete after that is one the server will not give up at all, and `DiffEngine.stripIncompleteItems` drops its item deltas and reports the paths — the same shape as protected values, for the same reason.
 - *Delete detection (three-way merge)* — a two-way diff cannot express a removal: a value dropped from a
   desired file simply stops being mentioned, so under `merge` the delta is empty and the value survives while
-  `diff` reports no differences. `deploy` therefore also compares desired against **last-applied**, which for
-  a version-controlled tree is `git show <lastRev>:<file>` — so the only persisted state is one revision per
-  tree, the analogue of ArgoCD's `status.sync.revision`. The removal set is what last-applied holds and desired no longer does, compared item by item (`RemovalDetector.collect`, see "Ownership below the top level" below). It works per **object**
+  `diff` reports no differences. `deploy` therefore also compares desired against **last-applied**, recovered from git: the only
+  persisted state is, **per file**, the git blob id of the content last applied (`FileTracking`, rows in
+  `midgie-state`), and `git cat-file blob <id>` gives the content back. A blob id is content-addressed — the
+  same in every clone and worktree — and changes only when the file does, so a run writes only the rows of
+  files that changed. Per file rather than per tree because the tree is whatever path a run deploys: a
+  subfolder or a single file keyed by its own path would be a second, independent record of the same files,
+  and one per-tree revision cannot express that part of a tree was applied later than the rest. Last-applied
+  for an object is the combination of its files, each at its own recorded blob, by three rules
+  (`FileTracking.history`): a file of this run contributes its row's blob; a file whose row remains but which
+  exists nowhere contributes too (the old path of a rename — found wherever it lies, so a rename plus a drop
+  deployed at the new path alone still removes the drop), counted in scope for orphan reporting only inside
+  the run; a file that exists outside the run is on neither side, so deploying part of an object never reads
+  the rest as removed (and `DeployCommand` notes the split). Rows of gone files are deleted once a run has
+  compared against them; an orphan whose object a row shows elsewhere is reported as moved and its row kept for
+  the deploy of the new place. Rows are written per row (`SyncState.apply`: add, replace by container id,
+  delete by id) so two concurrent deploys do not overwrite each other's rows. Earlier versions' per-tree rows
+  (a bare commit sha) are read once for files without a row (`git show <rev>:<path>` plus `deletedSince` for
+  files deleted since) and deleted when a run covers their path. A `deploy:` row per deployed path records the
+  last run — when, commit, account, midgie version, and the summary counts — for every real deploy that sent
+  something; file rows move forward only when the tree was applied completely. A blob or commit the
+  repository no longer holds stops detection for the run, as an unreachable revision did. The removal set is what last-applied holds and desired no longer does, compared item by item (`RemovalDetector.collect`, see "Ownership below the top level" below). It works per **object**
   on both sides — the union of the files describing it now against the union of the files that described it
   at that revision, deleted ones included — which is what makes it correct for objects assembled from several
   files: a deleted fragment yields exactly the values no surviving file still declares, and a value merely

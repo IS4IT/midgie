@@ -232,13 +232,13 @@ Plans go to `$XDG_STATE_HOME/midgie/<deployment>/<timestamp>/` by default, keepi
 
 Dropping a value from a file is invisible to an ordinary diff: `desired` simply stops mentioning it, and under `multivalue=merge` the delta comes out empty, so `diff` reports `No differences.` while the value lives on. midgie closes that with a **three-way** comparison — desired, live, and *last-applied* — the merge `kubectl apply` performs, but with last-applied tracked as ArgoCD does: one synced git revision per deployment, rather than a copy of every object stored on the object itself. A value present in last-applied but absent now is one you removed on purpose; a value the server holds that midgie never applied is accrued state and is left alone.
 
-Last-applied comes from **version control**: `git show <lastRev>:<file>` is the fragment as it was when midgie last deployed it, so the only thing that must be stored is the revision. Enable it once per server:
+Last-applied comes from **version control**: for every deployed file midgie records the git **blob id** of the content it applied, and `git cat-file` gives that content back. A blob id is the content's own hash — the same in every clone and worktree, and changed only when the file is — so that id is all that must be stored. Enable it once per server:
 
 ```bash
 bin/midgie init --create-state --url https://mp.example/midpoint --user administrator config/
 ```
 
-That creates a `midgie-state` lookup table which records, per tree, the revision last applied. `deploy` never creates it — until you run `init --create-state`, the tree is untracked: deploy runs `--multivalue auto` as `replace` and notes that detection is off. Afterwards each deploy records what it applied, runs on `merge`, and **removes what the tree has dropped since** — with each object's change, behind the same confirmation:
+That creates a `midgie-state` lookup table which records, **per file**, what was last applied — whatever path you deploy: the whole repository, a folder, or one file. Deploys of different paths therefore never disagree about a file, and `deploy role.xml` is tracked like the folder around it. `deploy` never creates it — until you run `init --create-state`, the tree is untracked: deploy runs `--multivalue auto` as `replace` and notes that detection is off. Afterwards each deploy records what it applied, runs on `merge`, and **removes what the tree has dropped since** — with each object's change, behind the same confirmation:
 
 ```
 midgie: 1 value(s) deployed at 2d58fd5 are no longer declared by the tree (each object's change would remove its own).
@@ -258,7 +258,29 @@ bin/midgie deploy config/ --url … --no-prune --yes   # apply, and only report 
 
 Deleting a *fragment* is handled the same way and needs no special case: both sides are compared as whole objects — every file describing the object now against every file that described it then, deleted ones included — so you get exactly the values no surviving file still declares, a value merely moved from one file to another is not a removal at all, and the object itself is never a deletion candidate. Each reported value still names the file it came from.
 
-A tree is identified by its repository's **root commit** plus its path inside the repo (e.g. `df7f507/config`). The root commit is part of the history, so every clone agrees on it no matter which remotes it has — which matters when the same repo is pushed to both a customer's git and your own. Detection is skipped, with a note, when the tree is not in a git repository or the clone is **shallow** (a `--depth 1` checkout cannot recover previous content; fetch full history, e.g. `fetch-depth: 0`). `--app NAME` pins the identity for setups where that derivation does not fit.
+Rows are keyed by the repository's **root commit** plus the file's path inside it (e.g. `de5ad41d2b9b/poc/roles/manager.xml`). The root commit is part of the history, so every clone agrees on it no matter which remotes it has — which matters when the same repo is pushed to both a customer's git and your own. Detection is skipped, with a note, when the tree is not in a git repository or the clone is **shallow** (a `--depth 1` checkout cannot recover previous content; fetch full history, e.g. `fetch-depth: 0`). `--app NAME` replaces the root commit in the keys, for setups where that derivation does not fit.
+
+A file row looks like this; its label names the object the file described, its value is a small JSON document (`at` is when that content reached the server, and changes only when the content does):
+
+```
+key    de5ad41d2b9b/poc/roles/manager.xml
+label  RoleType "Manager"
+value  {"blob":"59d3a3d2314d0a4342232509f060be47f6f759bf","at":"2026-09-25T12:10:53Z","oid":"…"}
+```
+
+Each real deploy also writes a `deploy:` row per path it deployed, with the same words as its summary line — when, from which commit, by which midPoint account, with which midgie, and what it did:
+
+```
+key    deploy:de5ad41d2b9b/poc/roles
+value  {"at":"2026-09-25T12:10:53Z","commit":"9c41…","by":"administrator","midgie":"0.15.0",
+        "created":2,"patched":3,"in-sync":37,"removed":4,"skipped":0,"failed":0}
+```
+
+A deploy declined at the prompt writes nothing; one that failed or skipped objects still writes its `deploy:` row, but moves no file row forward, so what it did not apply stays detectable.
+
+**Moves and partial deploys.** An object's last-applied is the combination of its files, each as its own row records it. A file that no longer exists anywhere still counts — the old path of a renamed file — so renaming a file and dropping a value in the same commit is applied correctly even when you deploy only the new path. A file that still exists *outside* what you deploy counts on neither side: deploying `roles/` when the role has a second file in `extra/` applies only that part, says so (`… also has 1 file(s) outside the deployed path`), and never reads the other file's values as removed. An object that left the deployed files is reported as gone — or, when a row shows where it lives now, as moved there.
+
+Rows written by earlier versions recorded a whole tree at one commit. A file without a row of its own is read once at the commit of the nearest such row above it; the old row is removed when a deploy covers its path.
 
 `init --write-cacert FILE` fetches the certificate chain the server presents — `openssl s_client -showcerts`, without the openssl — shows each certificate with its SHA-256 fingerprint, and on confirmation writes the **issuing CA(s)** as the PEM `--cacert` reads:
 

@@ -5,6 +5,20 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Tracking is per file, whatever path you deploy.** `midgie-state` used to hold one row per deployed tree with the commit last applied, which made a subfolder or a single file a second, independent record of the same files, and a single file could not be tracked at all. Every deployed file now has its own row, keyed by the repository's root commit and the file's path, holding the git blob id of the content last applied — the content's own hash, the same in every clone and worktree, written only when the file changed. `deploy role.xml` is tracked like the folder around it: `merge`, removals and the nested three-way rule all apply. Rows are written one by one rather than the table's rows replaced wholesale, so two deploys at the same time no longer overwrite each other's rows. Rows from earlier versions are read once, for files without a row of their own, and removed when a deploy covers their path.
+
+- **The summary line counts removed values:** `Done: 2 created, 3 patched, 37 in-sync, 4 value(s) removed, 0 skipped, 0 failed.`
+
+### Added
+
+- **Moves and partial deploys are handled on purpose.** A renamed file's old row still counts, so a rename and a dropped value in the same commit are applied correctly even when only the new path is deployed. Deploying some of an object's files applies only those and says so — `RoleType/Manager also has 1 file(s) outside the deployed path (extra/manager-extra.xml)` — instead of reading the other files' values as removed. An object that left the deployed files is reported as moved when a row shows where it went.
+
+- **A `deploy:` row per deployed path** records the last run from it: when, from which commit, by which midPoint account, with which midgie, and its counts in the summary line's words (`created`, `patched`, `in-sync`, `removed`, `skipped`, `failed`). A run that failed or skipped objects still writes it; one declined at the prompt does not.
+
 ## [0.14.2] - 2026-09-25
 
 ### Added

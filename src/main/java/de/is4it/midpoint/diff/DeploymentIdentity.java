@@ -36,12 +36,15 @@ final class DeploymentIdentity {
     private final String label;
     private final String unavailableReason;
     private final GitRevision git;
+    private final String namespace;
 
-    private DeploymentIdentity(String key, String label, String unavailableReason, GitRevision git) {
+    private DeploymentIdentity(String key, String label, String unavailableReason, GitRevision git,
+            String namespace) {
         this.key = key;
         this.label = label;
         this.unavailableReason = unavailableReason;
         this.git = git;
+        this.namespace = namespace;
     }
 
     /**
@@ -55,14 +58,6 @@ final class DeploymentIdentity {
             dir = new File(".");
         }
         GitRevision git = GitRevision.of(dir);
-        if (singleFile && (appOverride == null || appOverride.isBlank())) {
-            // Deploying one file is not deploying the tree it sits in. Deriving the parent directory's
-            // identity would record the whole tree as applied at this revision, so the next full deploy
-            // would compare against a point at which most of it was never applied and miss every removal
-            // made in between. --app can still name such a deployment deliberately.
-            return unavailable("a single file is being deployed, not a tree, so it has no deployment "
-                    + "identity of its own — deploy its directory, or pass --app to name it", git);
-        }
 
         // History is checked before the override, not after. --app replaces the *key*, but recovering
         // last-applied still reads the previous revision out of git, so without usable history a named
@@ -75,21 +70,27 @@ final class DeploymentIdentity {
                     + "or recover previous content — fetch the full history (e.g. fetch-depth: 0)", git);
         }
         if (appOverride != null && !appOverride.isBlank()) {
-            return new DeploymentIdentity(appOverride.trim(), appOverride.trim(), null, git);
+            return new DeploymentIdentity(appOverride.trim(), appOverride.trim(), null, git, appOverride.trim());
         }
         String root = git.rootCommit();
         if (root == null) {
             return unavailable("the repository's root commit could not be determined", git);
         }
+        // A single file is identified by its own path, as a folder is: its deployment is its own, and never
+        // records the tree around it as applied.
         String prefix = trimTrailingSlash(git.prefix());
+        if (singleFile) {
+            prefix = prefix.isBlank() ? tree.getName() : prefix + "/" + tree.getName();
+        }
         String key = shorten(root) + (prefix.isBlank() ? "" : "/" + prefix);
-        LOG.debug("deployment identity for {}: {}", dir, key);
-        return new DeploymentIdentity(key, git.label(), null, git);
+        String label = singleFile ? git.label() + "/" + tree.getName() : git.label();
+        LOG.debug("deployment identity for {}: {}", tree, key);
+        return new DeploymentIdentity(key, label, null, git, shorten(root));
     }
 
     private static DeploymentIdentity unavailable(String reason, GitRevision git) {
         LOG.debug("deployment identity unavailable: {}", reason);
-        return new DeploymentIdentity(null, null, reason, git);
+        return new DeploymentIdentity(null, null, reason, git, null);
     }
 
     boolean isAvailable() {
@@ -107,6 +108,14 @@ final class DeploymentIdentity {
     /** Why the identity could not be derived — safe to show the user. */
     String unavailableReason() {
         return unavailableReason;
+    }
+
+    /**
+     * What every row of this repository is keyed under: the short root commit, or the {@code --app} name. The
+     * per-file rows put a file's repository path after it.
+     */
+    String namespace() {
+        return namespace;
     }
 
     /** Git access for the same tree, for recovering last-applied content. */
