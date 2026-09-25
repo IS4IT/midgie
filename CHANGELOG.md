@@ -5,11 +5,15 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.16.0] - 2026-09-25
 
 ### Changed
 
 - **A relative path in a config file is read from that file's directory.** `policy = midgie.policy` in a `.midgie.properties` at the repository root used to be read from the working directory, so running midgie from a subdirectory found the properties file (the lookup walks upward) but then failed with no policy file at `midgie.policy`. Every file layer — site, user, `MIDGIE_CONF` and tree — now resolves a relative value of a file or directory option (`policy`, `cacert`, `rollback-plan`, `schema`, `schema-dir`, `password-file`, …) against its own directory, the way `.editorconfig` and `.gitignore` do. A path on the command line is unchanged. If `~/.midgie.properties` or `/etc/midgie/midgie.properties` holds a relative path that relied on the working directory, make it absolute.
+
+### Fixed
+
+- **Building with Maven 3.8 works.** The compiler plugin was left to Maven's default, and Maven 3.8 — what Ubuntu 24.04 ships — picks one too old to read `maven.compiler.release`, so the build fell back to Java 5 and failed on JDK 17 before compiling anything. It is pinned now.
 
 ## [0.15.0] - 2026-09-25
 
@@ -483,7 +487,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/IS4IT/midgie/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/IS4IT/midgie/compare/v0.14.2...v0.15.0
 [0.14.2]: https://github.com/IS4IT/midgie/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/IS4IT/midgie/compare/v0.14.0...v0.14.1
