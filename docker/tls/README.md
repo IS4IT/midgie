@@ -18,7 +18,8 @@ The plain-HTTP midPoint (port 8080 / host 12080) is untouched, so the HTTP integ
 docker/tls/run.sh        # build jar → gen certs → build images → run the smoke tests
 ```
 
-`run.sh` returns the client container's exit code (0 = all checks passed). Tear down with:
+`run.sh` returns the client container's exit code (0 = all checks passed) and leaves midPoint and the
+proxy running, so it works on a fresh or an already-running rig. Tear down with:
 
 ```bash
 docker compose -f docker/docker-compose.yml -f docker/compose.tls.yml down

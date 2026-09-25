@@ -1,0 +1,12 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+#
+# Used instead of the root .dockerignore for Dockerfile.client. Both build from the project root, and the
+# root file admits only what the published image needs, which leaves out everything this client COPYs
+# from docker/tls. Admit exactly those files, so the context stays as small as the root file keeps it.
+*
+!target/midgie.jar
+!docker/tls/ca.crt
+!docker/tls/desired.xml
+!docker/tls/run-tls-tests.sh
