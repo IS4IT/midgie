@@ -67,6 +67,11 @@ final class Reconciler {
          * them, e.g. {@code mapping/lifecycleState ×10}.
          */
         final List<String> keptNested;
+        /**
+         * The lists {@code --equivalence auto} compared by content instead of pairing by natural key, one
+         * message each ({@link DiffEngine.DiffResult#keyPairingDeclined}); printed under {@code -v}.
+         */
+        final List<String> keyPairingDeclined;
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
@@ -79,16 +84,17 @@ final class Reconciler {
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings, List<String> heldBack, List<String> protectedSkipped) {
             this(action, restType, oid, changes, detail, modificationXml, createBody, delta, warnings, heldBack,
-                    protectedSkipped, List.of(), false, List.of(), List.of());
+                    protectedSkipped, List.of(), false, List.of(), List.of(), List.of());
         }
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
                 List<String> warnings, List<String> heldBack, List<String> protectedSkipped,
                 List<RemovalDetector.Removal> removing, boolean removalsDeferred, List<String> kept,
-                List<String> keptNested) {
+                List<String> keptNested, List<String> keyPairingDeclined) {
             this.kept = List.copyOf(kept);
             this.keptNested = List.copyOf(keptNested);
+            this.keyPairingDeclined = List.copyOf(keyPairingDeclined);
             this.removing = List.copyOf(removing);
             this.removalsDeferred = removalsDeferred;
             this.action = action;
@@ -249,7 +255,13 @@ final class Reconciler {
                 }
             }
         }
-        PrismObject<? extends Objectable> after = project(current, delta);
+        PrismObject<? extends Objectable> after = DiffEngine.project(current, delta);
+        // Judged on the whole PATCH, removals included, against what the server would hold afterwards. A change
+        // prism cannot project locally is not judged here; midPoint has the last word on it anyway.
+        List<String> duplicates = NaturalKeys.introducedDuplicates(current, after);
+        if (!duplicates.isEmpty()) {
+            return fail(restType, targetOid, NaturalKeys.duplicateRefusal(duplicates), result.keyPairingDeclined());
+        }
         List<String> kept = keptOnMerge(desired, after, strategy);
         List<String> heldBack = new ArrayList<>(held.paths);
         List<String> keptNested = keptNested(result.keptNested(), current, after, removals, strategy, heldBack);
@@ -260,7 +272,7 @@ final class Reconciler {
             // --dry-run --format xml' — writes an empty ObjectModificationType rather than nothing.
             return new Outcome(Action.IN_SYNC, restType, targetOid, 0, "already matches", null, null,
                     delta, warnings, heldBack, result.protectedSkippedPaths(), List.of(), judged.deferred, kept,
-                    keptNested);
+                    keptNested, result.keyPairingDeclined());
         }
         int changes = delta.getModifications().size();
         String modificationXml = DeltaOutput.toModificationXml(prismContext, delta);
@@ -274,7 +286,7 @@ final class Reconciler {
                 judged.removing.size(), summary);
         return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
                 delta, warnings, heldBack, result.protectedSkippedPaths(), judged.removing, judged.deferred,
-                kept, keptNested);
+                kept, keptNested, result.keyPairingDeclined());
     }
 
     /**
@@ -295,25 +307,6 @@ final class Reconciler {
             }
         }
         return kept;
-    }
-
-    /**
-     * The live object with the whole PATCH applied locally, removals included, or {@code null} when prism
-     * cannot apply it — then nothing is counted as kept, which only costs a note.
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo is typed by the object class the delta was built for
-    private static PrismObject<? extends Objectable> project(PrismObject<? extends Objectable> current,
-            ObjectDelta<? extends Objectable> delta) {
-        PrismObject<? extends Objectable> after = current.clone();
-        try {
-            if (!delta.isEmpty()) {
-                ((ObjectDelta) delta).applyTo((PrismObject) after);
-            }
-            return after;
-        } catch (Exception e) {
-            LOG.trace("could not project the change to count what it keeps on {}", current.getOid(), e);
-            return null;
-        }
     }
 
     /**
@@ -551,7 +544,13 @@ final class Reconciler {
     }
 
     private static Outcome fail(String restType, String oid, String reason) {
+        return fail(restType, oid, reason, List.of());
+    }
+
+    /** As above, carrying the lists auto compared by content, which is what {@code -v} explains a refusal with. */
+    private static Outcome fail(String restType, String oid, String reason, List<String> keyPairingDeclined) {
         LOG.debug("{} {}: FAIL — {}", restType, oid, reason);
-        return new Outcome(Action.FAIL, restType, oid, 0, reason, null, null, null, List.of());
+        return new Outcome(Action.FAIL, restType, oid, 0, reason, null, null, null, List.of(), List.of(),
+                List.of(), List.of(), false, List.of(), List.of(), keyPairingDeclined);
     }
 }

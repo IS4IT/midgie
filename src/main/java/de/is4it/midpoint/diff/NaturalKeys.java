@@ -248,4 +248,158 @@ final class NaturalKeys {
         }
         return String.join("/", names);
     }
+
+    /**
+     * The entries {@code after} holds more often than {@code before} does: values of one multi-valued container
+     * that carry the same fully filled-in natural key, each as
+     * {@code schemaHandling/objectType[kind=GENERIC, intent=myitTask] ×2}.
+     *
+     * <p>A natural key names one entry, so a list holding it twice is what a change looks like when it failed to
+     * pair an entry with its live copy and added it beside it, or when the tree declares the entry twice.
+     * midPoint rejects some of these outright — a resource with two object types of one kind and intent no longer
+     * loads its schema — and quietly uses one copy of the others.
+     *
+     * <p>Only what the change introduces counts. A duplicate the server already held is not this change's doing,
+     * and refusing on it would block every deploy of the object until someone removed it by hand. So each group
+     * {@code after} holds is looked up in {@code before} at the same container — found by its path with the
+     * container ids of the values on the way — and counted there with the key's own {@code valuesMatch}. A
+     * container inside a value the change adds (no id yet) is new by definition. That also makes one inside an
+     * id-less value of a hand-written {@code current} file count as new — a limit of comparing two files, not of
+     * a live run, where every value the server holds has its id.
+     */
+    static List<String> introducedDuplicates(PrismObject<?> before, PrismObject<?> after) {
+        if (after == null) {
+            return List.of();
+        }
+        List<String> introduced = new ArrayList<>();
+        for (Duplicate duplicate : duplicatesIn(after)) {
+            if (duplicate.count() > heldBefore(before, duplicate)) {
+                introduced.add(duplicate.label() + " ×" + duplicate.count());
+            }
+        }
+        return introduced;
+    }
+
+    /** How many values carrying {@code duplicate}'s key the same container holds in {@code before}. */
+    private static int heldBefore(PrismObject<?> before, Duplicate duplicate) {
+        if (before == null || duplicate.where() == null) {
+            return 0;
+        }
+        Item<?, ?> item = before.findItem(duplicate.where());
+        if (!(item instanceof PrismContainer<?> container)) {
+            return 0;
+        }
+        int held = 0;
+        for (PrismContainerValue<?> value : container.getValues()) {
+            if (carries(duplicate.key(), value) && duplicate.key().valuesMatch(duplicate.sample(), value)) {
+                held++;
+            }
+        }
+        return held;
+    }
+
+    /** Why a change {@link #introducedDuplicates} flags is refused, and what to do about it. */
+    static String duplicateRefusal(List<String> duplicates) {
+        return "refusing a change that would leave " + String.join(", ", duplicates) + " — values sharing one "
+                + "natural key, which is meant to name a single entry. Either the tree declares that entry twice, "
+                + "or its values were compared by content and the entry was not paired with its live copy: -v "
+                + "names each list compared that way and the key inside it that is not filled in. Fill that key in, "
+                + "or put the list on multivalue=replace with a policy rule.";
+    }
+
+    /**
+     * One group of values sharing a key.
+     *
+     * @param where  the container's path, container ids included, to find it again in another object;
+     *               {@code null} inside a value that has no container id
+     * @param key    the container's natural key
+     * @param sample one of the values, to match the others against
+     * @param label  the id-free path plus the key, for the message
+     * @param count  how many values carry the key
+     */
+    private record Duplicate(ItemPath where, NaturalKeyDefinition key, PrismContainerValue<?> sample, String label,
+            int count) {
+    }
+
+    private static List<Duplicate> duplicatesIn(PrismObject<?> object) {
+        List<Duplicate> found = new ArrayList<>();
+        collectDuplicates(object.getValue(), new ArrayList<>(), "", found);
+        return found;
+    }
+
+    /** {@code idPath} is {@code null} once the walk is inside a list value that has no container id. */
+    private static void collectDuplicates(PrismContainerValue<?> value, List<Object> idPath, String namePath,
+            List<Duplicate> found) {
+        for (Item<?, ?> item : value.getItems()) {
+            if (!(item instanceof PrismContainer<?> container)) {
+                continue;
+            }
+            ItemDefinition<?> definition = container.getDefinition();
+            if (definition == null || definition.isOperational() || container.getValues().isEmpty()) {
+                continue;
+            }
+            List<Object> path = (idPath != null) ? appended(idPath, item.getElementName()) : null;
+            String local = item.getElementName().getLocalPart();
+            String names = namePath.isEmpty() ? local : namePath + "/" + local;
+            boolean multiValue = definition.isMultiValue();
+            if (multiValue) {
+                NaturalKeyDefinition key = of(container);
+                if (key != null) {
+                    groupByKey(container, key, path, names, found);
+                }
+            }
+            for (PrismContainerValue<?> child : container.getValues()) {
+                // A single-valued container is unambiguous without an id; a value of a list is not.
+                List<Object> childPath = (!multiValue || path == null) ? path
+                        : (child.getId() != null) ? appended(path, child.getId()) : null;
+                collectDuplicates(child, childPath, names, found);
+            }
+        }
+    }
+
+    private static List<Object> appended(List<Object> path, Object segment) {
+        List<Object> longer = new ArrayList<>(path);
+        longer.add(segment);
+        return longer;
+    }
+
+    private static void groupByKey(PrismContainer<?> container, NaturalKeyDefinition key, List<Object> path,
+            String names, List<Duplicate> found) {
+        List<PrismContainerValue<?>> values = new ArrayList<>(container.getValues());
+        boolean[] grouped = new boolean[values.size()];
+        for (int i = 0; i < values.size(); i++) {
+            if (grouped[i] || !carries(key, values.get(i))) {
+                continue;
+            }
+            int count = 1;
+            for (int j = i + 1; j < values.size(); j++) {
+                if (!grouped[j] && carries(key, values.get(j)) && key.valuesMatch(values.get(i), values.get(j))) {
+                    grouped[j] = true;
+                    count++;
+                }
+            }
+            if (count > 1) {
+                ItemPath where = (path != null) ? ItemPath.create(path.toArray()) : null;
+                String label = names + "[" + keyText(container, values.get(i)) + "]";
+                found.add(new Duplicate(where, key, values.get(i), label, count));
+            }
+        }
+    }
+
+    /** The key's constituents and their values, {@code kind=GENERIC, intent=myitTask}. */
+    private static String keyText(PrismContainer<?> container, PrismContainerValue<?> value) {
+        ItemDefinition<?> definition = container.getDefinition();
+        List<QName> constituents = (definition != null) ? definition.getNaturalKeyConstituents() : null;
+        if (constituents == null || constituents.isEmpty()) {
+            return "?";
+        }
+        List<String> parts = new ArrayList<>();
+        for (QName constituent : constituents) {
+            Item<?, ?> item = value.findItem(ItemPath.create(constituent));
+            Object real = (item != null && item.getValues().size() == 1) ? item.getRealValue() : null;
+            String text = (real != null) ? String.valueOf(real) : "?";
+            parts.add(constituent.getLocalPart() + "=" + (text.length() > 80 ? text.substring(0, 80) + "…" : text));
+        }
+        return String.join(", ", parts);
+    }
 }

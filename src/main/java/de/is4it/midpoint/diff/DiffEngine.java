@@ -266,7 +266,9 @@ public final class DiffEngine {
         // merge may see paired/edited values instead of clean add/delete, so applyMerge has less to strip;
         // that is true of the natural-keys half of an auto diff as much as of an explicit --equivalence.
         List<String> equivalenceChoices = new ArrayList<>();
-        ObjectDelta<? extends Objectable> delta = reconcile(live, desired, equivalence, equivalenceChoices);
+        List<String> keyPairingDeclined = new ArrayList<>();
+        ObjectDelta<? extends Objectable> delta =
+                reconcile(live, desired, equivalence, equivalenceChoices, keyPairingDeclined);
 
         // First, before anything else reads the delta: drop the differences that are not differences at all,
         // only midPoint having resolved a smart reference. Ahead of applyMerge because merge would otherwise
@@ -279,7 +281,8 @@ public final class DiffEngine {
         List<KeptNested> keptNested = (keepUndeclaredNested && scope == Scope.PRESENT)
                 ? keepUndeclaredNested(delta, desired, live) : List.of();
 
-        List<String> mergeFallbacks = multiValue.isMergeActive() ? applyMerge(delta, multiValue) : List.of();
+        List<String> mergeFallbacks = multiValue.isMergeActive()
+                ? applyMerge(delta, desired, live, multiValue) : List.of();
 
         if (scope == Scope.PRESENT) {
             retainItemsPresentIn(delta, desired);
@@ -325,7 +328,7 @@ public final class DiffEngine {
                 DeltaOutput.removedValueCount(delta), mergeFallbacks, protectedSkipped, accruedInPlaceEdits,
                 inputWarnings.size(), smartReferences, equivalenceChoices);
         return new DiffResult(delta, mergeFallbacks, protectedSkipped, accruedInPlaceEdits, inputWarnings,
-                smartReferences, equivalenceChoices, incompleteSkipped, keptNested);
+                smartReferences, equivalenceChoices, keyPairingDeclined, incompleteSkipped, keptNested);
     }
 
     /**
@@ -438,7 +441,7 @@ public final class DiffEngine {
     }
 
     private static <O extends Objectable> ObjectDelta<O> reconcile(PrismObject<O> live, PrismObject<?> desired,
-            EquivalencePlan equivalence, List<String> choices) {
+            EquivalencePlan equivalence, List<String> choices, List<String> declined) {
         @SuppressWarnings("unchecked") // the two objects were verified to share a compile-time class
         PrismObject<O> desiredTyped = (PrismObject<O>) desired;
         if (!equivalence.isAuto()) {
@@ -450,7 +453,7 @@ public final class DiffEngine {
             }
             return live.diff(desiredTyped, strategy);
         }
-        return reconcileAuto(live, desiredTyped, choices);
+        return reconcileAuto(live, desiredTyped, choices, declined);
     }
 
     /**
@@ -530,9 +533,13 @@ public final class DiffEngine {
      * <p>Diffing twice is only needed when the object genuinely splits. With nothing safe to pair this is a
      * single {@code real-value} pass — byte-identical to the old default — and with nothing to protect it is
      * a single {@code natural-keys} pass.
+     *
+     * <p>{@code choices} receives one entry per container, for the debug log; {@code declined} only the
+     * containers left to {@code real-value}, each as a sentence naming the reason, for the note {@code -v}
+     * prints.
      */
     private static <O extends Objectable> ObjectDelta<O> reconcileAuto(
-            PrismObject<O> live, PrismObject<O> desired, List<String> choices) {
+            PrismObject<O> live, PrismObject<O> desired, List<String> choices, List<String> declined) {
 
         List<List<String>> naturalKeyPaths = new ArrayList<>();
         PrismObject<O> withIds = desired.clone();
@@ -545,6 +552,8 @@ public final class DiffEngine {
                 choices.add(pathText(bucket.path()) + "=natural-keys");
             } else {
                 choices.add(pathText(bucket.path()) + "=real-value (" + bucket.reason() + ")");
+                declined.add(pathText(bucket.path()) + " is compared as whole values, not paired by natural key: "
+                        + bucket.reason() + ", so a change inside one of its entries replaces that entry whole");
             }
         }
 
@@ -1270,16 +1279,38 @@ public final class DiffEngine {
         return NaturalKeys.of(container);
     }
 
+    /** The paths of {@code paths} that the delta still modifies. */
+    private static List<String> stillInDelta(List<String> paths, ObjectDelta<?> delta) {
+        if (paths.isEmpty()) {
+            return paths;
+        }
+        Set<String> remaining = new java.util.HashSet<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            remaining.add(mod.getPath().toString());
+        }
+        return paths.stream().filter(remaining::contains).toList();
+    }
+
     /**
      * Turn the add/delete deltas of merge-designated paths into merge (union) deltas: keep the additions
      * but stop deleting live-only values, so accrued runtime state survives. Because the diff runs under
-     * a real-value strategy, values are matched by content — a value that appears as a delete is a
-     * genuine live-only value with no desired counterpart, so dropping the delete simply preserves it
-     * (no duplication: a desired value already present in live would have matched and not diffed).
+     * a real-value strategy, values are matched by content — a value that appears as a delete has no desired
+     * counterpart by content, so dropping the delete simply preserves it (no duplication: a desired value
+     * already present in live would have matched and not diffed).
      *
      * <p>Merge is union semantics. To change a managed value in place, keep that path on {@code replace};
-     * under merge a content change reads as "old value gone, new value added", so the old value is
-     * preserved <em>and</em> the new one is added.
+     * under merge a content change of a value without a key reads as "old value gone, new value added", so
+     * the old value is preserved <em>and</em> the new one is added.
+     *
+     * <p><b>Except the old form of an entry desired declares.</b> Where a container's values are compared by
+     * content — {@code auto}'s {@code real-value} half, or {@code --equivalence real-value} — an entry desired
+     * changed is not paired with its live copy either: it diffs to the same add-new, delete-old. But when the
+     * live value carries a container id or a natural key that a desired value also carries, it is not a value
+     * beyond the tree; it is that entry's old form. Dropping its delete left both on the server — two
+     * {@code schemaHandling/objectType} values with one {@code kind + intent}, which midPoint rejects as a
+     * duplicate definition — while the removal detector, which pairs by key, only deleted the items the tree
+     * had dropped from inside it. So that delete is kept. The pairing is {@link NaturalKeys#match}'s, the one
+     * the removal detector and the fragment union use, so all three agree on which entry is which.
      *
      * <p>A <b>single-valued</b> item can never merge: union semantics have no meaning where only one value
      * fits. Whether it can merge is decided on the item's <em>cardinality</em>, not on the shape of its
@@ -1295,19 +1326,8 @@ public final class DiffEngine {
      *
      * @return the paths of merge-requested items that could only be expressed as a replace
      */
-    /** The paths of {@code paths} that the delta still modifies. */
-    private static List<String> stillInDelta(List<String> paths, ObjectDelta<?> delta) {
-        if (paths.isEmpty()) {
-            return paths;
-        }
-        Set<String> remaining = new java.util.HashSet<>();
-        for (ItemDelta<?, ?> mod : delta.getModifications()) {
-            remaining.add(mod.getPath().toString());
-        }
-        return paths.stream().filter(remaining::contains).toList();
-    }
-
-    private static List<String> applyMerge(ObjectDelta<?> delta, MultiValueStrategy multiValue) {
+    private static List<String> applyMerge(ObjectDelta<?> delta, PrismObject<?> desired, PrismObject<?> live,
+            MultiValueStrategy multiValue) {
         List<String> fallbacks = new ArrayList<>();
         List<ItemDelta<?, ?>> emptied = new ArrayList<>();
 
@@ -1328,7 +1348,15 @@ public final class DiffEngine {
                 continue;
             }
             if (mod.getValuesToDelete() != null && !mod.getValuesToDelete().isEmpty()) {
-                mod.clearValuesToDelete(); // preserve every live-only value (union by real value)
+                PrismContainer<?> declared = desiredContainerAt(desired, live, mod.getPath());
+                List<PrismValue> liveOnly = new ArrayList<>();
+                for (PrismValue value : mod.getValuesToDelete()) {
+                    if (!(value instanceof PrismContainerValue<?> containerValue)
+                            || NaturalKeys.match(declared, containerValue, containerValue.getId()) == null) {
+                        liveOnly.add(value);
+                    }
+                }
+                liveOnly.forEach(mod::removeValueToDelete); // preserve every live-only value (union by real value)
                 if (mod.isEmpty()) {
                     emptied.add(mod);
                 }
@@ -1336,6 +1364,67 @@ public final class DiffEngine {
         }
         emptied.forEach(delta::removeModification);
         return fallbacks;
+    }
+
+    /**
+     * The desired container a delta path names, or {@code null} when desired does not declare it. Each
+     * container-id segment is followed to the desired value paired with the live value carrying that id, by
+     * {@link NaturalKeys#match}; a live value on the way without a counterpart in desired also yields
+     * {@code null}, since nothing below it is declared.
+     */
+    private static PrismContainer<?> desiredContainerAt(PrismObject<?> desired, PrismObject<?> live,
+            ItemPath path) {
+        PrismContainerValue<?> desiredParent = desired.getValue();
+        PrismContainerValue<?> liveParent = (live != null) ? live.getValue() : null;
+        List<QName> names = new ArrayList<>();
+        for (Object segment : path.getSegments()) {
+            if (ItemPath.isName(segment)) {
+                names.add(ItemPath.toName(segment));
+                continue;
+            }
+            if (!ItemPath.isId(segment) || names.isEmpty()) {
+                return null;
+            }
+            ItemPath containerPath = ItemPath.create(names.toArray());
+            names.clear();
+            Item<?, ?> desiredItem = desiredParent.findItem(containerPath);
+            if (!(desiredItem instanceof PrismContainer<?> desiredContainer)) {
+                return null;
+            }
+            Long id = ItemPath.toId(segment);
+            PrismContainerValue<?> liveValue = containerValueById(liveParent, containerPath, id);
+            PrismContainerValue<?> match = NaturalKeys.match(desiredContainer, liveValue, id);
+            if (match == null) {
+                return null;
+            }
+            desiredParent = match;
+            liveParent = liveValue;
+        }
+        if (names.isEmpty()) {
+            return null;
+        }
+        Item<?, ?> item = desiredParent.findItem(ItemPath.create(names.toArray()));
+        return (item instanceof PrismContainer<?> container) ? container : null;
+    }
+
+    /**
+     * {@code current} with {@code delta} applied locally, on a copy, or {@code null} when prism cannot apply
+     * it. What the object would look like after the PATCH, for the checks that have to judge the result rather
+     * than the delta: the duplicate-key refusal ({@link NaturalKeys#introducedDuplicates}) and what merge keeps.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo is typed by the object class the delta was built for
+    static PrismObject<? extends Objectable> project(PrismObject<? extends Objectable> current,
+            ObjectDelta<? extends Objectable> delta) {
+        PrismObject<? extends Objectable> after = current.clone();
+        try {
+            if (!delta.isEmpty()) {
+                ((ObjectDelta) delta).applyTo((PrismObject) after);
+            }
+            return after;
+        } catch (Exception e) {
+            LOG.trace("could not project the change onto {}", current.getOid(), e);
+            return null;
+        }
     }
 
     /**
@@ -1351,14 +1440,15 @@ public final class DiffEngine {
         private final List<String> inputWarnings;
         private final List<String> smartReferencePaths;
         private final List<String> equivalenceChoices;
+        private final List<String> keyPairingDeclined;
         private final List<String> incompleteSkippedPaths;
         private final List<KeptNested> keptNested;
 
         DiffResult(ObjectDelta<? extends Objectable> delta, List<String> mergeFallbackPaths,
                 List<String> protectedSkippedPaths, List<String> accruedInPlaceEditPaths,
                 List<String> inputWarnings, List<String> smartReferencePaths,
-                List<String> equivalenceChoices, List<String> incompleteSkippedPaths,
-                List<KeptNested> keptNested) {
+                List<String> equivalenceChoices, List<String> keyPairingDeclined,
+                List<String> incompleteSkippedPaths, List<KeptNested> keptNested) {
             this.keptNested = List.copyOf(keptNested);
             this.delta = delta;
             this.mergeFallbackPaths = List.copyOf(mergeFallbackPaths);
@@ -1367,6 +1457,7 @@ public final class DiffEngine {
             this.inputWarnings = List.copyOf(inputWarnings);
             this.smartReferencePaths = List.copyOf(smartReferencePaths);
             this.equivalenceChoices = List.copyOf(equivalenceChoices);
+            this.keyPairingDeclined = List.copyOf(keyPairingDeclined);
             this.incompleteSkippedPaths = List.copyOf(incompleteSkippedPaths);
         }
 
@@ -1393,6 +1484,16 @@ public final class DiffEngine {
          */
         public List<String> equivalenceChoices() {
             return equivalenceChoices;
+        }
+
+        /**
+         * The multi-valued containers {@code --equivalence auto} compared by content instead of pairing their
+         * entries by natural key, one complete message each, naming the container below whose key is not filled
+         * in. A change inside such an entry replaces the entry whole. Empty when the operator named a strategy
+         * outright.
+         */
+        public List<String> keyPairingDeclined() {
+            return keyPairingDeclined;
         }
 
         /**

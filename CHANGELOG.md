@@ -5,6 +5,18 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An edited keyed entry is replaced, not duplicated, on a tracked tree.** A resource whose `schemaHandling/objectType` held a reaction with an unnamed `<addFocus/>` came out of a deploy with two object types of one kind and intent, and midPoint no longer loaded its schema. `--equivalence auto` compares a list by content when any key inside its entries is left empty, so the edited object type diffed to "add the new form, delete the old"; `merge`, the default on a tracked tree, dropped that delete as a value beyond the tree, and the removal detector — which pairs the entry by its `kind + intent` — deleted only the items dropped from inside it. Merge now keeps the delete of a live value that carries the container id or natural key of an entry the tree declares: that value is the entry's old form. A server already holding both forms is cleaned up by the next deploy of the tree.
+
+### Added
+
+- **A change that would hold one natural key twice is refused.** `deploy`, a live `diff` and an offline `diff` project the whole PATCH onto the live object and fail the object (exit 2) when a keyed list would end up with more values sharing one filled-in key than it has now: `refusing a change that would leave schemaHandling/objectType[kind=GENERIC, intent=task] ×2 …`. A duplicate the server already holds does not block.
+
+- **`-v` names the lists `auto` compared as whole values.** Per object, a `note:` for each list `--equivalence auto` did not pair by natural key, naming the key inside it that is not filled in (`…/reaction/actions/addFocus does not fill in its key (name)`). A change inside such a list replaces the entry whole; this was visible only in the debug log's `equivalence=` field.
+
 ## [0.16.2] - 2026-09-28
 
 ### Added

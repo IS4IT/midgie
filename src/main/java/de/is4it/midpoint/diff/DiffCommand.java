@@ -210,9 +210,23 @@ public class DiffCommand implements Callable<Integer> {
                     .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
                             SmartReferences.checkFor(strategy, prismContext, null));
 
+            if (debug && !quiet) {
+                for (String declined : result.keyPairingDeclined()) {
+                    System.err.println("midgie: note: " + declined + ".");
+                }
+            }
+
             // Refuse (by default) to emit a merge delta that would overwrite an accrued value in place.
             if (!result.accruedInPlaceEditPaths().isEmpty() && !strategy.allowInplaceMerge) {
                 System.err.println(StrategyOptions.accruedInPlaceRefusal(result.accruedInPlaceEditPaths()));
+                return EXIT_ERROR;
+            }
+
+            // Refuse a delta that would leave one entry of a keyed list twice (see NaturalKeys.introducedDuplicates).
+            List<String> duplicates =
+                    NaturalKeys.introducedDuplicates(current, DiffEngine.project(current, result.delta()));
+            if (!duplicates.isEmpty()) {
+                System.err.println("midgie: " + NaturalKeys.duplicateRefusal(duplicates));
                 return EXIT_ERROR;
             }
 

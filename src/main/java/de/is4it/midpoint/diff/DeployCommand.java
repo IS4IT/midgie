@@ -731,6 +731,21 @@ public class DeployCommand implements Callable<Integer> {
                 + String.join("; ", parts) + ".");
     }
 
+    /**
+     * Under {@code -v}, name each list {@code --equivalence auto} compared as whole values rather than pairing its
+     * entries by natural key, and the key inside it that is not filled in. That choice decides whether a change
+     * inside an entry is an edit in place or a replacement of the entry, and it was visible only inside a debug
+     * log line.
+     */
+    private void reportKeyPairingDeclined(DeployObject unit, Reconciler.Outcome outcome) {
+        if (!verbose()) {
+            return;
+        }
+        for (String declined : outcome.keyPairingDeclined) {
+            note("note: " + unit.objectPath() + ": " + declined + ".");
+        }
+    }
+
     /** Name the dropped values an object's PATCH deletes, so the change being confirmed is the whole change. */
     private void reportRemoving(DeployObject unit, Reconciler.Outcome outcome) {
         if (outcome.removing.isEmpty()) {
@@ -1082,6 +1097,7 @@ public class DeployCommand implements Callable<Integer> {
         }
         // Once per run: in the preview when there is one, else in the pass that writes.
         if (preview || assumeYes || confirmEachApply) {
+            reportKeyPairingDeclined(unit, outcome);
             reportRemoving(unit, outcome);
             reportKept(unit, outcome);
         }
@@ -1211,6 +1227,7 @@ public class DeployCommand implements Callable<Integer> {
                 // fragment of a to-be-created object became a patch rather than a second create — has
                 // nothing left to answer for now that an object's files are reconciled together.
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune());
+                reportKeyPairingDeclined(unit, outcome);
                 reportRemoving(unit, outcome);
                 reportKept(unit, outcome);
                 reportHeldBack(unit, outcome);
