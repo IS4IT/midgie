@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The policy file in use is named.** `deploy` and a live `diff` print `midgie: policy: <absolute path> (<n> rule(s))` when a policy applies. A tree-local `.midgie.properties` said it supplied `policy`, but not which file that resolved to, so a run from a subdirectory — or one where the operator's own config overrode the tree's — gave no way to tell which rules decided what was deleted. `--quiet` leaves the line out.
+
 ## [0.16.1] - 2026-09-25
 
 ### Fixed

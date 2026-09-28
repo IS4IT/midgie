@@ -347,6 +347,13 @@ public class DeployCommand implements Callable<Integer> {
 
             PrismContext prismContext = SchemaOptions.newBaseContext();
             policy = (policyFile != null) ? Policy.load(policyFile) : null; // load early: fail fast on a bad policy
+            if (policy != null) {
+                // Named outright, like a tree-local config file: the policy decides what a deploy deletes, and
+                // when it arrived through a config file rather than the command line, nothing else on screen
+                // says which file that was — or that a relative path was read from the config file's folder.
+                note("policy: " + policyFile.getAbsoluteFile().toPath().normalize() + " ("
+                        + policy.ruleCount() + " rule(s))");
+            }
 
             // Everything the local filesystem can settle is settled before the first round trip. Reading the
             // tree costs milliseconds and the server costs seconds, so a typo'd path, an unreadable mount or

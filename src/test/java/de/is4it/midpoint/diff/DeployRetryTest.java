@@ -108,6 +108,34 @@ class DeployRetryTest {
     }
 
     @Test
+    void thePolicyInUseIsNamed(@TempDir Path dir) throws Exception {
+        // It may arrive through a config file rather than the command line, and then nothing else on screen
+        // says which file decides what the deploy deletes.
+        writeTree(dir);
+        Path policy = dir.resolve("midgie.policy");
+        Files.writeString(policy, "# tuned by hand\nRoleType/Role  multivalue=merge\nRoleType/*  scope=present\n",
+                StandardCharsets.UTF_8);
+
+        Result result = deployCapturing(dir, "--policy", policy.toString());
+
+        assertEquals(0, result.exit(), result.err());
+        assertTrue(result.err().contains("midgie: policy: " + policy.toAbsolutePath().normalize() + " (2 rule(s))"),
+                result.err());
+    }
+
+    @Test
+    void quietLeavesThePolicyLineOut(@TempDir Path dir) throws Exception {
+        writeTree(dir);
+        Path policy = dir.resolve("midgie.policy");
+        Files.writeString(policy, "RoleType/Role  multivalue=merge\n", StandardCharsets.UTF_8);
+
+        Result result = deployCapturing(dir, "--policy", policy.toString(), "--quiet");
+
+        assertEquals(0, result.exit(), result.err());
+        assertFalse(result.err().contains("midgie: policy:"), result.err());
+    }
+
+    @Test
     void aPolicyRuleThatMatchesNothingIsStillReported(@TempDir Path dir) throws Exception {
         writeTree(dir);
         Path policy = dir.resolve("midgie.policy");

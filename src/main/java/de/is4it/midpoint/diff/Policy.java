@@ -78,6 +78,11 @@ final class Policy {
         this.file = file;
     }
 
+    /** How many rules the file holds; zero for a file of comments only, as {@code init --write-policy} writes. */
+    int ruleCount() {
+        return rules.size();
+    }
+
     /** Parse and validate the policy file. Throws with the line number on a malformed rule. */
     static Policy load(File file) throws IOException {
         if (!file.isFile() || !file.canRead()) {
