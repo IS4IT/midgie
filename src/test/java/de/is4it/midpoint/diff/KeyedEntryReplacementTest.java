@@ -15,9 +15,15 @@ import java.util.List;
 
 import javax.xml.namespace.QName;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.Objectable;
@@ -51,9 +57,33 @@ class KeyedEntryReplacementTest {
 
     private static PrismContext prismContext;
 
+    private Level rootLevel;
+    private Level ourLevel;
+
     @BeforeAll
     static void bootstrapPrism() throws Exception {
         prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
+    }
+
+    @BeforeEach
+    void rememberLevels() {
+        rootLevel = root().getLevel();
+        ourLevel = ours().getLevel();
+    }
+
+    @AfterEach
+    void restoreLevels() {
+        // 'diff -v' switches DEBUG on for the whole JVM; left on, every later test's stderr carries log lines.
+        root().setLevel(rootLevel);
+        ours().setLevel(ourLevel);
+    }
+
+    private static Logger root() {
+        return (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+    }
+
+    private static Logger ours() {
+        return (Logger) LoggerFactory.getLogger(Logging.class.getPackageName());
     }
 
     @Test
