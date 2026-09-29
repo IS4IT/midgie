@@ -31,6 +31,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **An object whose inverse cannot be computed is named.** A rollback plan left such an object out with a debug log line, while `deploy` still reported the net. It is now named in a warning, marked `unrecorded` in the manifest, and reported again by `rollback`.
 
+- **A password source on the command line beats one from a config file.** A config file's value arrives as the option's default, and `--password` is tried before `--password-env` and `--password-file`, so a `password` in a config file outranked `--password-file` typed on the command line — the documented order says the reverse. Any of the three given on the command line now comes first, whichever spelling the file uses; the proxy password likewise.
+
+- **A secret joined to a mistyped option is withheld.** `--pasword=hunter2` or `-Phunter2` printed the value in the "unknown argument" message; only the space-separated form was withheld before.
+
+- **An internal error exits 2.** An `OutOfMemoryError`, a `StackOverflowError` on deeply nested XML or a class missing from the jar ended the JVM with 1, which means "differences found".
+
+- **A payload that cannot be written fails the run.** Writing to a closed pipe or a full disk left an empty or truncated PATCH body with a normal exit code; it is an error now (exit 2).
+
+- **Standard output is UTF-8.** Under a C/POSIX locale every non-ASCII character in a payload came out as `?`, and piping that body into a PATCH wrote the damage back to the server.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

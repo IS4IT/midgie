@@ -143,6 +143,56 @@ class CliTest {
         assertTrue(r.err.contains("--pasword"), "but the offending option is still named: " + r.err);
     }
 
+    @Test
+    void aSecretJoinedToAMistypedOptionIsWithheldToo() {
+        Result r = run("diff", A, B, "--pasword=hunter2", "-Phunter2");
+
+        assertEquals(2, r.exit);
+        assertFalse(r.err.contains("hunter2"), "the value must not be echoed: " + r.err);
+        assertTrue(r.err.contains("--pasword=***") && r.err.contains("-P***"), r.err);
+    }
+
+    @Test
+    void anErrorThatEscapesTheCommandExitsTwoNotOne() {
+        // An uncaught Error ended the JVM with 1, which is "differences found" to a CI gate.
+        @picocli.CommandLine.Command(name = "boom")
+        class Boom implements Runnable {
+            @Override
+            public void run() {
+                throw new StackOverflowError("deeply nested");
+            }
+        }
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        try {
+            System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
+            assertEquals(2, Main.run(() -> new picocli.CommandLine(new Boom()), new String[0]));
+        } finally {
+            System.setErr(originalErr);
+        }
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("StackOverflowError"), err.toString());
+    }
+
+    @Test
+    void aPayloadThatCannotBeWrittenFailsInsteadOfPassingForWritten() {
+        // A closed pipe or a full disk only sets PrintStream's error flag; unchecked, an empty body went out
+        // with the exit code of a complete one.
+        PrintStream originalOut = System.out;
+        try {
+            System.setOut(new PrintStream(new java.io.OutputStream() {
+                @Override
+                public void write(int b) throws java.io.IOException {
+                    throw new java.io.IOException("No space left on device");
+                }
+            }, true, StandardCharsets.UTF_8));
+            java.io.IOException e = org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class,
+                    () -> Io.writePayload(null, "<objectModification/>"));
+            assertTrue(e.getMessage().contains("standard output"), e.getMessage());
+        } finally {
+            System.setOut(originalOut);
+        }
+    }
+
     // --- local inputs are checked before the server is contacted ---
 
     @Test

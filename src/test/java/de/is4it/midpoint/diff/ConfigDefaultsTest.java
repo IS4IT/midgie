@@ -142,6 +142,42 @@ class ConfigDefaultsTest {
     }
 
     @Test
+    void aPasswordSourceOnTheCommandLineBeatsAFilesPasswordWhateverItsSpelling(@TempDir Path dir) throws Exception {
+        // The file's value arrives as --password's default, and --password is tried first: a stale password in
+        // a config file used to win over --password-file typed on the command line.
+        Path user = write(dir, "user.properties", "password = from-file\nproxy-password = proxy-from-file");
+        Path secret = write(dir, "cli.txt", "from-cli");
+        Path proxySecret = write(dir, "proxy.txt", "proxy-from-cli");
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                user.toFile(), null);
+
+        CommandLine commandLine = Main.commandLine();
+        commandLine.setDefaultValueProvider(defaults);
+        CommandLine.ParseResult parsed = commandLine.parseArgs("diff", "a.xml", "--url", "http://mp",
+                "--password-file", secret.toString(), "--proxy", "http://proxy.invalid:3128", "--proxy-user", "p",
+                "--proxy-password-file", proxySecret.toString());
+        DiffCommand diff = (DiffCommand) parsed.subcommand().commandSpec().userObject();
+
+        assertEquals("from-file", diff.connectionOptions.passwordOption, "the file's value is still there");
+        assertEquals("from-cli", diff.connectionOptions.resolvePassword());
+        assertEquals("proxy-from-cli", diff.connectionOptions.proxy().password());
+    }
+
+    @Test
+    void aFilesPasswordStillAppliesWhenTheCommandLineNamesNone(@TempDir Path dir) throws Exception {
+        Path user = write(dir, "user.properties", "password = from-file");
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                user.toFile(), null);
+
+        CommandLine commandLine = Main.commandLine();
+        commandLine.setDefaultValueProvider(defaults);
+        CommandLine.ParseResult parsed = commandLine.parseArgs("diff", "a.xml", "--url", "http://mp");
+        DiffCommand diff = (DiffCommand) parsed.subcommand().commandSpec().userObject();
+
+        assertEquals("from-file", diff.connectionOptions.resolvePassword());
+    }
+
+    @Test
     void anyOfTheProxyVariablesStandsTheFileDown(@TempDir Path dir) throws Exception {
         // The proxy is spelled four ways — scheme-dependent, and in either case of letters — so unlike
         // MIDPOINT_URL there is no single variable to check. Any of them being set is what counts.

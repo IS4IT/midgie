@@ -11,11 +11,15 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
+import picocli.CommandLine.ParseResult;
+import picocli.CommandLine.Spec;
 
 /**
  * Shared live-mode connection flags for the {@code diff} and {@code apply} subcommands. When a URL is
@@ -25,7 +29,8 @@ import picocli.CommandLine.Option;
  * {@code MIDPOINT_PASSWORD} environment variables. The password is resolved without putting it on the
  * command line (which leaks into {@code ps} and shell history), in this order: {@code --password} (kept,
  * but discouraged) → {@code --password-env VAR} → {@code --password-file FILE} → {@code MIDPOINT_PASSWORD}
- * → interactive prompt.
+ * → interactive prompt. Any of the three given on the command line outranks all three from a config file,
+ * whichever spelling each uses.
  *
  * <p>The proxy flags walk the same ladder for {@code --proxy-password}, and {@link #proxy()} resolves the
  * proxy itself — see {@link ProxyConfig} for where it may come from and what happens when none is set.
@@ -33,6 +38,14 @@ import picocli.CommandLine.Option;
 public final class ConnectionOptions {
 
     private static final Logger LOG = LoggerFactory.getLogger(ConnectionOptions.class);
+
+    private static final List<String> PASSWORD_OPTIONS = List.of("--password", "--password-env", "--password-file");
+    private static final List<String> PROXY_PASSWORD_OPTIONS =
+            List.of("--proxy-password", "--proxy-password-env", "--proxy-password-file");
+
+    /** The command these options belong to, to tell a value given on its command line from a config file's. */
+    @Spec(Spec.Target.MIXEE)
+    CommandSpec mixee;
 
     @Option(names = "--url", paramLabel = "URL",
             description = "midPoint base URL for live mode (or the MIDPOINT_URL env var), e.g. "
@@ -292,17 +305,10 @@ public final class ConnectionOptions {
      * @throws IllegalArgumentException when no source produced one; the message is printable as it stands
      */
     private String resolveProxyPassword(String proxyUser, ProxyConfig proxy) {
-        if (proxyPasswordOption != null) {
-            LOG.debug("proxy password source: --proxy-password");
-            return proxyPasswordOption;
-        }
-        if (proxyPasswordEnv != null) {
-            LOG.debug("proxy password source: --proxy-password-env {}", proxyPasswordEnv);
-            return fromEnvironment("--proxy-password-env", proxyPasswordEnv);
-        }
-        if (proxyPasswordFile != null) {
-            LOG.debug("proxy password source: --proxy-password-file {}", proxyPasswordFile);
-            return fromFile("--proxy-password-file", proxyPasswordFile);
+        String option = firstGiven(PROXY_PASSWORD_OPTIONS);
+        if (option != null) {
+            LOG.debug("proxy password source: {}", describe(option));
+            return secretFrom(option);
         }
         if (proxyUserOption == null && proxy.password() != null) {
             LOG.debug("proxy password source: the proxy URL from the environment");
@@ -320,26 +326,71 @@ public final class ConnectionOptions {
                 + "--proxy-password-file, credentials in the https_proxy URL, or run interactively.");
     }
 
-    /** Resolve the password from the most-explicit source available, or {@code null} (with an error). */
-    String resolvePassword() {
-        if (passwordOption != null) {
-            LOG.debug("password source: --password");
-            return passwordOption;
-        }
-        if (passwordEnv != null) {
-            try {
-                String value = fromEnvironment("--password-env", passwordEnv);
-                LOG.debug("password source: --password-env {}", passwordEnv);
-                return value;
-            } catch (IllegalArgumentException e) {
-                System.err.println("midgie: " + e.getMessage());
-                return null;
+    /**
+     * The first of {@code options} that has a value, looking at the ones given on the command line before the
+     * ones a config file supplied. A file's value arrives as the option's default, so without the split a
+     * file's {@code password} outranked {@code --password-file} typed on the command line, simply because
+     * {@code --password} is tried first.
+     */
+    private String firstGiven(List<String> options) {
+        for (boolean onCommandLine : new boolean[] {true, false}) {
+            for (String option : options) {
+                if (valueOf(option) != null && onCommandLine(option) == onCommandLine) {
+                    return option;
+                }
             }
         }
-        if (passwordFile != null) {
+        return null;
+    }
+
+    /** Whether {@code option} was given on the command line rather than supplied by a config file. */
+    private boolean onCommandLine(String option) {
+        ParseResult parsed = (mixee != null) ? mixee.commandLine().getParseResult() : null;
+        return parsed != null && parsed.hasMatchedOption(option);
+    }
+
+    private Object valueOf(String option) {
+        return switch (option) {
+            case "--password" -> passwordOption;
+            case "--password-env" -> passwordEnv;
+            case "--password-file" -> passwordFile;
+            case "--proxy-password" -> proxyPasswordOption;
+            case "--proxy-password-env" -> proxyPasswordEnv;
+            case "--proxy-password-file" -> proxyPasswordFile;
+            default -> throw new IllegalArgumentException(option);
+        };
+    }
+
+    /**
+     * The secret {@code option} names: the value itself, or read from the variable or file it names.
+     *
+     * @throws IllegalArgumentException when the variable is unset or the file unusable; printable as it stands
+     */
+    private String secretFrom(String option) {
+        Object value = valueOf(option);
+        if (option.endsWith("-env")) {
+            return fromEnvironment(option, (String) value);
+        }
+        if (option.endsWith("-file")) {
+            return fromFile(option, (File) value);
+        }
+        return (String) value;
+    }
+
+    /** The option and where it came from, for the debug log. */
+    private String describe(String option) {
+        Object value = valueOf(option);
+        String shown = option.endsWith("-env") || option.endsWith("-file") ? option + " " + value : option;
+        return onCommandLine(option) ? shown : shown + " (config file)";
+    }
+
+    /** Resolve the password from the most-explicit source available, or {@code null} (with an error). */
+    String resolvePassword() {
+        String option = firstGiven(PASSWORD_OPTIONS);
+        if (option != null) {
             try {
-                String password = fromFile("--password-file", passwordFile);
-                LOG.debug("password source: --password-file {}", passwordFile);
+                String password = secretFrom(option);
+                LOG.debug("password source: {}", describe(option));
                 return password;
             } catch (IllegalArgumentException e) {
                 System.err.println("midgie: " + e.getMessage());

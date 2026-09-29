@@ -106,6 +106,11 @@ final class Io {
         // owns the stdin end of the convention — a caller that forgot the test wrote a file named '-'.
         if (output == null || isStdout(output)) {
             System.out.println(content);
+            // A PrintStream never throws: a closed pipe or a full disk only sets a flag. Unchecked, a truncated
+            // or empty PATCH body went out with the exit code of a complete one.
+            if (System.out.checkError()) {
+                throw new IOException("could not write to standard output (closed pipe or full disk?)");
+            }
             return;
         }
         try {

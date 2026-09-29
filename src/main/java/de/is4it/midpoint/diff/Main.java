@@ -5,6 +5,10 @@
  */
 package de.is4it.midpoint.diff;
 
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -132,21 +136,40 @@ public class Main implements java.util.concurrent.Callable<Integer> {
      * <p>Redacting by option name cannot work here: the token that leaks the secret is the value after an
      * option the parser did not recognise, and it did not recognise it precisely because it was mistyped —
      * {@code --pasword} does not contain "pass". So the shape decides instead. Anything that looks like an
-     * option is named, so the operator can see what they got wrong; anything else is withheld.
+     * option is named, so the operator can see what they got wrong; anything else is withheld. So is the value
+     * an option carries in the same token — {@code --pasword=hunter2}, or {@code -Phunter2} for a short one.
      */
-    private static String safeMessage(CommandLine.ParameterException exception) {
+    static String safeMessage(CommandLine.ParameterException exception) {
         if (exception instanceof CommandLine.UnmatchedArgumentException unmatched) {
             StringBuilder tokens = new StringBuilder();
             for (String token : unmatched.getUnmatched()) {
-                tokens.append(tokens.length() == 0 ? "" : ", ")
-                        .append(token.startsWith("-") ? token : "***");
+                tokens.append(tokens.length() == 0 ? "" : ", ").append(withoutValue(token));
             }
             return "unknown argument(s): " + tokens + " (values withheld)";
         }
         return (exception.getMessage() != null) ? exception.getMessage() : "invalid arguments";
     }
 
+    /** An unmatched token as it may be shown: an option's name without any value attached to it. */
+    static String withoutValue(String token) {
+        if (!token.startsWith("-")) {
+            return "***";
+        }
+        int equals = token.indexOf('=');
+        if (equals >= 0) {
+            return token.substring(0, equals) + "=***";
+        }
+        if (!token.startsWith("--") && token.length() > 2) {
+            return token.substring(0, 2) + "***"; // a short option with its value attached
+        }
+        return token;
+    }
+
     public static void main(String[] args) {
+        // Standard output carries the payload — a PATCH body piped into curl or a file — so it is UTF-8 whatever
+        // the locale says. On JDK 17 it followed the platform encoding, and under LANG=C every non-ASCII
+        // character of a name or a description came out as '?', corrupting the data the body then wrote.
+        System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8));
         // Before anything can build an HttpClient: the JDK reads the hostname-verification property once,
         // on first use of java.net.http, so leaving the decision to whichever client is constructed first
         // makes --insecure depend on call order rather than on the flag.
@@ -155,7 +178,30 @@ public class Main implements java.util.concurrent.Callable<Integer> {
         // JDK disables by default. Latched only for a run that configured credentials, so the default keeps
         // protecting everyone else.
         MidpointRestClient.latchProxyTunnelAuth(proxyAuthRequested(args));
-        System.exit(commandLine(args).execute(args));
+        System.exit(run(args));
+    }
+
+    /**
+     * Run the command line and return its exit code — 2 for anything that escapes it.
+     *
+     * <p>picocli handles exceptions, not errors. An {@code OutOfMemoryError}, a {@code StackOverflowError} on
+     * deeply nested XML, or a {@code NoClassDefFoundError} from a packaging slip used to end the JVM with its
+     * own uncaught-throwable status of 1, which this tool's contract defines as "differences found": a CI
+     * gate would have reported drift instead of a failure.
+     */
+    static int run(String[] args) {
+        return run(() -> commandLine(args), args);
+    }
+
+    /** As {@link #run(String[])}, with the command line built by {@code commandLine} — inside the guard too. */
+    static int run(java.util.function.Supplier<CommandLine> commandLine, String[] args) {
+        try {
+            return commandLine.get().execute(args);
+        } catch (Throwable t) {
+            System.err.println("midgie: internal error: " + t);
+            LOG.trace("uncaught", t);
+            return EXIT_ERROR;
+        }
     }
 
     /**
