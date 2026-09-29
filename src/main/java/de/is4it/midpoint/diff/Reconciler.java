@@ -259,6 +259,10 @@ final class Reconciler {
         if (removesRestricted != null) {
             return fail(restType, targetOid, removesRestricted);
         }
+        // A second projection when there are removals (judgeRemovals made the first, of the diff alone), and on
+        // purpose: applying only the removals to that first result would be cheaper, but the removals have just
+        // been merged into the diff's own item deltas for the same paths, and that merged PATCH is what midPoint
+        // applies. The checks below have to judge what the server will hold, so they judge the merged delta.
         DiffEngine.Projection projection = DiffEngine.project(current, delta);
         PrismObject<? extends Objectable> after = projection.after();
         if (projection.failure() != null) {
