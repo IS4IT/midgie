@@ -259,6 +259,11 @@ public final class DiffEngine {
                     + " does not match live oid " + liveOid + ".");
         }
 
+        // prism pairs list values by container id under every strategy, so ids numbered on another server would
+        // pair unrelated entries and edit one into the other. Everything below works on this copy.
+        ContainerIds.Trusted trusted = ContainerIds.trustedOnly(desired, live);
+        desired = trusted.desired();
+
         // before.diff(after) => delta that, applied to `before`, yields `after`. before = live,
         // after = desired, so the delta reconciles the live object to the desired state. REAL_VALUE
         // matches container/property values by content (ignoring PCV ids), which yields clean whole-value
@@ -266,7 +271,7 @@ public final class DiffEngine {
         // merge may see paired/edited values instead of clean add/delete, so applyMerge has less to strip;
         // that is true of the natural-keys half of an auto diff as much as of an explicit --equivalence.
         List<String> equivalenceChoices = new ArrayList<>();
-        List<String> keyPairingDeclined = new ArrayList<>();
+        List<String> keyPairingDeclined = new ArrayList<>(trusted.notes());
         ObjectDelta<? extends Objectable> delta =
                 reconcile(live, desired, equivalence, equivalenceChoices, keyPairingDeclined);
 
@@ -1170,10 +1175,13 @@ public final class DiffEngine {
      * added on the server is invisible to a merge otherwise. Nested containers are followed into the matching
      * live value, so a panel added inside a declared page counts under the panel's own path.
      */
-    static List<LiveOnly> liveOnlyValues(PrismObject<?> desired, PrismObject<?> live) {
+    static List<LiveOnly> liveOnlyValues(PrismObject<? extends Objectable> desired,
+            PrismObject<? extends Objectable> live) {
         Map<String, LiveOnly> found = new LinkedHashMap<>();
         if (live != null) {
-            collectLiveOnly(desired.getValue(), live.getValue(), ItemPath.EMPTY_PATH, found);
+            // With the diff's own view of which ids are this server's, or a foreign id would count as declared.
+            PrismObject<? extends Objectable> pairable = ContainerIds.trustedOnly(desired, live).desired();
+            collectLiveOnly(pairable.getValue(), live.getValue(), ItemPath.EMPTY_PATH, found);
         }
         return new ArrayList<>(found.values());
     }
@@ -1487,10 +1495,11 @@ public final class DiffEngine {
         }
 
         /**
-         * The multi-valued containers {@code --equivalence auto} compared by content instead of pairing their
-         * entries by natural key, one complete message each, naming the container below whose key is not filled
-         * in. A change inside such an entry replaces the entry whole. Empty when the operator named a strategy
-         * outright.
+         * How entries of multi-valued containers were paired where it is not the obvious way, one complete message
+         * each: the containers {@code --equivalence auto} compared by content instead of pairing their entries by
+         * natural key, naming the container below whose key is not filled in (a change inside such an entry
+         * replaces the entry whole), and the containers whose ids in the file were numbered on another server and
+         * so were not used for pairing (see {@link ContainerIds}).
          */
         public List<String> keyPairingDeclined() {
             return keyPairingDeclined;

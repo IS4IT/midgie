@@ -93,6 +93,9 @@ final class NaturalKeys {
      * <p>{@code candidateId} is passed separately because the callers know it differently: the union reads it
      * off the value, while the diff takes it from a delta path segment and may hold no value at all.
      *
+     * <p>An id match is not taken when both values fill in the key and it names different entries: the id was
+     * numbered on another server (see {@link ContainerIds}), and the key is the better evidence.
+     *
      * @return the matching value, or {@code null} when the container holds no counterpart
      */
     static PrismContainerValue<?> match(PrismContainer<?> container, PrismContainerValue<?> candidate,
@@ -100,14 +103,19 @@ final class NaturalKeys {
         if (container == null) {
             return null;
         }
+        NaturalKeyDefinition key = of(container);
         if (candidateId != null) {
             for (PrismContainerValue<?> value : container.getValues()) {
                 if (candidateId.equals(value.getId())) {
-                    return value;
+                    boolean keysDiffer = key != null && candidate != null && carries(key, candidate)
+                            && carries(key, value) && !key.valuesMatch(candidate, value);
+                    if (!keysDiffer) {
+                        return value;
+                    }
+                    break;
                 }
             }
         }
-        NaturalKeyDefinition key = of(container);
         // Both sides must carry the key, else the comparison is vacuous: a key absent from both values (an
         // assignment with no <identifier>) would "match" everything, combining unrelated entries.
         if (candidate == null || key == null || !carries(key, candidate)) {
