@@ -60,6 +60,7 @@ class LiveIntegrationTest {
     private static final String LOOKUP_OID = "a17e57e5-0000-0000-0000-0000000000d4";
     private static final String TEMPLATE_OID = "a17e57e5-0000-0000-0000-0000000000d5";
     private static final String GUI_ROLE_OID = "a17e57e5-0000-0000-0000-0000000000d6";
+    private static final String SMART_ROLE_OID = "a17e57e5-0000-0000-0000-0000000000d7";
     // Built-in roles, only ever induced by the throwaway role, which nobody is assigned.
     private static final String SUPERUSER_ROLE_OID = "00000000-0000-0000-0000-000000000004";
     private static final String END_USER_ROLE_OID = "00000000-0000-0000-0000-000000000008";
@@ -189,6 +190,31 @@ class LiveIntegrationTest {
         CliResult again = run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD);
         assertEquals(0, again.exit, again.err);
         assertTrue(again.out.contains("in-sync"), "a re-deploy must be a no-op, got: " + again.out);
+    }
+
+    @Test
+    void anInducementNamingItsTargetByFilterStaysInSyncOnceResolved(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        tryDelete("roles", SMART_ROLE_OID);
+        // An id-less inducement is compared as a whole value, so the resolved targetRef made the whole entry
+        // differ: every deploy deleted it and added one whose reference named nothing.
+        Path file = dir.resolve("smart-role.xml");
+        Files.writeString(file, "<role xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\""
+                + " xmlns:q=\"http://prism.evolveum.com/xml/ns/public/query-3\" oid=\"" + SMART_ROLE_OID + "\">"
+                + "<name>zz-it-smart-role</name><inducement><targetRef type=\"c:RoleType\"><filter><q:equal>"
+                + "<q:path>c:name</q:path><q:value>End user</q:value></q:equal></filter></targetRef></inducement>"
+                + "</role>", StandardCharsets.UTF_8);
+
+        CliResult create = run("deploy", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        assertEquals(0, create.exit, create.out + create.err);
+        assertTrue(client.getObject("roles", SMART_ROLE_OID).contains(END_USER_ROLE_OID),
+                "midPoint should have resolved the filter at import");
+
+        CliResult again = run("deploy", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        assertEquals(0, again.exit, again.out + again.err);
+        assertTrue(again.out.contains("0 patched, 1 in-sync"),
+                "the resolved inducement must read as in sync:\n" + again.out);
+        assertTrue(client.getObject("roles", SMART_ROLE_OID).contains(END_USER_ROLE_OID), "and keep its OID");
     }
 
     @Test
@@ -957,6 +983,7 @@ class LiveIntegrationTest {
         tryDelete("roles", DEPLOY_MATCH_OID);
         tryDelete("objectTemplates", TEMPLATE_OID);
         tryDelete("roles", GUI_ROLE_OID);
+        tryDelete("roles", SMART_ROLE_OID);
         deleteByName("roles", COMBO_NAME);
     }
 

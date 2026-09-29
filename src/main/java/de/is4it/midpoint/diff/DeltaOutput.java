@@ -10,6 +10,7 @@ import java.util.List;
 
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismReferenceValue;
+import com.evolveum.midpoint.prism.PrismValue;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
@@ -98,7 +99,8 @@ final class DeltaOutput {
             for (Collection<?> side : List.of(
                     orEmpty(mod.getValuesToAdd()), orEmpty(mod.getValuesToReplace()))) {
                 for (Object value : side) {
-                    if (value instanceof PrismReferenceValue reference && reference.getFilter() != null) {
+                    // Inside an added container value too: an inducement added whole carries its targetRef.
+                    if (value instanceof PrismValue prismValue && NestedSmartReferences.setsReferenceByFilter(prismValue)) {
                         return true;
                     }
                 }

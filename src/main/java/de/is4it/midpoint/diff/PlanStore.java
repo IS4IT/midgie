@@ -195,9 +195,11 @@ final class PlanStore {
      * <p>Read from the DOM rather than through prism: {@code --apply-plan} replays a reviewed body verbatim
      * and deliberately never pays the prism bootstrap. It still does not guess from the element name — a
      * {@code filter} counts only when the value carrying it declares itself a reference, by
-     * {@code xsi:type="…ObjectReferenceType"} or by the {@code oid}/{@code relation} attributes only a
-     * reference has. The unrelated {@code SearchFilterType} fields in the schema (an object collection's
-     * filter, a GUI view's) sit in values that declare none of those.
+     * {@code xsi:type="…ObjectReferenceType"}, by the {@code oid}/{@code relation}/{@code type} attributes only a
+     * reference has, or by a reference's {@code …Ref} element name. The last two matter for a reference inside
+     * an added container value — an inducement's {@code targetRef} — which is written without {@code xsi:type}
+     * and, set by filter, without an {@code oid}. The unrelated {@code SearchFilterType} fields in the schema
+     * (an object collection's filter, a GUI view's) sit in values that declare none of those.
      *
      * <p>Erring toward {@code true} is the safe direction: a missed one leaves the reference unresolved and
      * breaks the object, while a spurious one only makes midPoint record a warning that filters already on
@@ -219,7 +221,8 @@ final class PlanStore {
                 String declaredType = parent.getAttributeNS(
                         "http://www.w3.org/2001/XMLSchema-instance", "type");
                 if (declaredType.endsWith("ObjectReferenceType")
-                        || parent.hasAttribute("oid") || parent.hasAttribute("relation")) {
+                        || parent.hasAttribute("oid") || parent.hasAttribute("relation")
+                        || parent.hasAttribute("type") || String.valueOf(parent.getLocalName()).endsWith("Ref")) {
                     return true;
                 }
             }

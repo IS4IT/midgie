@@ -264,6 +264,11 @@ public final class DiffEngine {
         ContainerIds.Trusted trusted = ContainerIds.trustedOnly(desired, live);
         desired = trusted.desired();
 
+        // A smart reference inside a list entry compared by content differs as the whole entry, which the
+        // reference-level strip below never sees; such an entry takes the live references it resolved to.
+        NestedSmartReferences.Resolved nested = NestedSmartReferences.resolve(desired, live, smartRefs);
+        desired = nested.desired();
+
         // before.diff(after) => delta that, applied to `before`, yields `after`. before = live,
         // after = desired, so the delta reconciles the live object to the desired state. REAL_VALUE
         // matches container/property values by content (ignoring PCV ids), which yields clean whole-value
@@ -272,6 +277,7 @@ public final class DiffEngine {
         // that is true of the natural-keys half of an auto diff as much as of an explicit --equivalence.
         List<String> equivalenceChoices = new ArrayList<>();
         List<String> keyPairingDeclined = new ArrayList<>(trusted.notes());
+        keyPairingDeclined.addAll(nested.notes());
         ObjectDelta<? extends Objectable> delta =
                 reconcile(live, desired, equivalence, equivalenceChoices, keyPairingDeclined);
 
@@ -279,6 +285,7 @@ public final class DiffEngine {
         // only midPoint having resolved a smart reference. Ahead of applyMerge because merge would otherwise
         // strip the delete side of a merge-designated reference path and leave nothing to pair the add with.
         List<String> smartReferences = stripResolvedSmartReferences(delta, smartRefs);
+        smartReferences.addAll(nested.paths());
 
         // Before merge and scope, so that it sees every delete of a nested item and can report what it keeps:
         // applyMerge would otherwise clear the deletes of a multi-valued item inside a declared value, and
@@ -723,7 +730,7 @@ public final class DiffEngine {
     }
 
     /** The live value that is {@code desired}'s resolution, or {@code null} when none of them is. */
-    private static PrismReferenceValue matchingResolution(PrismReferenceValue desired,
+    static PrismReferenceValue matchingResolution(PrismReferenceValue desired,
             List<PrismReferenceValue> liveValues, Set<PrismReferenceValue> taken, SmartReferenceCheck check) {
         if (desired.getOid() != null || desired.getFilter() == null) {
             return null; // not a smart reference: it names its target outright, or names nothing

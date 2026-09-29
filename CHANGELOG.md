@@ -19,6 +19,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Merge no longer sends an empty delete beside an add.** When merge kept every value a list's delete side would have removed, the emptied delete still went out as a `<delete>` item delta with no value next to the add, and the summary read `add+delete`. It is now left out.
 
+- **A smart reference inside an inducement or assignment is recognised.** A filter-only `targetRef` or `construction/resourceRef` inside an entry without a container id made the whole entry differ from the server's resolved copy, and the reference-level check never saw it: every deploy deleted the resolved inducement and added one whose reference named nothing, sent without `reevaluateSearchFilters`, so midPoint stored it unresolved. Under merge a duplicate was added on every run instead. Such an entry now reads as in sync when the server's copy is its resolution; when several entries could be, it is left as a change and `-v` suggests `--smart-refs verify`. An entry still sent whole — and a plan file holding one — goes out with `reevaluateSearchFilters`.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed
