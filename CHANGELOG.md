@@ -51,6 +51,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The duplicate-key check says when it could not run.** A change prism could not apply to a local copy of the object skipped the check silently; `deploy` and `diff` now say so.
 
+- **A key left empty inside an entry no longer demotes the whole list.** One `<addFocus/>` without a `<name>` in a synchronization reaction made `--equivalence auto` compare every `schemaHandling/objectType` by content, so any edit inside an object type replaced it whole — a new container id, and what the server had added inside it gone — and under merge relied on the old-form and duplicate-key safeguards to avoid a second copy. The same held for an `objectDetailsPage` with one panel lacking its `<identifier>`. A list that fills in its own key is now paired by it and edited in place; only the list below that leaves its key empty is compared by content. `-v` names that inner list. A list that leaves its own key empty (`assignment`, `inducement`) is compared by content as before.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

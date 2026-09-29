@@ -161,15 +161,31 @@ final class NaturalKeys {
         return true;
     }
 
+    /** How {@code --equivalence auto} pairs the entries of one subtree. */
+    enum Pairing {
+        /** Every list in the subtree fills in its key: prism's natural-key pairing is safe throughout. */
+        NATURAL_KEYS,
+        /**
+         * The list itself fills in its key, a list below it does not. Its entries (and every keyed list inside
+         * them that fills in its key) take the live entries' container ids by key, and the subtree is diffed
+         * pairing by id alone: an entry is edited in place, and only the list that does not fill in its key is
+         * compared by content.
+         */
+        IDS,
+        /** The list itself does not fill in its key (or declares none while a list below it is unsafe). */
+        CONTENT
+    }
+
     /**
      * One decision of the {@code --equivalence auto} walk: a multi-valued container of the desired object,
-     * and whether natural-key pairing is safe throughout the subtree it roots.
+     * and how the subtree it roots is paired.
      *
-     * @param path           the container's id-free item path
-     * @param naturalKeySafe whether the subtree may be diffed under {@code natural-keys}
-     * @param reason         why not, naming the offending container and its key; {@code null} when safe
+     * @param path    the container's id-free item path
+     * @param pairing how its entries are paired
+     * @param reason  for anything but {@link Pairing#NATURAL_KEYS}, the list that does not fill in its key and
+     *                why; {@code null} otherwise
      */
-    record AutoBucket(ItemPath path, boolean naturalKeySafe, String reason) {
+    record AutoBucket(ItemPath path, Pairing pairing, String reason) {
     }
 
     /**
@@ -188,7 +204,10 @@ final class NaturalKeys {
      * <p>A cut is safe for natural keys only when <em>no</em> container in its whole subtree declares a key
      * that its values fail to fill in — which is what keeps {@code assignment} and friends out, with no
      * hardcoded deny list: they declare {@code identifier}, real configuration omits it, and so the subtree
-     * is rejected on its own evidence.
+     * is rejected on its own evidence. A subtree whose own list does fill in its key is still paired by that
+     * key ({@link Pairing#IDS}); only the list below that does not is compared by content. Before that tier a
+     * {@code schemaHandling/objectType}, keyed by {@code kind + intent} and filled in, was compared whole as
+     * soon as one reaction's {@code <addFocus/>} had no {@code <name>}, and every edit inside it replaced it.
      */
     static List<AutoBucket> autoBuckets(PrismObject<?> object) {
         List<AutoBucket> buckets = new ArrayList<>();
@@ -208,7 +227,11 @@ final class NaturalKeys {
             ItemPath path = prefix.append(item.getElementName());
             if (definition.isMultiValue()) {
                 String unsafe = firstUnfilledKey(container, path);
-                buckets.add(new AutoBucket(path, unsafe == null, unsafe));
+                NaturalKeyDefinition key = of(container);
+                Pairing pairing = (unsafe == null) ? Pairing.NATURAL_KEYS
+                        : (key != null && allCarry(key, container)) ? Pairing.IDS
+                        : Pairing.CONTENT;
+                buckets.add(new AutoBucket(path, pairing, unsafe));
             } else {
                 for (PrismContainerValue<?> child : container.getValues()) {
                     collectBuckets(child, path, buckets);

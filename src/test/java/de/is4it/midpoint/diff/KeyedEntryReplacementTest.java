@@ -39,14 +39,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * A keyed entry that {@code --equivalence auto} cannot pair with its live copy, because something inside it
- * leaves its own natural key empty.
+ * A keyed entry with something inside it that leaves its own natural key empty.
  *
  * <p>The case that surfaced it: a resource's {@code schemaHandling/objectType}, keyed by {@code kind + intent}
- * and filled in, holding a synchronization reaction whose {@code <addFocus/>} has no {@code <name>}. Auto
- * compares the whole object type by content, so an edit inside it diffs to "add the new form, delete the
- * old". On a tracked tree the list is on merge, which dropped the delete as a value beyond the tree — and the
- * server ended up with two object types of one kind and intent, which midPoint refuses to load.
+ * and filled in, holding a synchronization reaction whose {@code <addFocus/>} has no {@code <name>}. Auto used to
+ * compare the whole object type by content, so an edit inside it diffed to "add the new form, delete the old";
+ * on a tracked tree the list is on merge, which dropped the delete as a value beyond the tree — and the server
+ * ended up with two object types of one kind and intent, which midPoint refuses to load. Auto now pairs the object
+ * type by its key and compares only the unnamed actions by content; the old-form and duplicate-key safeguards
+ * these tests also cover stay for the lists that still are compared whole.
  */
 class KeyedEntryReplacementTest {
 
@@ -104,7 +105,10 @@ class KeyedEntryReplacementTest {
     }
 
     @Test
-    void mergeReplacesAKeyedEntryItCouldNotPairInsteadOfAddingASecondCopy() throws Exception {
+    void anEntryIsEditedInPlaceAlthoughAListInsideItLeavesItsKeyEmpty() throws Exception {
+        // The object type fills in kind + intent, so it is paired by them and edited where it stands, keeping its
+        // container id; only the unnamed <addFocus/> list inside it is compared by content. It used to be the
+        // whole object type that was compared by content, and replaced — or, under merge, added a second time.
         PrismObject<? extends Objectable> live = parse(resource(
                 objectType(2L, "task", "Old"), objectType(10L, "other", "Someone else's")));
         PrismObject<? extends Objectable> desired = parse(resource(objectType(null, "task", "New")));
@@ -113,16 +117,29 @@ class KeyedEntryReplacementTest {
                 DiffEngine.EquivalencePlan.auto(), DiffEngine.Scope.PRESENT,
                 DiffEngine.MultiValueStrategy.of(true, List.of()), DiffEngine.SmartReferenceCheck.NEVER);
 
-        assertTrue(result.keyPairingDeclined().stream()
-                        .anyMatch(m -> m.startsWith("schemaHandling/objectType ") && m.contains("addFocus")),
-                "auto must say it compared the object types by content, and name the unnamed action: "
-                        + result.keyPairingDeclined());
+        assertEquals("replace schemaHandling/objectType/2/displayName",
+                DeltaOutput.toSummary(result.delta()).strip(), "one in-place edit, nothing added or deleted");
+        assertTrue(result.keyPairingDeclined().stream().anyMatch(m -> m.startsWith(
+                        "schemaHandling/objectType/synchronization/reaction/actions/addFocus does not fill in its key")
+                        && m.contains("schemaHandling/objectType itself is still paired by its key")),
+                "-v names the list compared by content, not the object type: " + result.keyPairingDeclined());
         PrismObject<? extends Objectable> after = DiffEngine.project(live, result.delta()).after();
-        // The edited entry is replaced, not duplicated; the entry the tree never declared stays, as merge
-        // promises.
-        assertEquals(List.of("other=Someone else's", "task=New"), objectTypes(after),
-                "the PATCH must leave one task object type, the new one: " + result.delta());
-        assertEquals(List.of(), NaturalKeys.introducedDuplicates(live, after));
+        assertEquals(List.of("other=Someone else's", "task=New"), objectTypes(after));
+    }
+
+    @Test
+    void aChangeInsideTheUnnamedListReplacesOnlyThatEntry() throws Exception {
+        PrismObject<? extends Objectable> live = parse(resource(objectType(2L, "task", "Same")));
+        PrismObject<? extends Objectable> desired = parse(resource(objectType(null, "task", "Same")
+                .replace("<addFocus/>", "<addFocus><description>new</description></addFocus>")));
+
+        DiffEngine.DiffResult result = new DiffEngine(prismContext).diff(desired, live,
+                DiffEngine.EquivalencePlan.auto(), DiffEngine.Scope.PRESENT,
+                DiffEngine.MultiValueStrategy.replaceAll(), DiffEngine.SmartReferenceCheck.NEVER);
+
+        assertEquals("add+delete schemaHandling/objectType/2/synchronization/reaction/3/actions/addFocus"
+                        + "  (removes 1 value)", DeltaOutput.toSummary(result.delta()).strip(),
+                "the object type and its reaction stay; the unnamed action is replaced");
     }
 
     @Test
@@ -186,9 +203,9 @@ class KeyedEntryReplacementTest {
 
         Result verbose = run("diff", desired.toString(), live.toString(), "-v");
         assertEquals(1, verbose.exit, verbose.err);
-        assertTrue(verbose.err.contains("midgie: note: schemaHandling/objectType is compared as whole values, "
-                + "not paired by natural key: schemaHandling/objectType/synchronization/reaction/actions/addFocus "
-                + "does not fill in its key (name)"), verbose.err);
+        assertTrue(verbose.err.contains("midgie: note: schemaHandling/objectType/synchronization/reaction/actions/"
+                + "addFocus does not fill in its key (name), so its entries are compared as whole values"),
+                verbose.err);
 
         Result refused = run("diff", twice.toString(), live.toString());
         assertEquals(2, refused.exit, refused.err);

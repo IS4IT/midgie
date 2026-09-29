@@ -162,6 +162,29 @@ class LiveIntegrationTest {
     }
 
     @Test
+    void aPageWithAnUnnamedPanelIsStillEditedInPlace(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteTestUser();
+
+        // One panel without an <identifier> used to push the whole page to real-value: any edit replaced it, and
+        // midPoint handed out fresh ids for the page and every panel on it. The page is paired by its type now,
+        // the keyed panel by its identifier, and only the unnamed one is compared by content.
+        File created = writeKeyedPanels(dir, "v1", 20, true);
+        assertEquals(0, run("deploy", created.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes").exit);
+        List<String> idsBefore = containerIds(client.getObject("users", TEST_OID));
+        assertEquals(4, idsBefore.size(), "the page and its three panels carry ids: " + idsBefore);
+
+        File edited = writeKeyedPanels(dir, "v2", 25, true);
+        assertEquals(0, run("deploy", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes").exit);
+        String after = client.getObject("users", TEST_OID);
+        assertEquals(idsBefore, containerIds(after), "the page and its panels keep their ids:\n" + after);
+        assertTrue(after.contains("<displayOrder>25</displayOrder>"), after);
+        assertEquals(0, run("diff", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--format", "summary").exit, "and the object is in sync afterwards");
+    }
+
+    @Test
     void deployCreatesPatchesAndIsIdempotentForOneFile(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteTestUser(); // isolate from the other test's use of the shared OID
@@ -1155,6 +1178,12 @@ class LiveIntegrationTest {
 
     /** A user whose {@code adminGuiConfiguration} holds two panels keyed by {@code identifier}. */
     private static File writeKeyedPanels(Path dir, String tag, int assignmentsOrder) throws IOException {
+        return writeKeyedPanels(dir, tag, assignmentsOrder, false);
+    }
+
+    /** As above, with {@code unnamedPanel} adding a third panel that carries no {@code <identifier>}. */
+    private static File writeKeyedPanels(Path dir, String tag, int assignmentsOrder, boolean unnamedPanel)
+            throws IOException {
         String xml = "<user xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\" oid=\"" + TEST_OID + "\">\n"
                 + "  <name>zz-it-user</name>\n"
                 + "  <adminGuiConfiguration><objectDetails>\n"
@@ -1163,6 +1192,7 @@ class LiveIntegrationTest {
                 + "      <panel><identifier>basic</identifier><displayOrder>10</displayOrder></panel>\n"
                 + "      <panel><identifier>assignments</identifier><displayOrder>"
                 + assignmentsOrder + "</displayOrder></panel>\n"
+                + (unnamedPanel ? "      <panel><displayOrder>99</displayOrder></panel>\n" : "")
                 + "    </objectDetailsPage>\n"
                 + "  </objectDetails></adminGuiConfiguration>\n"
                 + "</user>";

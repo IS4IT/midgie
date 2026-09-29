@@ -708,13 +708,11 @@ class DiffCommandTest {
     }
 
     @Test
-    void aNestedUnfilledKeyDisqualifiesTheWholeSubtree(@TempDir Path dir) throws Exception {
-        // Ancestry closure. A bucket may never cut inside a multi-valued container, because the two passes
-        // express a change there at different depths: natural-keys emits objectDetailsPage/84/panel,
-        // real-value a whole-value add/delete at objectDetailsPage. So the verdict has to be taken for a
-        // whole subtree at once — here objectDetailsPage fills in its own key (type) perfectly well, but one
-        // of the panels below it has no <identifier>, and that one panel would pair vacuously. The page must
-        // fall to real-value with it rather than pair the sound part and leave the unsound part mispaired.
+    void aNestedUnfilledKeyLeavesThePageKeyedAndComparesOnlyThePanelsByContent(@TempDir Path dir) throws Exception {
+        // objectDetailsPage fills in its own key (type); one panel below it has no <identifier>, and would pair
+        // vacuously under natural keys. The page is paired by its type and edited where it stands; the panels
+        // are paired by id alone, so without ids they are compared by content. This used to push the whole
+        // page to real-value, replacing it — ids and all — for any change inside.
         File live = write(dir, "live.xml", userWithPanels("84", assignment("1", "role-1"),
                 panel("283", "basic", null), panel("284", "aielcm-delimited-values", 15)));
         File desired = write(dir, "desired.xml", userWithPanels(null, assignment(null, "role-1"),
@@ -725,12 +723,19 @@ class DiffCommandTest {
                 DiffEngine.SmartReferenceCheck.NEVER);
 
         assertTrue(result.equivalenceChoices().stream()
-                        .anyMatch(c -> c.contains("objectDetailsPage=real-value") && c.contains("panel")
+                        .anyMatch(c -> c.contains("objectDetailsPage=ids") && c.contains("panel")
                                 && c.contains("identifier")),
-                "the page must be rejected, naming the nested panel and its key: " + result.equivalenceChoices());
+                "the page is paired by its key, naming the panel list and its key: " + result.equivalenceChoices());
         assertTrue(result.equivalenceChoices().stream().noneMatch(c -> c.contains("natural-keys")),
                 "nothing in this object may claim a natural-keys bucket: " + result.equivalenceChoices());
         assertNoOverlappingPaths(result);
+        for (ItemDelta<?, ?> mod : result.delta().getModifications()) {
+            String path = mod.getPath().toString();
+            if (path.contains("objectDetailsPage")) {
+                assertTrue(path.contains("objectDetailsPage/84/panel"),
+                        "the page stays; only a panel is added or deleted: " + path);
+            }
+        }
     }
 
     @Test
@@ -748,6 +753,30 @@ class DiffCommandTest {
         DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
                 DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll(),
                 DiffEngine.SmartReferenceCheck.NEVER);
+        assertNoOverlappingPaths(result);
+
+        PrismObject<? extends Objectable> patched = live.clone();
+        ((ObjectDelta) result.delta()).applyTo(patched);
+        assertTrue(patched.equivalent(desired),
+                "the combined delta must reconcile live to desired:\n" + patched.debugDump());
+    }
+
+    @Test
+    void autoCombinesThePassByIdWithTheOthersWithoutOverlappingOrLosingDeltas(@TempDir Path dir) throws Exception {
+        // The same round trip with a page paired by id: its unnamed panel changes, the other is kept, and an
+        // assignment changes beside it in the real-value pass.
+        PrismObject<? extends Objectable> live = prismContext.parseObject(write(dir, "live.xml",
+                userWithPanels("84", assignment("1", "role-1") + assignment("2", "role-2"),
+                        panel("283", "basic", null), "        <panel id=\"284\"><displayOrder>15</displayOrder></panel>\n")));
+        PrismObject<? extends Objectable> desired = prismContext.parseObject(write(dir, "desired.xml",
+                userWithPanels(null, assignment(null, "role-1") + assignment(null, "role-3"),
+                        panel(null, "basic", null), "        <panel><displayOrder>16</displayOrder></panel>\n")));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, DiffEngine.EquivalencePlan.auto(),
+                DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll(),
+                DiffEngine.SmartReferenceCheck.NEVER);
+        assertTrue(result.equivalenceChoices().stream().anyMatch(c -> c.contains("objectDetailsPage=ids")),
+                result.equivalenceChoices().toString());
         assertNoOverlappingPaths(result);
 
         PrismObject<? extends Objectable> patched = live.clone();

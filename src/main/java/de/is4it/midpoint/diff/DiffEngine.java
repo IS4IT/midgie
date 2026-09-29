@@ -577,68 +577,104 @@ public final class DiffEngine {
 
     /**
      * The {@code --equivalence auto} diff: {@code natural-keys} where the schema's keys are filled in and
-     * pairing is therefore safe, {@code real-value} everywhere else, within one object.
+     * pairing is therefore safe, pairing by container id where a list fills in its key but one below it does
+     * not, {@code real-value} everywhere else, within one object.
      *
-     * <p>prism takes one equivalence per whole-object diff, so the object is diffed <b>twice</b> and each
-     * item delta is kept from the pass its path belongs to. That is sound because the item deltas of an
-     * {@code ObjectModificationType} are independent, and because the buckets never cut into a multi-valued
-     * container (see {@link NaturalKeys#autoBuckets}), so the two passes never express the same change at
-     * paths that land in different buckets.
+     * <p>prism takes one equivalence per whole-object diff, so the object is diffed once per strategy in use —
+     * up to three times — and each item delta is kept from the pass its path belongs to. That is sound because
+     * the item deltas of an {@code ObjectModificationType} are independent, and because the buckets never cut
+     * into a multi-valued container (see {@link NaturalKeys#autoBuckets}), so no two passes express the same
+     * change at paths that land in different buckets.
      *
-     * <p>Diffing twice is only needed when the object genuinely splits. With nothing safe to pair this is a
-     * single {@code real-value} pass — byte-identical to the old default — and with nothing to protect it is
-     * a single {@code natural-keys} pass.
+     * <p>The id pass ({@link NaturalKeys.Pairing#IDS}) runs {@code consider-different-ids} over the copy whose
+     * keyed entries took the live ids ({@link #adoptLiveIds}). With natural keys out of the strategy, prism
+     * pairs by id and compares everything without one by content, so the list that does not fill in its key
+     * is never paired vacuously, while the entries around it are still edited in place.
      *
-     * <p>{@code choices} receives one entry per container, for the debug log; {@code declined} only the
-     * containers left to {@code real-value}, each as a sentence naming the reason, for the note {@code -v}
-     * prints.
+     * <p>With nothing safe to pair this is a single {@code real-value} pass — byte-identical to the old
+     * default — and with nothing to protect it is a single {@code natural-keys} pass.
+     *
+     * <p>{@code choices} receives one entry per container, for the debug log; {@code declined} the lists compared
+     * by content, each as a sentence naming the reason, for the note {@code -v} prints.
      */
     private static <O extends Objectable> ObjectDelta<O> reconcileAuto(
             PrismObject<O> live, PrismObject<O> desired, List<String> choices, List<String> declined) {
 
         List<List<String>> naturalKeyPaths = new ArrayList<>();
+        List<List<String>> idPaths = new ArrayList<>();
         PrismObject<O> withIds = desired.clone();
         int total = 0;
         for (NaturalKeys.AutoBucket bucket : NaturalKeys.autoBuckets(desired)) {
             total++;
-            if (bucket.naturalKeySafe()) {
-                naturalKeyPaths.add(localNames(bucket.path()));
-                adoptLiveIdsAt(withIds, live, bucket.path());
-                choices.add(pathText(bucket.path()) + "=natural-keys");
-            } else {
-                choices.add(pathText(bucket.path()) + "=real-value (" + bucket.reason() + ")");
-                declined.add(pathText(bucket.path()) + " is compared as whole values, not paired by natural key: "
-                        + bucket.reason() + ", so a change inside one of its entries replaces that entry whole");
+            String path = pathText(bucket.path());
+            switch (bucket.pairing()) {
+                case NATURAL_KEYS -> {
+                    naturalKeyPaths.add(localNames(bucket.path()));
+                    adoptLiveIdsAt(withIds, live, bucket.path());
+                    choices.add(path + "=natural-keys");
+                }
+                case IDS -> {
+                    // Keyed levels take the live ids by key; a list that does not fill in its key keeps none, and
+                    // pairing by id alone then compares its entries by content — without natural keys in the
+                    // strategy, prism has no vacuous key match to fall back on.
+                    idPaths.add(localNames(bucket.path()));
+                    adoptLiveIdsAt(withIds, live, bucket.path());
+                    choices.add(path + "=ids (" + bucket.reason() + ")");
+                    declined.add(bucket.reason() + ", so its entries are compared as whole values: a change inside "
+                            + "one replaces that entry whole. " + path + " itself is still paired by its key");
+                }
+                case CONTENT -> {
+                    choices.add(path + "=real-value (" + bucket.reason() + ")");
+                    declined.add(path + " is compared as whole values, not paired by natural key: "
+                            + bucket.reason() + ", so a change inside one of its entries replaces that entry whole");
+                }
             }
         }
 
-        if (naturalKeyPaths.isEmpty()) {
+        int contentBuckets = total - naturalKeyPaths.size() - idPaths.size();
+        if (contentBuckets == total) {
             return live.diff(desired, EquivalenceStrategy.REAL_VALUE);
         }
         if (naturalKeyPaths.size() == total) {
             return live.diff(withIds, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
         }
 
-        ObjectDelta<O> natural =
-                live.diff(withIds, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
+        // One pass per strategy in use, each keeping the item deltas under its own buckets; the real-value pass
+        // keeps everything else — plain properties and single-valued containers, where all three agree.
+        List<ObjectDelta<O>> passes = new ArrayList<>();
+        List<List<String>> claimed = new ArrayList<>();
+        if (!naturalKeyPaths.isEmpty()) {
+            ObjectDelta<O> natural =
+                    live.diff(withIds, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS);
+            retainBucket(natural, naturalKeyPaths, true);
+            passes.add(natural);
+            claimed.addAll(naturalKeyPaths);
+        }
+        if (!idPaths.isEmpty()) {
+            ObjectDelta<O> byId = live.diff(withIds, EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS);
+            retainBucket(byId, idPaths, true);
+            passes.add(byId);
+            claimed.addAll(idPaths);
+        }
         ObjectDelta<O> real = live.diff(desired, EquivalenceStrategy.REAL_VALUE);
-        retainBucket(natural, naturalKeyPaths, true);
-        retainBucket(real, naturalKeyPaths, false);
-        // Copy first: getModifications() hands back the delta's own live collection.
-        natural.addModifications(new ArrayList<>(real.getModifications()));
-        return natural;
+        retainBucket(real, claimed, false);
+        ObjectDelta<O> combined = passes.get(0);
+        for (ObjectDelta<O> pass : passes.subList(1, passes.size())) {
+            // Copy first: getModifications() hands back the delta's own live collection.
+            combined.addModifications(new ArrayList<>(pass.getModifications()));
+        }
+        combined.addModifications(new ArrayList<>(real.getModifications()));
+        return combined;
     }
 
     /**
-     * Drop every item delta that does not belong to this pass. A modification belongs to the natural-keys
-     * bucket when one of {@code naturalKeyPaths} is a prefix of its (id-free) path; everything else — plain
-     * properties, single-valued containers, and the multi-valued containers auto rejected — belongs to the
-     * real-value bucket, where the two strategies agree anyway.
+     * Drop every item delta that does not belong to this pass: with {@code keepInside}, those not under one of
+     * {@code paths}; without it, those under one.
      */
-    private static void retainBucket(ObjectDelta<?> delta, List<List<String>> naturalKeyPaths, boolean keepInside) {
+    private static void retainBucket(ObjectDelta<?> delta, List<List<String>> paths, boolean keepInside) {
         List<ItemDelta<?, ?>> toRemove = new ArrayList<>();
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
-            if (isUnder(localNames(mod.getPath()), naturalKeyPaths) != keepInside) {
+            if (isUnder(localNames(mod.getPath()), paths) != keepInside) {
                 toRemove.add(mod);
             }
         }
