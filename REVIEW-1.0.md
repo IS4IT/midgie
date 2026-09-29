@@ -77,10 +77,10 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 ## Design / duplication
 
-- [ ] **D1 — Whole keyed list demoted to real-value because a nested entry lacks its key.** `NaturalKeys.java:201`. Pair the outer entry by its own filled key and compare only the unsafe nested list by content; removes the need for the merge special case, the duplicate refusal and the `-v` note.
-- [ ] **D2 — `matchingLiveValue` re-implements `NaturalKeys.match`.** `DiffEngine.java:1243-1262`. Call `NaturalKeys.match` so warnings and the "kept" report pair like the diff.
-- [ ] **D3 — Three near-copy path walkers.** `DiffEngine.java:409` (`declarationAt`), `:969` (`desiredDeclaresValueAt`), `:1375` (`desiredContainerAt`); only `declarationAt` checks `hasNoValues`. Unify into one walker.
-- [ ] **D4 — Every PATCH projects the object twice.** `Reconciler.java:403` (`judgeRemovals` inline projection) and `:258` (`planPatch`). Reuse `DiffEngine.project`.
+- [x] **D1 — Whole keyed list demoted to real-value because a nested entry lacks its key.** `NaturalKeys.java:201`. Pair the outer entry by its own filled key and compare only the unsafe nested list by content; removes the need for the merge special case, the duplicate refusal and the `-v` note. — `7d95091`. Probe on 4.10.5 showed assigning ids under `natural-keys` does not stop a vacuous key match, so the keyed outer list gets its own pass under `consider-different-ids` instead; confirmed live.
+- [x] **D2 — `matchingLiveValue` re-implements `NaturalKeys.match`.** `DiffEngine.java:1243-1262`. Call `NaturalKeys.match` so warnings and the "kept" report pair like the diff. — `09673a1`
+- [x] **D3 — Three near-copy path walkers.** `DiffEngine.java:409` (`declarationAt`), `:969` (`desiredDeclaresValueAt`), `:1375` (`desiredContainerAt`); only `declarationAt` checks `hasNoValues`. Unify into one walker. — `468a1e6`
+- [x] **D4 — Every PATCH projects the object twice.** `Reconciler.java:403` (`judgeRemovals` inline projection) and `:258` (`planPatch`). Reuse `DiffEngine.project`. — kept deliberately: the duplicated code went with M5 (`d6d28ba`); the second projection stays because the removals merge into the diff's item deltas and the checks must judge that merged PATCH — explained at the call.
 
 ## Minor
 
