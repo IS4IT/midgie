@@ -41,38 +41,38 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **M4 — Removal-detection failures are swallowed and the unit still advances.** — `ff205ad`. Unparseable history and failed comparisons hold the object's rows back; contradicting history lets them move on (it would fail every run), with a `--quiet`-proof warning either way. `RemovalDetector.java:348-352, 428-435, 600-602, 762-768`. *Confirmed.*
   Exceptions in history parse/union/walk yield "no removals" at TRACE; `detectionBroken` is not set and `recordState` marks old paths consumed, so dropped values stay on the server permanently. Treat like unreadable blobs (`DeployCommand:622-630`).
 
-- [ ] **M5 — `project()` swallows exceptions, silently skipping the duplicate-key refusal.** `DiffEngine.java:1424`; callers `DiffCommand:227`, `Reconciler:261`. *Confirmed.*
+- [x] **M5 — `project()` swallows exceptions, silently skipping the duplicate-key refusal.** `DiffEngine.java:1424`; callers `DiffCommand:227`, `Reconciler:261`. *Confirmed.* — `d6d28ba`
   Report the projection failure as `judgeRemovals` does.
 
 ### Input handling
 
-- [ ] **M6 — Symlinked files and directories are silently skipped.** `Discovery.java:637, 653`. *Confirmed.*
+- [x] **M6 — Symlinked files and directories are silently skipped.** `Discovery.java:637, 653`. *Confirmed.* — `87c3be7`
   No `FOLLOW_LINKS`. A symlinked object file is dropped with exit 0; a Kubernetes ConfigMap mount (`..data` symlinks) or a symlinked root gives "holds no files at all", exit 2.
 
-- [ ] **M7 — Malformed XML / unparseable SchemaType files are warnings only, hidden by `-q`.** `Discovery.java:546-551, 572-575`. *Confirmed.*
+- [x] **M7 — Malformed XML / unparseable SchemaType files are warnings only, hidden by `-q`.** `Discovery.java:546-551, 572-575`. *Confirmed.* — `87c3be7`
   A file with leftover merge markers is skipped, the run exits 0, and under tracking the object reads as "no longer declared". Fail the run like `parseObjects` does (`DeployCommand:417-424`).
 
-- [ ] **M8 — An explicitly named malformed `--schema` file is only warned about.** `SchemaOptions.java:600-609, 655-674`. *Confirmed.*
+- [x] **M8 — An explicitly named malformed `--schema` file is only warned about.** `SchemaOptions.java:600-609, 655-674`. *Confirmed.* — `87c3be7`
   The delta is computed without it (extension items diff as raw). Contradicts the code's own comment at `:603`; DESIGN documents warn-and-skip, so update both.
 
 ### Credentials and output
 
-- [ ] **M9 — Config-file `password` beats CLI `--password-file`/`--password-env`.** `ConnectionOptions.java:325-347`, same pattern in `resolveProxyPassword` `:294-306`. *Confirmed.*
+- [x] **M9 — Config-file `password` beats CLI `--password-file`/`--password-env`.** `ConnectionOptions.java:325-347`, same pattern in `resolveProxyPassword` `:294-306`. *Confirmed.* — `906530e`
   Contradicts README:551 and DESIGN:214. The existing test puts `password-file` in the file, so it misses this case.
 
-- [ ] **M10 — Connector passwords are not recognised as protected when untyped.** `DiffEngine.java:797-830`. *Confirmed for untyped values; whether midPoint REST omits `xsi:type` there is plausible, check against the docker rig.*
+- [x] **M10 — Connector passwords are not recognised as protected when untyped.** `DiffEngine.java:797-830`. *Confirmed for untyped values; whether midPoint REST omits `xsi:type` there is plausible, check against the docker rig.* — `d6d28ba` (confirmed against 4.10.5: `bindPassword` comes back as `<t:encryptedData>` with no `xsi:type`)
   `bindPassword` cleartext goes into PATCHes, dry-run output, plan and rollback files, and drifts every run.
 
-- [ ] **M11 — `--opt=secret` form of an unknown option is echoed.** `Main.java:414-424`. *Confirmed.*
+- [x] **M11 — `--opt=secret` form of an unknown option is echoed.** `Main.java:414-424`. *Confirmed.* — `906530e`
   `--pasword=hunter2` prints the value. Print only the part before `=`.
 
-- [ ] **M12 — `java.lang.Error` exits 1 ("differences found").** `Main.java:435`, `DiffCommand.java:270`. *Confirmed.*
+- [x] **M12 — `java.lang.Error` exits 1 ("differences found").** `Main.java:435`, `DiffCommand.java:270`. *Confirmed.* — `906530e`
   OOM, StackOverflowError, NoClassDefFoundError from shading. Catch `Throwable` in `main`, exit 2.
 
-- [ ] **M13 — Failed stdout write is silent.** `Io.java:108`. *Confirmed (`> /dev/full` exits 1).*
+- [x] **M13 — Failed stdout write is silent.** `Io.java:108`. *Confirmed (`> /dev/full` exits 1).* — `906530e`
   Check `System.out.checkError()` and exit 2.
 
-- [ ] **M14 — Stdout uses the platform encoding.** `Io.java:108`. *Confirmed (`LANG=C` turns `Größe` into `Gr??e`).*
+- [x] **M14 — Stdout uses the platform encoding.** `Io.java:108`. *Confirmed (`LANG=C` turns `Größe` into `Gr??e`).* — `906530e` (checked with the jar under `LANG=C`)
   Wrap stdout in a UTF-8 `PrintStream`.
 
 ## Design / duplication
@@ -102,7 +102,7 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [ ] **E2 — `NaturalKeys.of()`/`carries()` catch `RuntimeException` silently.** `NaturalKeys.java:43-47, 62-80`.
 - [x] **E3 — A failed inverse drops the object from the rollback manifest.** — `373271b` `RollbackPlan.java:187, 197-206`. Logged at DEBUG; the Javadoc at `:171-172` claims the manifest shows it. Deploy reports "N object(s) undoable" with no warning.
 - [ ] **E4 — Failed state write is hidden by `-q`.** `DeployCommand.java:891-894`. Use `warn()`.
-- [ ] **E5 — Unreadable `--schema-dir` is treated as empty.** `SchemaOptions.java:641-647`.
+- [x] **E5 — Unreadable `--schema-dir` is treated as empty.** `SchemaOptions.java:641-647`. — `87c3be7`
 - [ ] **E6 — Xerces prints raw `[Fatal Error] …` to stderr, ignoring `-q`.** `Io.java:91`, `SchemaOptions.java:659`, discovery. Install a silent error handler.
 - [ ] **E7 — Generic `IOException` from `send` is neither retried for safe reads nor wrapped; `SSLException` is not a `TransportException`.** `MidpointRestClient.java:467, 473-485`.
 - [ ] **E8 — `isProxyAuthFailure` matches any message containing `exchImpl`.** `MidpointRestClient.java:614-624`. *Plausible.*
