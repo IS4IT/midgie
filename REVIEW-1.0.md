@@ -29,16 +29,16 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 ### Deploy and rollback safety
 
-- [ ] **M1 — Fatal error mid-apply leaves no rollback plan.** `DeployCommand.java:494-518, 1078-1080`. *Confirmed (stub server).*
+- [x] **M1 — Fatal error mid-apply leaves no rollback plan.** — `d8b95f6` `DeployCommand.java:494-518, 1078-1080`. *Confirmed (stub server).*
   A 401/`IOException` is rethrown out of `runApply`; `writeRollbackPlan` only runs after it returns. Write the plan in a `finally`.
 
-- [ ] **M2 — `--apply-plan` writes no rollback plan and records no tracking state.** `DeployCommand.java:344-345, 1291-1331`. *Confirmed.*
+- [x] **M2 — `--apply-plan` writes no rollback plan and records no tracking state.** — `373271b`. The missing state was the bigger half: a plan-only pipeline never moved its rows, so a value added by one plan and dropped by the next stayed. `--plan` now writes `state.xml`; confirmed live. `DeployCommand.java:344-345, 1291-1331`. *Confirmed.*
   Contradicts README:208-210 and DESIGN:407. `--rollback-plan`/`--no-rollback-plan` are silently accepted with it (missing from the "no effect" list at `:303-329`).
 
-- [ ] **M3 — `rollback` never updates midgie-state rows.** `RollbackCommand.java`. *Traced; consequence plausible.*
+- [x] **M3 — `rollback` never updates midgie-state rows.** — `9aa4485` (confirmed live before the fix: redeploying v2 after a rollback kept `beta`). `RollbackCommand.java`. *Traced; consequence plausible.*
   After a rollback, last-applied still points at the rolled-back content; re-deploying it under merge detects no removal and the object ends up holding old and new values.
 
-- [ ] **M4 — Removal-detection failures are swallowed and the unit still advances.** `RemovalDetector.java:348-352, 428-435, 600-602, 762-768`. *Confirmed.*
+- [x] **M4 — Removal-detection failures are swallowed and the unit still advances.** — `ff205ad`. Unparseable history and failed comparisons hold the object's rows back; contradicting history lets them move on (it would fail every run), with a `--quiet`-proof warning either way. `RemovalDetector.java:348-352, 428-435, 600-602, 762-768`. *Confirmed.*
   Exceptions in history parse/union/walk yield "no removals" at TRACE; `detectionBroken` is not set and `recordState` marks old paths consumed, so dropped values stay on the server permanently. Treat like unreadable blobs (`DeployCommand:622-630`).
 
 - [ ] **M5 — `project()` swallows exceptions, silently skipping the duplicate-key refusal.** `DiffEngine.java:1424`; callers `DiffCommand:227`, `Reconciler:261`. *Confirmed.*
@@ -100,7 +100,7 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 - [ ] **E1 — `--smart-refs verify` treats any failure (401/403, transport) as "changed".** `SmartReferences.java:98-103`. Logged only at TRACE. No tests for verify.
 - [ ] **E2 — `NaturalKeys.of()`/`carries()` catch `RuntimeException` silently.** `NaturalKeys.java:43-47, 62-80`.
-- [ ] **E3 — A failed inverse drops the object from the rollback manifest.** `RollbackPlan.java:187, 197-206`. Logged at DEBUG; the Javadoc at `:171-172` claims the manifest shows it. Deploy reports "N object(s) undoable" with no warning.
+- [x] **E3 — A failed inverse drops the object from the rollback manifest.** — `373271b` `RollbackPlan.java:187, 197-206`. Logged at DEBUG; the Javadoc at `:171-172` claims the manifest shows it. Deploy reports "N object(s) undoable" with no warning.
 - [ ] **E4 — Failed state write is hidden by `-q`.** `DeployCommand.java:891-894`. Use `warn()`.
 - [ ] **E5 — Unreadable `--schema-dir` is treated as empty.** `SchemaOptions.java:641-647`.
 - [ ] **E6 — Xerces prints raw `[Fatal Error] …` to stderr, ignoring `-q`.** `Io.java:91`, `SchemaOptions.java:659`, discovery. Install a silent error handler.
