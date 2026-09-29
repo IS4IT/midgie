@@ -87,6 +87,23 @@ class KeyedEntryReplacementTest {
     }
 
     @Test
+    void aChangePrismCannotApplyLocallySaysSoInsteadOfPassingTheDuplicateCheck() throws Exception {
+        // Two values for a single-valued item: the projection fails, and the duplicate check with it.
+        PrismObject<? extends Objectable> live = prismContext.parseObject("<role xmlns=\"" + NS + "\" oid=\"" + OID
+                + "\"><name>r</name></role>");
+        com.evolveum.midpoint.prism.delta.ObjectDelta<com.evolveum.midpoint.xml.ns._public.common.common_3.RoleType>
+                delta = prismContext.deltaFor(com.evolveum.midpoint.xml.ns._public.common.common_3.RoleType.class)
+                .item(com.evolveum.midpoint.xml.ns._public.common.common_3.RoleType.F_DESCRIPTION)
+                .replace("one", "two").asObjectDelta(OID);
+
+        DiffEngine.Projection projection = DiffEngine.project(live, delta);
+
+        assertEquals(null, projection.after());
+        assertTrue(projection.failure() != null && !projection.failure().isBlank(), String.valueOf(projection));
+        assertTrue(DiffEngine.unprojectedNote(projection.failure()).contains("not checked"));
+    }
+
+    @Test
     void mergeReplacesAKeyedEntryItCouldNotPairInsteadOfAddingASecondCopy() throws Exception {
         PrismObject<? extends Objectable> live = parse(resource(
                 objectType(2L, "task", "Old"), objectType(10L, "other", "Someone else's")));
@@ -100,7 +117,7 @@ class KeyedEntryReplacementTest {
                         .anyMatch(m -> m.startsWith("schemaHandling/objectType ") && m.contains("addFocus")),
                 "auto must say it compared the object types by content, and name the unnamed action: "
                         + result.keyPairingDeclined());
-        PrismObject<? extends Objectable> after = DiffEngine.project(live, result.delta());
+        PrismObject<? extends Objectable> after = DiffEngine.project(live, result.delta()).after();
         // The edited entry is replaced, not duplicated; the entry the tree never declared stays, as merge
         // promises.
         assertEquals(List.of("other=Someone else's", "task=New"), objectTypes(after),
@@ -120,7 +137,7 @@ class KeyedEntryReplacementTest {
                 DiffEngine.EquivalencePlan.auto(), DiffEngine.Scope.PRESENT,
                 DiffEngine.MultiValueStrategy.of(true, List.of()), DiffEngine.SmartReferenceCheck.NEVER);
 
-        assertEquals(List.of("task=New"), objectTypes(DiffEngine.project(live, result.delta())),
+        assertEquals(List.of("task=New"), objectTypes(DiffEngine.project(live, result.delta()).after()),
                 "the stray copy must be deleted: " + result.delta());
     }
 

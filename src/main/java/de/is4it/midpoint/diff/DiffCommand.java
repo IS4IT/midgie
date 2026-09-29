@@ -223,8 +223,11 @@ public class DiffCommand implements Callable<Integer> {
             }
 
             // Refuse a delta that would leave one entry of a keyed list twice (see NaturalKeys.introducedDuplicates).
-            List<String> duplicates =
-                    NaturalKeys.introducedDuplicates(current, DiffEngine.project(current, result.delta()));
+            DiffEngine.Projection projection = DiffEngine.project(current, result.delta());
+            if (projection.failure() != null && !quiet) {
+                System.err.println("midgie: warning: " + DiffEngine.unprojectedNote(projection.failure()) + ".");
+            }
+            List<String> duplicates = NaturalKeys.introducedDuplicates(current, projection.after());
             if (!duplicates.isEmpty()) {
                 System.err.println("midgie: " + NaturalKeys.duplicateRefusal(duplicates));
                 return EXIT_ERROR;

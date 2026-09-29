@@ -69,8 +69,10 @@ the midPoint source tree.
   dropped from the delta and their paths reported on stderr: the ciphertext re-encrypts on every fetch, so
   diffing it yields spurious deltas *and* would leak the secret into the PATCH. midPoint owns credential
   rotation; a real password change goes through its own API, not a blind PATCH of stale ciphertext.
-  (Detection is by schema type or a protected real value; a protected value nested inside a larger
-  added/deleted container is not walked — rare, and noted in the code.)
+  (Detection is by schema type, a protected real value, or — for a value with no definition, such as a
+  connector's `bindPassword`, which midPoint returns as `<t:encryptedData>` without `xsi:type` and whose
+  connector schema the diff does not have — a raw value made of `ProtectedDataType`'s elements alone. A
+  protected value nested inside a larger added/deleted container is not walked — rare, and noted in the code.)
 - *Fragment union* — several files may describe one object, and they are combined into a single desired
   object before anything is diffed (`FragmentUnion`, built at group time by `DeployObject`). The apply unit is
   therefore the **object**, not the file. This is what makes cross-file composition correct *by default*:

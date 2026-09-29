@@ -47,6 +47,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A `--schema` file that cannot be used fails the run.** One named outright that was not a schema or did not parse was warned about and skipped, so every extension item it defines diffed as raw; a missing one already failed. An unreadable `--schema-dir` fails too instead of reading as empty. Files inside `--schema-dir` in the wrong format are still skipped with a warning.
 
+- **A connector's password is left alone like any other protected value.** midPoint returns `<cfg:bindPassword><t:encryptedData>…` without `xsi:type` (checked against 4.10.5), and the connector schema that defines it is not loaded, so neither side read as protected: every run's PATCH carried the file's cleartext and the server's ciphertext, and so did plan files and rollback plans. A value without a definition that consists of `ProtectedDataType`'s elements is now recognised, dropped from the delta and reported.
+
+- **The duplicate-key check says when it could not run.** A change prism could not apply to a local copy of the object skipped the check silently; `deploy` and `diff` now say so.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

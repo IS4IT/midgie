@@ -259,7 +259,11 @@ final class Reconciler {
         if (removesRestricted != null) {
             return fail(restType, targetOid, removesRestricted);
         }
-        PrismObject<? extends Objectable> after = DiffEngine.project(current, delta);
+        DiffEngine.Projection projection = DiffEngine.project(current, delta);
+        PrismObject<? extends Objectable> after = projection.after();
+        if (projection.failure() != null) {
+            warnings.add(DiffEngine.unprojectedNote(projection.failure()));
+        }
         // Judged on the whole PATCH, removals included, against what the server would hold afterwards. A change
         // prism cannot project locally is not judged here; midPoint has the last word on it anyway.
         List<String> duplicates = NaturalKeys.introducedDuplicates(current, after);
@@ -397,24 +401,19 @@ final class Reconciler {
      * deletes the value itself, and a second delete of it would be redundant. The projection answers both,
      * without a round trip, which is what the post-apply re-read this replaces was for.
      */
-    @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo is typed by the object class the delta was built for
     private RemovalJudgement judgeRemovals(ObjectDelta<? extends Objectable> delta,
             PrismObject<? extends Objectable> current, List<RemovalDetector.Removal> removals,
             List<String> notes) {
         if (removals.isEmpty()) {
             return new RemovalJudgement(List.of(), false);
         }
-        PrismObject<? extends Objectable> projected = current.clone();
-        try {
-            if (!delta.isEmpty()) {
-                ((ObjectDelta) delta).applyTo((PrismObject) projected);
-            }
-        } catch (Exception e) {
+        DiffEngine.Projection projection = DiffEngine.project(current, delta);
+        PrismObject<? extends Objectable> projected = projection.after();
+        if (projected == null) {
             // Without the projection there is no telling which removals the diff already covers, and guessing
             // could delete the entry the diff is updating. Leave them all for a run that can tell.
-            LOG.trace("could not project the diff onto {}", current.getOid(), e);
             notes.add(removals.size() + " value(s) dropped from the tree were not removed this run: the change "
-                    + "could not be projected onto the live object (" + e.getMessage() + "). The next run "
+                    + "could not be projected onto the live object (" + projection.failure() + "). The next run "
                     + "offers them again");
             return new RemovalJudgement(List.of(), true);
         }

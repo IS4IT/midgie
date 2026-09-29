@@ -834,11 +834,44 @@ public final class DiffEngine {
             return false;
         }
         for (PrismValue value : values) {
-            if (value.getRealValue() instanceof ProtectedStringType) {
+            if (value.getRealValue() instanceof ProtectedStringType || isRawProtectedValue(value)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** The elements a {@code ProtectedStringType} value consists of, one of which a raw one is made of. */
+    private static final Set<String> PROTECTED_DATA_ELEMENTS =
+            Set.of("encryptedData", "hashedData", "clearValue", "externalData");
+
+    /**
+     * Whether a value without a definition is a protected string by its shape. A connector's configuration
+     * properties are defined only by that connector's schema, which a diff usually does not have, so midPoint's
+     * {@code <cfg:bindPassword><t:encryptedData>…} — sent without an {@code xsi:type} — arrives as a raw value,
+     * and the file's {@code <t:clearValue>} as another. Unrecognised, the PATCH carried the cleartext add and the
+     * ciphertext delete, on every run.
+     */
+    private static boolean isRawProtectedValue(PrismValue value) {
+        if (!(value instanceof com.evolveum.midpoint.prism.PrismPropertyValue<?> property)) {
+            return false;
+        }
+        Object raw = property.isRaw() ? property.getRawElement() : null;
+        if (raw == null && property.getRealValue() instanceof com.evolveum.prism.xml.ns._public.types_3.RawType rawType) {
+            raw = rawType.getXnode();
+        }
+        if (!(raw instanceof com.evolveum.midpoint.prism.xnode.MapXNode map) || map.keySet().isEmpty()) {
+            return false;
+        }
+        for (QName key : map.keySet()) {
+            String namespace = key.getNamespaceURI();
+            boolean typesNamespace = namespace == null || namespace.isEmpty()
+                    || ProtectedStringType.COMPLEX_TYPE.getNamespaceURI().equals(namespace);
+            if (!typesNamespace || !PROTECTED_DATA_ELEMENTS.contains(key.getLocalPart())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -1427,23 +1460,38 @@ public final class DiffEngine {
     }
 
     /**
-     * {@code current} with {@code delta} applied locally, on a copy, or {@code null} when prism cannot apply
-     * it. What the object would look like after the PATCH, for the checks that have to judge the result rather
-     * than the delta: the duplicate-key refusal ({@link NaturalKeys#introducedDuplicates}) and what merge keeps.
+     * {@code current} with a delta applied locally, or why prism could not apply it.
+     *
+     * @param after   the object as the PATCH would leave it; {@code null} when it could not be projected
+     * @param failure why not, safe to show; {@code null} when it could
+     */
+    record Projection(PrismObject<? extends Objectable> after, String failure) {
+    }
+
+    /**
+     * {@code current} with {@code delta} applied locally, on a copy. What the object would look like after the
+     * PATCH, for the checks that have to judge the result rather than the delta: the duplicate-key refusal
+     * ({@link NaturalKeys#introducedDuplicates}), what merge keeps, and which removals the diff already covers.
+     * A failure is returned rather than swallowed, so a caller whose check cannot run says so.
      */
     @SuppressWarnings({"unchecked", "rawtypes"}) // applyTo is typed by the object class the delta was built for
-    static PrismObject<? extends Objectable> project(PrismObject<? extends Objectable> current,
-            ObjectDelta<? extends Objectable> delta) {
+    static Projection project(PrismObject<? extends Objectable> current, ObjectDelta<? extends Objectable> delta) {
         PrismObject<? extends Objectable> after = current.clone();
         try {
             if (!delta.isEmpty()) {
                 ((ObjectDelta) delta).applyTo((PrismObject) after);
             }
-            return after;
+            return new Projection(after, null);
         } catch (Exception e) {
             LOG.trace("could not project the change onto {}", current.getOid(), e);
-            return null;
+            return new Projection(null, (e.getMessage() != null) ? e.getMessage() : e.toString());
         }
+    }
+
+    /** The note for a change whose projection failed, so the duplicate-key check did not run. */
+    static String unprojectedNote(String failure) {
+        return "the change could not be applied to a local copy of the object (" + failure + "), so it was not "
+                + "checked for list entries it would leave twice; midPoint judges it when it is sent";
     }
 
     /**

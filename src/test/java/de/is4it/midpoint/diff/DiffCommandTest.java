@@ -229,6 +229,36 @@ class DiffCommandTest {
     }
 
     @Test
+    void aConnectorPasswordWithoutADefinitionIsProtectedToo(@TempDir Path dir) throws Exception {
+        // midPoint returns a connector's bindPassword as <t:encryptedData> with no xsi:type (checked against a
+        // 4.10.5 server), and the connector schema that would define it is not loaded: both sides are raw
+        // values. The PATCH used to carry the file's cleartext and the server's ciphertext, on every run.
+        File desired = write(dir, "desired.xml", ldapResource("<t:clearValue>s3cret</t:clearValue>"));
+        File live = write(dir, "live.xml", ldapResource("<t:encryptedData><t:encryptionMethod><t:algorithm>"
+                + "http://www.w3.org/2001/04/xmlenc#aes256-cbc</t:algorithm></t:encryptionMethod><t:keyInfo>"
+                + "<t:keyName>K</t:keyName></t:keyInfo><t:cipherData><t:cipherValue>AAAA</t:cipherValue>"
+                + "</t:cipherData></t:encryptedData>"));
+
+        DiffEngine.DiffResult result = engine().diff(desired, live, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
+
+        assertFalse(result.hasDrift(), DeltaOutput.toModificationXml(prismContext, result.delta()));
+        assertEquals(List.of("connectorConfiguration/configurationProperties/bindPassword"),
+                result.protectedSkippedPaths());
+    }
+
+    private static String ldapResource(String bindPassword) {
+        return "<resource xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:t=\"http://prism.evolveum.com/xml/ns/public/types-3\""
+                + " xmlns:icfc=\"http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/connector-schema-3\""
+                + " xmlns:cfg=\"http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/bundle/"
+                + "com.evolveum.polygon.connector-ldap/com.evolveum.polygon.connector.ldap.LdapConnector\""
+                + " oid=\"a17e57e5-0000-0000-0000-0000000000e1\"><name>r</name><connectorConfiguration>"
+                + "<icfc:configurationProperties><cfg:host>h</cfg:host><cfg:bindPassword>" + bindPassword
+                + "</cfg:bindPassword></icfc:configurationProperties></connectorConfiguration></resource>";
+    }
+
+    @Test
     void roundTripDeltaAppliesToLiveYieldingDesired(@TempDir Path dir) throws Exception {
         // midPoint's own TestParseDiffPatch invariant: live.diff(desired) applied to live must yield desired.
         // Use full scope so every difference (a changed managed item and a removed live-only item) is in the
