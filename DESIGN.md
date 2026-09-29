@@ -115,7 +115,12 @@ the midPoint source tree.
   (created, patched or in sync, no removal deferred or inexpressible — `DeployCommand.appliedUnits`) get new
   rows; a gone file's row is deleted only if the object that compared against it was applied, and an earlier
   version's tree row only if no object under it was left out, since a left-out object may still need it. A blob or commit the
-  repository no longer holds stops detection for the run, as an unreachable revision did. The removal set is what last-applied holds and desired no longer does, compared item by item (`RemovalDetector.collect`, see "Ownership below the top level" below). It works per **object**
+  repository no longer holds stops detection for the run, as an unreachable revision did. Detection that fails
+  for one object is never read as "nothing removed" (`RemovalDetector.unjudged`, reported by `warn`, which
+  `--quiet` does not silence): an object whose last-applied content no longer parses, or whose comparison
+  throws, keeps its rows so the next run tries again; one whose last-applied files contradict each other (a
+  partial deploy moved one on) lets its rows move to this run's consistent content, since that history would
+  fail the same way every run. The removal set is what last-applied holds and desired no longer does, compared item by item (`RemovalDetector.collect`, see "Ownership below the top level" below). It works per **object**
   on both sides — the union of the files describing it now against the union of the files that described it
   as last applied, deleted ones included — which is what makes it correct for objects assembled from several
   files: a deleted fragment yields exactly the values no surviving file still declares, and a value merely

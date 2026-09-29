@@ -29,6 +29,8 @@ import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
 import com.evolveum.midpoint.prism.path.ItemName;
 import com.evolveum.midpoint.prism.path.ItemPath;
+import com.evolveum.midpoint.schema.SchemaConstantsGenerated;
+import com.evolveum.midpoint.util.DOMUtil;
 import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectType;
 
@@ -277,6 +279,19 @@ final class RemovalDetector {
     }
 
     /**
+     * An object, or a file of one, whose removals this run could not judge.
+     *
+     * @param unit     the object of this run it belongs to, or {@code null} when only its paths are known
+     * @param paths    the repository paths whose last-applied content was involved
+     * @param reason   why, safe to show
+     * @param holdBack whether the object's rows should stay as they are so the next run tries again — true
+     *                 when the cause may go away (a schema not loaded, a comparison that threw); false when it
+     *                 is in the recorded history itself and would be met again on every run
+     */
+    record Unjudged(DeployObject unit, List<String> paths, String reason, boolean holdBack) {
+    }
+
+    /**
      * One file as it was last applied: its repository path, its content then, and whether the path lies inside
      * what this run deploys. A file outside it can still describe an object of this run — the old path of a
      * file moved into the tree — but on its own it is none of this run's business, so it is never reported as
@@ -294,6 +309,7 @@ final class RemovalDetector {
     private final History history;
     private final String lastRevision;   // what last-applied is, in words, for the log
     private final List<Orphan> orphaned = new ArrayList<>();
+    private final List<Unjudged> unjudged = new ArrayList<>();
     private final Map<DeployObject, List<String>> comparedPaths = new java.util.IdentityHashMap<>();
 
     /** Last-applied is the tree as it was at one commit: {@code lastRevision}. */
@@ -348,6 +364,10 @@ final class RemovalDetector {
             comparedPaths.put(unit, List.copyOf(previous.paths));
             PrismObject<? extends Objectable> before = previous.union();
             if (before == null) {
+                // The history itself contradicts, so it would every run: let the rows move on to this run's
+                // content, which is consistent, rather than hold them on something that never combines.
+                unjudged.add(new Unjudged(unit, List.copyOf(previous.paths),
+                        "its files as last deployed contradict each other (" + previous.unionFailure + ")", false));
                 continue;
             }
             collect(removals, before, unit, identityKeyOf(before), previous);
@@ -360,10 +380,10 @@ final class RemovalDetector {
             // Nothing in the tree declares this object any more. Its values are not individually "removed" —
             // the whole object left, and taking it apart value by value would strip its name and leave a
             // mangled object behind. Deleting objects is deliberately out of scope, so say so and leave it.
+            // Its identity does not need the union, so files that no longer combine still get reported.
             PrismObject<? extends Objectable> before = previous.union();
-            if (before != null) {
-                orphaned.add(new Orphan(identityKeyOf(before), previous.sourceLabel(), previous.paths));
-            }
+            orphaned.add(new Orphan(identityKeyOf(before != null ? before : previous.objects.get(0)),
+                    previous.sourceLabel(), previous.paths));
         }
 
         LOG.debug("detected {} removal(s) and {} orphaned object(s) against revision {}",
@@ -387,6 +407,7 @@ final class RemovalDetector {
         private boolean inScope;
         private boolean united;
         private PrismObject<? extends Objectable> union;
+        private String unionFailure;
 
         void add(PrismObject<? extends Objectable> object, String path, boolean pathInScope) {
             objects.add(object);
@@ -429,7 +450,9 @@ final class RemovalDetector {
                 return FragmentUnion.of(fragments);
             } catch (Exception e) {
                 // Not fatal: history that cannot be combined only costs this object's detection, and
-                // failing the deploy over what a past revision looked like would be the wrong trade.
+                // failing the deploy over what a past revision looked like would be the wrong trade. It is
+                // reported, though (see detect): unsaid, the object's dropped values would stay for good.
+                unionFailure = (e.getMessage() != null) ? e.getMessage() : e.toString();
                 LOG.trace("could not combine {} at revision {}", paths, lastRevision, e);
                 return null;
             }
@@ -573,6 +596,14 @@ final class RemovalDetector {
     }
 
     /**
+     * What this run could not judge. Each is a value dropped from the tree that may stay on the server, so the
+     * caller has to say so, and hold the object's rows back where {@link Unjudged#holdBack} asks for it.
+     */
+    List<Unjudged> unjudged() {
+        return unjudged;
+    }
+
+    /**
      * Add the values present in {@code lastApplied} but absent from {@code desired}, item by item.
      *
      * <p>This used to be the delete side of a {@code real-value} diff with last-applied in the live slot. That
@@ -598,6 +629,9 @@ final class RemovalDetector {
             walk(target, unit.object().getValue(), lastApplied.getValue(), List.of(), ItemPath.EMPTY_PATH,
                     ItemPath.EMPTY_PATH);
         } catch (RuntimeException e) {
+            // Whatever was collected before the failure stands; what was not is unknown, not absent.
+            unjudged.add(new Unjudged(unit, List.copyOf(previous.paths), "comparing it with what was last "
+                    + "deployed failed (" + (e.getMessage() != null ? e.getMessage() : e.toString()) + ")", true));
             LOG.trace("could not compare {} against revision {}", previous.sourceLabel(), lastRevision, e);
         }
     }
@@ -763,8 +797,26 @@ final class RemovalDetector {
         try {
             return prismContext.parseObject(snapshot.content());
         } catch (Exception e) {
+            // A file deleted under an earlier version's tree row may never have been an object (a README, an
+            // .xsd); only a midPoint object that no longer parses — often an extension schema this run did
+            // not load — is a detection this run could not make.
+            if (isMidpointObject(snapshot.content())) {
+                unjudged.add(new Unjudged(null, List.of(snapshot.path()), "its content as last deployed cannot "
+                        + "be read (" + (e.getMessage() != null ? e.getMessage() : e.toString()) + ")", true));
+            }
             LOG.trace("could not parse {} as last applied ({})", snapshot.path(), lastRevision, e);
             return null;
+        }
+    }
+
+    /** Whether {@code content} is XML whose root element is in midPoint's common namespace. */
+    private static boolean isMidpointObject(String content) {
+        try {
+            String namespace = DOMUtil.parseDocument(content).getDocumentElement()
+                    .getNamespaceURI();
+            return SchemaConstantsGenerated.NS_COMMON.equals(namespace);
+        } catch (Exception e) {
+            return false; // not XML at all
         }
     }
 

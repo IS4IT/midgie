@@ -216,6 +216,8 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Set when last-applied cannot be recovered at all, so no comparison this run means anything. */
     private boolean detectionBroken;
+    // Objects whose removals this run could not judge for a reason that may pass: their rows stay put.
+    private final Set<DeployObject> unjudgedUnits = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
     /** Plan entries the operator declined under --confirm-each-apply; they are neither applied nor failed. */
     private int declinedEntries;
@@ -506,6 +508,9 @@ public class DeployCommand implements Callable<Integer> {
             // including the ones that were about to be applied.
             reportUnmatchedPolicyRules();
 
+            if (planDir == null && !dryRun) {
+                appliedUnits.removeAll(unjudgedUnits);
+            }
             if (!unprunable.isEmpty() && planDir == null && !dryRun) {
                 // Left unsaid, the object's rows would move past these and they would never be offered again.
                 for (RemovalDetector.Removal removal : unprunable) {
@@ -639,6 +644,7 @@ public class DeployCommand implements Callable<Integer> {
             return List.of();
         }
         comparedPaths = detector.comparedPaths();
+        reportUnjudged(detector.unjudged(), units, files);
         for (RemovalDetector.Orphan orphan : detector.orphaned()) {
             String movedTo = files.movedTo(orphan.objectLabel, orphan.paths);
             if (movedTo != null) {
@@ -673,6 +679,40 @@ public class DeployCommand implements Callable<Integer> {
             }
         }
         return withoutRestricted(policy, globalStrategy, detected);
+    }
+
+    /**
+     * Say which objects' removals could not be judged, and keep the rows of those whose cause may pass. A value
+     * dropped from such an object stays on the server this run; left unsaid, and with the rows moved on, it would
+     * stay for good — "cannot tell" read as "nothing was removed".
+     */
+    private void reportUnjudged(List<RemovalDetector.Unjudged> unjudged, List<DeployObject> units,
+            FileTracking files) {
+        for (RemovalDetector.Unjudged entry : unjudged) {
+            List<DeployObject> owners = new ArrayList<>();
+            if (entry.unit() != null) {
+                owners.add(entry.unit());
+            } else {
+                for (DeployObject unit : units) {
+                    for (File file : unit.sourceFiles()) {
+                        if (entry.paths().contains(files.pathOf(file)) && !owners.contains(unit)) {
+                            owners.add(unit);
+                        }
+                    }
+                }
+            }
+            String subject = owners.isEmpty() ? String.join(", ", entry.paths())
+                    : owners.get(0).objectPath() + " (" + String.join(", ", entry.paths()) + ")";
+            if (entry.holdBack()) {
+                unjudgedUnits.addAll(owners);
+                warn(subject + ": " + entry.reason() + ", so values dropped from it since cannot be detected and "
+                        + "are not removed this run. Its record is kept, and the next run tries again.");
+            } else {
+                warn(subject + ": " + entry.reason() + ", so values dropped from it since cannot be detected and "
+                        + "are not removed this run. Its record moves on to this run's content, so detection works "
+                        + "again from the next deploy; check the object for values the tree no longer declares.");
+            }
+        }
     }
 
     /**

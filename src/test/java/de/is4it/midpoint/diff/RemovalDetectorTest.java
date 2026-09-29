@@ -63,6 +63,58 @@ class RemovalDetectorTest {
     }
 
     @Test
+    void historyThatNoLongerCombinesIsReportedNotReadAsNothingRemoved(@TempDir Path dir) throws Exception {
+        // a.xml was last deployed with description x, b.xml — deployed alone later — with y. Their union
+        // contradicts, which used to end detection for the object at TRACE: beta, dropped since, stayed.
+        Path a = dir.resolve("a.xml");
+        Path b = dir.resolve("b.xml");
+        Files.writeString(a, role("<description>x</description><subtype>alpha</subtype>"), StandardCharsets.UTF_8);
+        Files.writeString(b, role("<description>x</description>"), StandardCharsets.UTF_8);
+        RemovalDetector detector = new RemovalDetector(prismContext, units -> List.of(
+                new RemovalDetector.Snapshot("a.xml",
+                        role("<description>x</description><subtype>alpha</subtype><subtype>beta</subtype>"), true),
+                new RemovalDetector.Snapshot("b.xml", role("<description>y</description>"), true)), "test");
+
+        List<RemovalDetector.Removal> removals = detector.detect(unitsOf(a, b));
+
+        assertTrue(removals.isEmpty(), removals.toString());
+        assertEquals(1, detector.unjudged().size(), detector.unjudged().toString());
+        RemovalDetector.Unjudged unjudged = detector.unjudged().get(0);
+        assertEquals(List.of("a.xml", "b.xml"), unjudged.paths());
+        assertTrue(unjudged.reason().contains("contradict"), unjudged.reason());
+        assertFalse(unjudged.holdBack(), "history that contradicts would every run; the rows must move on");
+    }
+
+    @Test
+    void anObjectThatNoLongerParsesIsReportedAndItsRowsKept(@TempDir Path dir) throws Exception {
+        // Typically an extension item whose schema this run did not load.
+        Path a = dir.resolve("a.xml");
+        Files.writeString(a, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
+        RemovalDetector detector = new RemovalDetector(prismContext, units -> List.of(
+                new RemovalDetector.Snapshot("a.xml", role("<noSuchItem>x</noSuchItem>"), true)), "test");
+
+        detector.detect(unitsOf(a));
+
+        assertEquals(1, detector.unjudged().size(), detector.unjudged().toString());
+        assertEquals(List.of("a.xml"), detector.unjudged().get(0).paths());
+        assertTrue(detector.unjudged().get(0).holdBack());
+    }
+
+    @Test
+    void aDeletedFileThatWasNeverAnObjectIsNotReported(@TempDir Path dir) throws Exception {
+        Path a = dir.resolve("a.xml");
+        Files.writeString(a, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
+        RemovalDetector detector = new RemovalDetector(prismContext, units -> List.of(
+                new RemovalDetector.Snapshot("README.md", "# notes", true),
+                new RemovalDetector.Snapshot("ext.xsd",
+                        "<xsd:schema xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"/>", true)), "test");
+
+        detector.detect(unitsOf(a));
+
+        assertTrue(detector.unjudged().isEmpty(), detector.unjudged().toString());
+    }
+
+    @Test
     void aValueStillDeclaredIsNotReported(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("role.xml");
         Files.writeString(file, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
@@ -684,6 +736,14 @@ class RemovalDetectorTest {
         // object have to arrive as one unit here too.
         return new RemovalDetector(prismContext, GitRevision.of(dir.toFile()), revision)
                 .detect(DeployObject.group(fragments));
+    }
+
+    private static List<DeployObject> unitsOf(Path... files) throws Exception {
+        List<Fragment> fragments = new java.util.ArrayList<>();
+        for (Path file : files) {
+            fragments.add(Fragment.of(prismContext.parseObject(file.toFile()), file.toFile()));
+        }
+        return DeployObject.group(fragments);
     }
 
     private static String role(String body) {

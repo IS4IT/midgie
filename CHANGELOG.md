@@ -23,6 +23,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A deploy that dies part way still leaves its rollback plan.** A rejected login (401) or a lost connection in the middle of the apply ended the run before the net was written, so the objects already patched had no undo — the one case the net exists for. The plan for what was written is now saved before the error is reported.
 
+- **Removal detection that fails for an object is reported, not read as "nothing removed".** When an object's last-deployed files could not be parsed, contradicted each other, or could not be compared, detection for it ended at TRACE level and its rows moved on — so a value dropped from the tree stayed on the server for good, with a green run. Each case is now a warning that `--quiet` does not hide. An object whose old content no longer parses or whose comparison failed keeps its rows so the next run tries again; one whose files' records contradict each other (a file deployed on its own since) lets them move on, since that history would fail every run. An object that left the tree is still reported as an orphan when its old files no longer combine.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

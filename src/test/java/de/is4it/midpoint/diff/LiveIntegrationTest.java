@@ -563,6 +563,50 @@ class LiveIntegrationTest {
     }
 
     @Test
+    void historyThatNoLongerCombinesIsReportedEvenUnderQuiet(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
+
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path a = tree.resolve("a.xml");
+        Path b = tree.resolve("b.xml");
+        Files.writeString(a, splitRole("<description>x</description><subtype>alpha</subtype><subtype>beta</subtype>"),
+                StandardCharsets.UTF_8);
+        Files.writeString(b, splitRole("<description>x</description>"), StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        git(tree, "config", "user.email", "test@example.invalid");
+        git(tree, "config", "user.name", "midgie test");
+        commit(tree, "v1");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        // b.xml alone moves on, so the two files' records now disagree about the description.
+        Files.writeString(b, splitRole("<description>y</description>"), StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        assertEquals(0, run("deploy", b.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        // a.xml catches up and drops beta. Detection cannot combine the records; that used to pass in silence.
+        Files.writeString(a, splitRole("<description>y</description><subtype>alpha</subtype>"), StandardCharsets.UTF_8);
+        commit(tree, "v3");
+        CliResult third = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan", "--quiet");
+        assertEquals(0, third.exit, third.out + third.err);
+        assertTrue(third.err.contains("contradict each other") && third.err.contains("a.xml, b.xml"), third.err);
+        assertTrue(third.err.contains("check the object for values the tree no longer declares"), third.err);
+
+        // The records moved on to consistent content, so the next run has nothing to complain about.
+        CliResult fourth = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
+        assertFalse(fourth.err.contains("contradict"), fourth.err);
+    }
+
+    private static String splitRole(String body) {
+        return "<role xmlns=\"" + NS + "\" oid=\"" + DEPLOY_ROLE_OID + "\"><name>IT Deploy Role</name>" + body
+                + "</role>";
+    }
+
+    @Test
     void mergeKeepsWhatSomeoneElseAddedAndSaysSo(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteDeployObjects();
