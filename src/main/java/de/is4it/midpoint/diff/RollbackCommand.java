@@ -7,12 +7,20 @@ package de.is4it.midpoint.diff;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Callable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.evolveum.midpoint.prism.Objectable;
+import com.evolveum.midpoint.prism.PrismContext;
+import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.util.DOMUtil;
 
 import picocli.CommandLine.Command;
@@ -39,6 +47,9 @@ import picocli.CommandLine.Parameters;
  *
  * <p>A rollback plan only ever contains patches. Objects the deploy <em>created</em> are named in the
  * manifest but never undone, so there is no create path here and nothing this command can delete.
+ *
+ * <p>After the replay, the {@code midgie-state} rows the deploy moved are moved back for each object that was
+ * restored — but only a row still holding what the deploy wrote; one a later run has moved on is that run's.
  */
 @Command(name = "rollback",
         description = "Replay the rollback plan from the last deploy, putting the objects it changed back.",
@@ -144,13 +155,21 @@ public class RollbackCommand implements Callable<Integer> {
             }
 
             if (dryRun) {
+                long rows = manifest.objects.stream().mapToLong(object -> object.rows.size()).sum()
+                        + manifest.runRows.size();
+                if (rows > 0) {
+                    status("  and the " + rows + " tracking row(s) the deploy moved, where no later run has since.");
+                }
                 return entries.isEmpty() ? 0 : 1;
             }
             Integer stop = confirm(entries.size());
             if (stop != null) {
                 return stop;
             }
-            return replay(client, entries);
+            Set<String> restored = new LinkedHashSet<>();
+            Integer exit = replay(client, entries, restored);
+            restoreRows(client, manifest, run, restored, restored.size() == entries.size());
+            return exit;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midgie: " + message);
@@ -253,8 +272,11 @@ public class RollbackCommand implements Callable<Integer> {
         }
     }
 
-    /** Send each recorded inverse, in the order the files sort — reverse of how the deploy applied them. */
-    private Integer replay(MidpointRestClient client, List<PlanStore.Entry> entries) {
+    /**
+     * Send each recorded inverse, in the order the files sort — reverse of how the deploy applied them. The OID
+     * of each object restored goes to {@code restored}.
+     */
+    private Integer replay(MidpointRestClient client, List<PlanStore.Entry> entries, Set<String> restored) {
         int applied = 0;
         int failed = 0;
         for (PlanStore.Entry entry : entries) {
@@ -263,6 +285,7 @@ public class RollbackCommand implements Callable<Integer> {
                 client.patchObject(entry.restType, entry.oid, OidComments.strip(entry.body),
                         PlanStore.setsReferenceByFilter(entry));
                 applied++;
+                restored.add(entry.oid);
                 status("  restored     " + entry.restType + "/" + entry.oid);
             } catch (Exception e) {
                 failed++;
@@ -273,6 +296,66 @@ public class RollbackCommand implements Callable<Integer> {
         }
         status("Done: " + applied + " restored, " + failed + " failed.");
         return failed == 0 ? 0 : EXIT_ERROR;
+    }
+
+    /**
+     * Move the {@code midgie-state} rows back for the objects restored, and the run's own rows when all of them
+     * were. A row is restored only while it still holds what the deploy wrote.
+     *
+     * <p>Without this the rows kept saying the rolled-back revision was applied, and a deploy of that revision
+     * again found nothing it had dropped: the values it was meant to remove read as values someone else had
+     * added, and merge kept them beside the new ones. A failure here does not undo the restore, but it is said
+     * whatever {@code --quiet} asks, because the next deploy depends on it.
+     */
+    private void restoreRows(MidpointRestClient client, RollbackPlan.Manifest manifest, File run,
+            Set<String> restored, boolean all) {
+        Map<String, RollbackPlan.RowChange> wanted = new LinkedHashMap<>();
+        for (RollbackPlan.Manifest.Entry object : manifest.objects) {
+            if (!object.created && restored.contains(object.oid)) {
+                object.rows.forEach(row -> wanted.putIfAbsent(row.key(), row));
+            }
+        }
+        if (all) {
+            manifest.runRows.forEach(row -> wanted.putIfAbsent(row.key(), row));
+        }
+        if (wanted.isEmpty()) {
+            return;
+        }
+        try {
+            PrismContext prismContext = SchemaOptions.newBaseContext();
+            PrismObject<? extends Objectable> table = SyncState.find(prismContext, client);
+            if (table == null || !SyncState.isEnabled(table)) {
+                note("note: " + SyncState.TABLE_NAME + " is not in use on this server; no tracking rows to restore.");
+                return;
+            }
+            Map<String, String> current = new LinkedHashMap<>();
+            for (SyncState.Row row : SyncState.rows(table)) {
+                current.putIfAbsent(row.key(), row.value());
+            }
+            SyncState.Changes changes = new SyncState.Changes();
+            int movedOn = 0;
+            for (RollbackPlan.RowChange row : wanted.values()) {
+                if (!Objects.equals(current.get(row.key()), row.after())) {
+                    movedOn++; // a later run wrote it since; the row is that run's now
+                    continue;
+                }
+                if (row.before() == null) {
+                    changes.delete(row.key());
+                } else {
+                    changes.set(row.key(), row.before(), row.beforeLabel());
+                }
+            }
+            SyncState.apply(prismContext, client, table, changes);
+            status("Restored " + (wanted.size() - movedOn) + " tracking row(s) in " + SyncState.TABLE_NAME + "."
+                    + (movedOn > 0 ? " " + movedOn + " row(s) a later deploy has written since were left alone."
+                            : ""));
+        } catch (Exception e) {
+            System.err.println("midgie: warning: could not restore the tracking rows in " + SyncState.TABLE_NAME
+                    + ": " + ((e.getMessage() != null) ? e.getMessage() : e.toString()) + " — until they are, a "
+                    + "deploy of the rolled-back revision may keep values it is meant to remove. The rows and "
+                    + "their earlier values are listed in " + new File(run, RollbackPlan.MANIFEST) + ".");
+            LOG.trace("restoring the tracking rows failed", e);
+        }
     }
 
     /** Name the objects the deploy created, which a rollback deliberately leaves alone. */

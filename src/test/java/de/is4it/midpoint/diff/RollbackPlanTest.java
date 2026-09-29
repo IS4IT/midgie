@@ -189,6 +189,32 @@ class RollbackPlanTest {
     }
 
     @Test
+    void theManifestRecordsTheStateRowsTheRunMoved(@TempDir Path dir) throws Exception {
+        // A rollback has to move them back, or a redeploy of the rolled-back revision finds nothing dropped.
+        RollbackPlan plan = new RollbackPlan(prismContext, null);
+        plan.recordPatch("roles", oid(1), "first", deltaChangingDescription(oid(1)));
+        plan.recordPatch("roles", oid(1), "first", deltaChangingDescription(oid(1))); // a retry: same object
+        plan.recordRows(oid(1), List.of(
+                new RollbackPlan.RowChange("root/role.xml", "{\"blob\":\"a&b\"}", "RoleType/first", "{\"blob\":\"c\"}"),
+                new RollbackPlan.RowChange("root/new.xml", null, null, "{\"blob\":\"d\"}")));
+        plan.recordRunRows(List.of(new RollbackPlan.RowChange("root/gone.xml", "{\"blob\":\"e\"}", null, null)));
+
+        File run = plan.write(dir.toFile(), "http://server/midpoint", "deploy-key", "abc123");
+        RollbackPlan.Manifest manifest = RollbackPlan.Manifest.read(run);
+
+        assertEquals(2, manifest.objects.size());
+        List<RollbackPlan.RowChange> rows = manifest.objects.get(0).rows;
+        assertEquals(2, rows.size(), rows.toString());
+        assertEquals(new RollbackPlan.RowChange("root/role.xml", "{\"blob\":\"a&b\"}", "RoleType/first",
+                "{\"blob\":\"c\"}"), rows.get(0));
+        assertEquals(new RollbackPlan.RowChange("root/new.xml", null, null, "{\"blob\":\"d\"}"), rows.get(1),
+                "a row the run added has no earlier value");
+        assertTrue(manifest.objects.get(1).rows.isEmpty(), "rows are written once per object");
+        assertEquals(List.of(new RollbackPlan.RowChange("root/gone.xml", "{\"blob\":\"e\"}", null, null)),
+                manifest.runRows);
+    }
+
+    @Test
     void emptyPlanWritesNothingAndReportsItself() {
         RollbackPlan plan = new RollbackPlan(prismContext, null);
         assertTrue(plan.isEmpty(), "a run that wrote nothing has nothing to undo");

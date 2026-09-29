@@ -20,7 +20,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
@@ -53,6 +55,11 @@ import org.w3c.dom.NodeList;
  * <p>Objects the run <em>created</em> are recorded but not undone. The inverse of an add is an object
  * delete, and an object created an hour ago may already carry links and shadows; that is a decision for a
  * person, so the manifest names them and stops there.
+ *
+ * <p>The manifest also records the {@code midgie-state} rows the run moved, before and after, per object. They
+ * say what the tree last applied, and an object put back to its earlier content has to be recorded as holding
+ * that content again, or the next deploy of the rolled-back revision reads the values it is meant to remove
+ * as ones someone else added.
  */
 final class RollbackPlan {
 
@@ -70,6 +77,13 @@ final class RollbackPlan {
     private static final Pattern RUN_NAME = Pattern.compile("\\d{8}-\\d{6}");
 
     /**
+     * One {@code midgie-state} row a run changed: its value and label before, and its value after. A
+     * {@code null} value means the row did not exist on that side.
+     */
+    record RowChange(String key, String before, String beforeLabel, String after) {
+    }
+
+    /**
      * What a written net says about itself: where it came from and what state it expects to find.
      *
      * <p>Read back by {@code midgie rollback} before anything is replayed. Provenance is what stops a net
@@ -81,6 +95,8 @@ final class RollbackPlan {
         final String deployment;
         final String revision;
         final List<Entry> objects;
+        /** Rows moved by the run that belong to no one object — restored only when every object is. */
+        final List<RowChange> runRows;
 
         /** One object the run touched, as recorded. */
         static final class Entry {
@@ -89,21 +105,25 @@ final class RollbackPlan {
             final String name;
             final String version; // null when the version could not be read at write time
             final boolean created;
+            final List<RowChange> rows;
 
-            Entry(String restType, String oid, String name, String version, boolean created) {
+            Entry(String restType, String oid, String name, String version, boolean created, List<RowChange> rows) {
                 this.restType = restType;
                 this.oid = oid;
                 this.name = name;
                 this.version = version;
                 this.created = created;
+                this.rows = List.copyOf(rows);
             }
         }
 
-        private Manifest(String server, String deployment, String revision, List<Entry> objects) {
+        private Manifest(String server, String deployment, String revision, List<Entry> objects,
+                List<RowChange> runRows) {
             this.server = server;
             this.deployment = deployment;
             this.revision = revision;
             this.objects = List.copyOf(objects);
+            this.runRows = List.copyOf(runRows);
         }
 
         static Manifest read(File dir) throws IOException {
@@ -124,9 +144,27 @@ final class RollbackPlan {
                 String version = element.getAttribute("version");
                 objects.add(new Entry(element.getAttribute("type"), element.getAttribute("oid"),
                         element.getAttribute("name"), version.isBlank() ? null : version,
-                        "created".equals(element.getAttribute("action"))));
+                        "created".equals(element.getAttribute("action")), rowsIn(element)));
             }
-            return new Manifest(text(root, "server"), text(root, "deployment"), text(root, "revision"), objects);
+            return new Manifest(text(root, "server"), text(root, "deployment"), text(root, "revision"), objects,
+                    rowsIn(root));
+        }
+
+        /** The {@code <row>} elements directly under {@code parent}. */
+        private static List<RowChange> rowsIn(Element parent) {
+            List<RowChange> rows = new ArrayList<>();
+            NodeList children = parent.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                if (children.item(i) instanceof Element row && "row".equals(row.getTagName())) {
+                    rows.add(new RowChange(row.getAttribute("key"), attribute(row, "before"),
+                            attribute(row, "beforeLabel"), attribute(row, "after")));
+                }
+            }
+            return rows;
+        }
+
+        private static String attribute(Element element, String name) {
+            return element.hasAttribute(name) ? element.getAttribute(name) : null;
         }
 
         private static String text(Element root, String name) {
@@ -158,6 +196,8 @@ final class RollbackPlan {
     }
 
     private final List<Item> items = new ArrayList<>();
+    private final Map<String, List<RowChange>> rowsByOid = new LinkedHashMap<>();
+    private final List<RowChange> runRows = new ArrayList<>();
     private final PrismContext prismContext;
     private final MidpointRestClient client;
     private final OidComments oidComments;
@@ -249,6 +289,18 @@ final class RollbackPlan {
         }
     }
 
+    /** The state rows the run moved for the object {@code oid}; kept only if the net holds that object. */
+    void recordRows(String oid, List<RowChange> rows) {
+        if (oid != null && !rows.isEmpty()) {
+            rowsByOid.computeIfAbsent(oid, key -> new ArrayList<>()).addAll(rows);
+        }
+    }
+
+    /** State rows the run moved that belong to no one object (a gone object's rows, an earlier version's). */
+    void recordRunRows(List<RowChange> rows) {
+        runRows.addAll(rows);
+    }
+
     boolean isEmpty() {
         return items.isEmpty();
     }
@@ -291,6 +343,7 @@ final class RollbackPlan {
         appendElement(xml, "deployment", deployment);
         appendElement(xml, "revision", revision);
         appendElement(xml, "written", Instant.now().toString());
+        java.util.Set<String> rowsWritten = new java.util.HashSet<>();
         for (Item item : items) {
             xml.append("  <object type=\"").append(escape(item.restType))
                     .append("\" oid=\"").append(escape(item.oid))
@@ -299,13 +352,39 @@ final class RollbackPlan {
             if (item.version != null) {
                 xml.append(" version=\"").append(escape(item.version)).append('"');
             }
-            xml.append("/>").append(System.lineSeparator());
+            // Once per object, on its first entry: an object written by several fragments or a retry has one set.
+            List<RowChange> rows = (item.oid != null && rowsWritten.add(item.oid))
+                    ? rowsByOid.getOrDefault(item.oid, List.of()) : List.of();
+            if (rows.isEmpty()) {
+                xml.append("/>").append(System.lineSeparator());
+                continue;
+            }
+            xml.append('>').append(System.lineSeparator());
+            appendRows(xml, rows, "    ");
+            xml.append("  </object>").append(System.lineSeparator());
         }
+        appendRows(xml, runRows, "  ");
         xml.append("</rollbackManifest>").append(System.lineSeparator());
 
         java.nio.file.Path target = new File(dir, MANIFEST).toPath();
         Io.restrictToOwner(target);
         Files.writeString(target, xml.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static void appendRows(StringBuilder xml, List<RowChange> rows, String indent) {
+        for (RowChange row : rows) {
+            xml.append(indent).append("<row key=\"").append(escape(row.key())).append('"');
+            if (row.before() != null) {
+                xml.append(" before=\"").append(escape(row.before())).append('"');
+            }
+            if (row.beforeLabel() != null) {
+                xml.append(" beforeLabel=\"").append(escape(row.beforeLabel())).append('"');
+            }
+            if (row.after() != null) {
+                xml.append(" after=\"").append(escape(row.after())).append('"');
+            }
+            xml.append("/>").append(System.lineSeparator());
+        }
     }
 
     private static void appendElement(StringBuilder xml, String name, String value) {

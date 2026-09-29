@@ -213,6 +213,8 @@ public class DeployCommand implements Callable<Integer> {
      * declined, or kept a removal back, would make what it dropped undetectable for ever.
      */
     private final Set<DeployObject> appliedUnits = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+    // The OID each written object ended up under, for the rollback plan's record of its state rows.
+    private final Map<DeployObject, String> writtenOids = new IdentityHashMap<>();
 
     /** Set when last-applied cannot be recovered at all, so no comparison this run means anything. */
     private boolean detectionBroken;
@@ -520,11 +522,11 @@ public class DeployCommand implements Callable<Integer> {
             }
             // Written after the apply: the tree's objects are on the server now, whatever the plan said.
             oidComments.treeDeployed();
-            writeRollbackPlan(client, tracking);
-
+            // State first: the net records which rows the run moved, so a rollback can move them back.
             if (planDir == null && !dryRun && sentSomething) {
                 recordState(prismContext, client, tracking, units);
             }
+            writeRollbackPlan(client, tracking);
             return exit;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
@@ -925,6 +927,9 @@ public class DeployCommand implements Callable<Integer> {
             String value = FileTracking.deployValue(tracking.currentRevision, connectionOptions.account(),
                     VersionSupport.toolVersion(), sent.created, sent.patched, sent.inSync, sent.removed,
                     sent.skipped, sent.failed);
+            if (rollback != null) {
+                recordRowChanges(tracking, applied, changes);
+            }
             for (String scope : tracking.files.scopes()) {
                 changes.set(tracking.files.deployKeyOf(scope), value, null);
             }
@@ -941,6 +946,56 @@ public class DeployCommand implements Callable<Integer> {
             note("warning: could not record what was deployed: " + safe(e.getMessage()));
             LOG.trace("recording the deployment failed", e);
         }
+    }
+
+    /**
+     * Tell the rollback plan which file rows this run moves, per object: the rows of its files and of the gone
+     * files it compared against, as they were before and as they will be. What no one object claims — the rows of
+     * an object that left the tree, an earlier version's tree rows — is recorded for the run as a whole.
+     */
+    private void recordRowChanges(Tracking tracking, List<DeployObject> applied, SyncState.Changes changes) {
+        Map<String, SyncState.Row> before = new LinkedHashMap<>();
+        for (SyncState.Row row : SyncState.rows(tracking.table)) {
+            before.putIfAbsent(row.key(), row); // the row SyncState.apply updates
+        }
+        Set<String> changed = new LinkedHashSet<>(changes.set.keySet());
+        changed.addAll(changes.delete);
+        Set<String> claimed = new HashSet<>();
+        for (DeployObject unit : applied) {
+            Set<String> keys = new LinkedHashSet<>();
+            for (File file : unit.sourceFiles()) {
+                String path = tracking.files.pathOf(file);
+                if (path != null) {
+                    keys.add(tracking.files.keyOf(path));
+                }
+            }
+            for (String path : comparedPaths.getOrDefault(unit, List.of())) {
+                keys.add(tracking.files.keyOf(path));
+            }
+            keys.retainAll(changed);
+            claimed.addAll(keys);
+            rollback.recordRows(writtenOids.get(unit), rowChanges(keys, before, changes));
+        }
+        Set<String> rest = new LinkedHashSet<>(changed);
+        rest.removeAll(claimed);
+        rollback.recordRunRows(rowChanges(rest, before, changes));
+    }
+
+    private static List<RollbackPlan.RowChange> rowChanges(Set<String> keys, Map<String, SyncState.Row> before,
+            SyncState.Changes changes) {
+        List<RollbackPlan.RowChange> rows = new ArrayList<>();
+        for (String key : keys) {
+            SyncState.Row old = before.get(key);
+            String[] next = changes.set.get(key);
+            String oldValue = (old != null) ? old.value() : null;
+            String newValue = (next != null) ? next[0] : null;
+            if (Objects.equals(oldValue, newValue)) {
+                continue; // a row the run leaves as it was has nothing to put back
+            }
+            rows.add(new RollbackPlan.RowChange(key, (old != null) ? old.value() : null,
+                    (old != null) ? old.label() : null, (next != null) ? next[0] : null));
+        }
+        return rows;
     }
 
     /** The strategy for one object: the CLI flags, with any matching {@code --policy} knob layered on. */
@@ -1113,6 +1168,7 @@ public class DeployCommand implements Callable<Integer> {
                 }
                 if (!preview && (action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH)) {
                     String affectedOid = reconciler.execute(outcome);
+                    writtenOids.put(unit, (affectedOid != null) ? affectedOid : outcome.oid);
                     if (rollback != null) {
                         rollback.recordApplied(action, outcome, affectedOid, unit.identityLabel());
                     }

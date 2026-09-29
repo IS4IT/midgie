@@ -560,6 +560,16 @@ class LiveIntegrationTest {
         assertTrue(restored.contains(">beta<") && restored.contains(SUPERUSER_ROLE_OID),
                 "rollback puts the removed values back:\n" + restored);
         assertFalse(restored.contains(">gamma<") || restored.contains(END_USER_ROLE_OID), restored);
+
+        // The tracking rows went back with the object, so deploying v2 again removes v1's values again rather
+        // than reading them as someone else's and keeping them beside v2's under merge.
+        CliResult redeploy = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes", "--no-rollback-plan");
+        assertEquals(0, redeploy.exit, redeploy.out + redeploy.err);
+        String redeployed = client.getObject("roles", DEPLOY_ROLE_OID);
+        assertFalse(redeployed.contains(">beta<"), "v2 dropped beta:\n" + redeployed);
+        assertEquals(1, redeployed.split("<inducement").length - 1, "one inducement, not old and new:\n" + redeployed);
+        assertTrue(redeployed.contains(END_USER_ROLE_OID) && !redeployed.contains(SUPERUSER_ROLE_OID), redeployed);
     }
 
     @Test

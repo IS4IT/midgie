@@ -25,6 +25,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Removal detection that fails for an object is reported, not read as "nothing removed".** When an object's last-deployed files could not be parsed, contradicted each other, or could not be compared, detection for it ended at TRACE level and its rows moved on — so a value dropped from the tree stayed on the server for good, with a green run. Each case is now a warning that `--quiet` does not hide. An object whose old content no longer parses or whose comparison failed keeps its rows so the next run tries again; one whose files' records contradict each other (a file deployed on its own since) lets them move on, since that history would fail every run. An object that left the tree is still reported as an orphan when its old files no longer combine.
 
+- **`rollback` moves the tracking rows back with the objects.** On a tracked tree a rollback restored the objects but left `midgie-state` saying the rolled-back revision was applied. Deploying that revision again then found nothing it had dropped, and under merge the values it was meant to remove stayed beside the new ones. The rollback plan now records the rows the deploy moved, before and after, and `rollback` restores them for each object it restored, leaving any row a later deploy has written since. `--dry-run` says how many rows would move.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed
