@@ -312,6 +312,17 @@ class PolicyTest {
     }
 
     @Test
+    void aWholeSegmentEscapedAsteriskIsStillALiteral(@TempDir Path dir) throws Exception {
+        // '\*' used to unescape to the same text as the wildcard and then match like one, so a rule written
+        // for a role literally named '*' full-replaced every role.
+        Policy policy = load(dir, "RoleType/\\* scope=full");
+
+        assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("RoleType", "*", OID, baseline()).scope);
+        assertEquals(DiffEngine.Scope.PRESENT, policy.resolveFor("RoleType", "Manager", OID, baseline()).scope,
+                "a role named anything else must keep the CLI strategy");
+    }
+
+    @Test
     void aMissingPolicyFileSaysWhatIsMissing(@TempDir Path dir) {
         // NoSuchFileException's message is only the path, so the run used to fail with a bare
         // 'midgie: midgie.policy' — indistinguishable from a complaint about the file's contents.

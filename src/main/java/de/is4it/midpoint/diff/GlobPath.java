@@ -23,9 +23,38 @@ final class GlobPath {
     private static final String STAR = "*";
     private static final String GLOBSTAR = "**";
 
-    private final List<String> segments;
+    private enum Kind { LITERAL, ONE_SEGMENT, ANY_DEPTH }
 
-    private GlobPath(List<String> segments) {
+    /**
+     * One parsed segment. Whether it is a wildcard is decided once, from the text as written, and kept here:
+     * an escaped {@code \*} unescapes to the same text as the wildcard, so the text alone cannot tell them
+     * apart afterwards.
+     */
+    private record Segment(Kind kind, String text) {
+        static final Segment STAR_SEGMENT = new Segment(Kind.ONE_SEGMENT, STAR);
+        static final Segment GLOBSTAR_SEGMENT = new Segment(Kind.ANY_DEPTH, GLOBSTAR);
+
+        static Segment literal(String text) {
+            return new Segment(Kind.LITERAL, text);
+        }
+
+        boolean isLiteral() {
+            return kind == Kind.LITERAL;
+        }
+
+        boolean isGlobstar() {
+            return kind == Kind.ANY_DEPTH;
+        }
+
+        /** Whether this segment, on its own, matches the input segment {@code name}. */
+        boolean matchesOne(String name) {
+            return kind == Kind.ONE_SEGMENT || (kind == Kind.LITERAL && text.equals(name));
+        }
+    }
+
+    private final List<Segment> segments;
+
+    private GlobPath(List<Segment> segments) {
         this.segments = segments;
     }
 
@@ -47,7 +76,7 @@ final class GlobPath {
      *         {@link #rejectPartialWildcard})
      */
     static GlobPath parse(String text, int identitySegments) {
-        List<String> segs = new ArrayList<>();
+        List<Segment> segs = new ArrayList<>();
         int index = 0;
         for (String raw : splitOnUnescapedSlash(text)) {
             String seg = raw.trim();
@@ -55,7 +84,13 @@ final class GlobPath {
                 continue;
             }
             rejectPartialWildcard(seg);
-            segs.add(unescapeStars(index < identitySegments ? seg : normalize(seg)));
+            if (STAR.equals(seg)) {
+                segs.add(Segment.STAR_SEGMENT);
+            } else if (GLOBSTAR.equals(seg)) {
+                segs.add(Segment.GLOBSTAR_SEGMENT);
+            } else {
+                segs.add(Segment.literal(unescapeStars(index < identitySegments ? seg : normalize(seg))));
+            }
             index++;
         }
         return new GlobPath(segs);
@@ -93,7 +128,10 @@ final class GlobPath {
         return false;
     }
 
-    /** Turn {@code \*} into the literal asterisk it stands for, now that the wildcard check has run. */
+    /**
+     * Turn {@code \*} into the literal asterisk it stands for. Only ever applied to a segment already known
+     * to be a literal, so a name written {@code \*} matches a name that is {@code *} and nothing else.
+     */
     private static String unescapeStars(String seg) {
         return (seg.indexOf('\\') < 0) ? seg : seg.replace("\\*", "*");
     }
@@ -126,17 +164,17 @@ final class GlobPath {
 
     /** An all-literal glob from an item path's local names — for exact {@code --path} rules. */
     static GlobPath ofItemPath(ItemPath path) {
-        List<String> segs = new ArrayList<>();
+        List<Segment> segs = new ArrayList<>();
         for (Object segment : path.removeIds().getSegments()) {
             if (ItemPath.isName(segment)) {
-                segs.add(ItemPath.toName(segment).getLocalPart());
+                segs.add(Segment.literal(ItemPath.toName(segment).getLocalPart()));
             }
         }
         return new GlobPath(segs);
     }
 
     private static String normalize(String seg) {
-        if (STAR.equals(seg) || GLOBSTAR.equals(seg) || seg.startsWith("oid:")) {
+        if (seg.startsWith("oid:")) {
             return seg;
         }
         int colon = seg.indexOf(':');
@@ -152,7 +190,7 @@ final class GlobPath {
     }
 
     boolean containsGlobstar() {
-        return segments.contains(GLOBSTAR);
+        return segments.stream().anyMatch(Segment::isGlobstar);
     }
 
     /** Match this glob against a list of segments ({@code *} = one segment, {@code **} = zero or more). */
@@ -162,16 +200,16 @@ final class GlobPath {
         boolean[][] dp = new boolean[n + 1][m + 1];
         dp[0][0] = true;
         for (int i = 1; i <= n; i++) {
-            if (GLOBSTAR.equals(segments.get(i - 1))) {
+            if (segments.get(i - 1).isGlobstar()) {
                 dp[i][0] = dp[i - 1][0];
             }
         }
         for (int i = 1; i <= n; i++) {
-            String seg = segments.get(i - 1);
+            Segment seg = segments.get(i - 1);
             for (int j = 1; j <= m; j++) {
-                if (GLOBSTAR.equals(seg)) {
+                if (seg.isGlobstar()) {
                     dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
-                } else if (STAR.equals(seg) || seg.equals(input.get(j - 1))) {
+                } else if (seg.matchesOne(input.get(j - 1))) {
                     dp[i][j] = dp[i - 1][j - 1];
                 }
             }
@@ -187,14 +225,14 @@ final class GlobPath {
      */
     boolean matchesPrefix(List<String> prefix) {
         int i = 0;
-        for (String segment : segments) {
-            if (GLOBSTAR.equals(segment)) {
+        for (Segment segment : segments) {
+            if (segment.isGlobstar()) {
                 return true; // ** can absorb anything that follows, including the whole prefix
             }
             if (i == prefix.size()) {
                 return true; // the glob is longer than the prefix and matched it so far
             }
-            if (!STAR.equals(segment) && !segment.equals(prefix.get(i))) {
+            if (!segment.matchesOne(prefix.get(i))) {
                 return false;
             }
             i++;
@@ -228,33 +266,21 @@ final class GlobPath {
 
     /** Whether this selector is anchored to a single object by OID. */
     private boolean pinsOneObject() {
-        return !segments.isEmpty() && segments.get(0).startsWith("oid:");
+        return !segments.isEmpty() && segments.get(0).isLiteral() && segments.get(0).text().startsWith("oid:");
     }
 
     private int literalCount() {
-        int count = 0;
-        for (String seg : segments) {
-            if (!STAR.equals(seg) && !GLOBSTAR.equals(seg)) {
-                count++;
-            }
-        }
-        return count;
+        return (int) segments.stream().filter(Segment::isLiteral).count();
     }
 
     private int globstarCount() {
-        int count = 0;
-        for (String seg : segments) {
-            if (GLOBSTAR.equals(seg)) {
-                count++;
-            }
-        }
-        return count;
+        return (int) segments.stream().filter(Segment::isGlobstar).count();
     }
 
     private int literalPrefixLength() {
         int count = 0;
-        for (String seg : segments) {
-            if (STAR.equals(seg) || GLOBSTAR.equals(seg)) {
+        for (Segment seg : segments) {
+            if (!seg.isLiteral()) {
                 break;
             }
             count++;
