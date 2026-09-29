@@ -420,7 +420,7 @@ The plan prints one line per apply unit — that is, per object (`seq  type  oid
 
 > **Status: built.** `DiffEngine` records old values, `deploy` writes a rollback plan on every run, and `midgie rollback` replays it. See TODO.md section K.
 
-A deploy that writes leaves a **rollback plan** behind: for each object it touched, the delta that puts it back. The motivating failure is ordinary — a missing line in the `--policy` file leaves a multi-valued container on `replace`, the wholesale replace wipes accrued associations or part of the `SystemConfiguration`, and the run reports success.
+A deploy that writes leaves a **rollback plan** behind: for each object it touched, the delta that puts it back. That includes a run that ends part way on a rejected login or a lost connection — the net for what was written before the failure is written before the error is reported. The motivating failure is ordinary — a missing line in the `--policy` file leaves a multi-valued container on `replace`, the wholesale replace wipes accrued associations or part of the `SystemConfiguration`, and the run reports success.
 
 **Why the inverse is nearly free.** prism's `fixupDelta` is overridden in `PrismPropertyImpl` *alone*, so multi-valued containers and single-valued references diff to add/delete pairs — and in the wipe case those deletes carry the accrued values themselves. `ObjectDelta.createReverseDelta()` swaps them back.
 

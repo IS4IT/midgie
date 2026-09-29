@@ -56,6 +56,7 @@ class DeployRetryTest {
     private HttpServer server;
     private String host;
     private final AtomicInteger flakyFailsRemaining = new AtomicInteger(0);
+    private volatile boolean flakyUnauthorized;
 
     @BeforeAll
     static void bootstrapPrism() throws Exception {
@@ -89,6 +90,23 @@ class DeployRetryTest {
         writeTree(dir);
         int exit = deploy(dir);
         assertEquals(2, exit, "a single pass leaves the flaky unit failed");
+    }
+
+    @Test
+    void aRunThatDiesPartWayStillLeavesARollbackPlan(@TempDir Path dir, @TempDir Path nets) throws Exception {
+        // The good role is patched, then the server stops accepting the credentials. The failure that stops
+        // a run part way is the one that most needs a net, and it used to skip writing it.
+        flakyUnauthorized = true;
+        writeTree(dir);
+
+        int exit = deploy(dir, "--rollback-plan", nets.toString());
+
+        assertEquals(2, exit);
+        java.io.File run = RollbackPlan.newestUnder(nets.toFile());
+        assertTrue(run != null, "a rollback plan must be written for what was applied before the failure");
+        String[] patches = run.list((d, name) -> name.endsWith(".patch.xml"));
+        assertEquals(1, patches.length, java.util.Arrays.toString(patches));
+        assertTrue(patches[0].contains(GOOD), patches[0]);
     }
 
     @Test
@@ -221,7 +239,9 @@ class DeployRetryTest {
             respond(exchange, 200, searchResult(oid));
         } else if ("PATCH".equals(method)) {
             String oid = path.substring(path.lastIndexOf('/') + 1);
-            if (FLAKY.equals(oid) && flakyFailsRemaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+            if (FLAKY.equals(oid) && flakyUnauthorized) {
+                respond(exchange, 401, "unauthorized");
+            } else if (FLAKY.equals(oid) && flakyFailsRemaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
                 respond(exchange, 400, "transient failure");
             } else {
                 respond(exchange, 204, "");

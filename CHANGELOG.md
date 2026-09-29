@@ -21,6 +21,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A smart reference inside an inducement or assignment is recognised.** A filter-only `targetRef` or `construction/resourceRef` inside an entry without a container id made the whole entry differ from the server's resolved copy, and the reference-level check never saw it: every deploy deleted the resolved inducement and added one whose reference named nothing, sent without `reevaluateSearchFilters`, so midPoint stored it unresolved. Under merge a duplicate was added on every run instead. Such an entry now reads as in sync when the server's copy is its resolution; when several entries could be, it is left as a change and `-v` suggests `--smart-refs verify`. An entry still sent whole — and a plan file holding one — goes out with `reevaluateSearchFilters`.
 
+- **A deploy that dies part way still leaves its rollback plan.** A rejected login (401) or a lost connection in the middle of the apply ended the run before the net was written, so the objects already patched had no undo — the one case the net exists for. The plan for what was written is now saved before the error is reported.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

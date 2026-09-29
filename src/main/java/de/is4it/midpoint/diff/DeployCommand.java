@@ -491,7 +491,15 @@ public class DeployCommand implements Callable<Integer> {
                 rollback = new RollbackPlan(prismContext, client, oidComments);
             }
 
-            Integer exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
+            Integer exit;
+            try {
+                exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
+            } catch (Exception e) {
+                // A lost connection or a rejected login ends the run part way, and what was written before it
+                // is exactly what the net is for; writing it only after a clean pass left none in that case.
+                writeRollbackPlan(client, tracking);
+                throw e;
+            }
 
             // After the pass, not before it: a rule is only marked as having matched when it is offered to
             // an object, and that happens inside the pass. Reported earlier, every rule looked unmatched —
