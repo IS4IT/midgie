@@ -8,21 +8,21 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 ## Blockers
 
-- [ ] **B1 — Rollback rotation deletes arbitrary directories.** `RollbackPlan.java:324-344` (`rotate`), `:385-390` (`sanitizeKey`), called from `DeployCommand.java:1150-1157`. *Confirmed.*
+- [x] **B1 — Rollback rotation deletes arbitrary directories.** — `18bad84` `RollbackPlan.java:324-344` (`rotate`), `:385-390` (`sanitizeKey`), called from `DeployCommand.java:1150-1157`. *Confirmed.*
   `rotate(base, 5)` recursively deletes every subdirectory of `base` except the five highest-named, without checking it is a timestamped run. `base` can come from `--rollback-plan` or a tree-local `.midgie.properties` (`rollback-plan` and `app` are allowed keys), and `sanitizeKey` keeps `.` and `..`. A cloned repo with `rollback-plan = .` makes the next `deploy --yes` delete the tree's own `roles/`, `users/`, …; `app = ..` hits `$XDG_STATE_HOME`. Letters sort after digits, so the real net goes first. `listFiles(File::isDirectory)` follows symlinks.
   Fix: only touch directories whose name matches the run-timestamp pattern (and hold a manifest), never follow symlinks, reject `.`/`..`/empty keys.
 
-- [ ] **B2 — Smart references nested in keyless containers are never handled.** `DiffEngine.java:686-718`, `DeltaOutput.java:93-108`. *Confirmed.*
+- [x] **B2 — Smart references nested in keyless containers are never handled.** — `2c4e3f5` (confirmed live against the docker rig). Limit: a reference inside a list *nested in* the entry is not substituted; that entry stays a change and is sent with `reevaluateSearchFilters`. `DiffEngine.java:686-718`, `DeltaOutput.java:93-108`. *Confirmed.*
   `stripResolvedSmartReferences` only looks at references directly in an item delta; a filter-only `targetRef` / `construction/resourceRef` inside an `inducement`/`assignment` diffs as whole-container add/delete. `carriesSmartReference` misses it too, so no `reevaluateSearchFilters`. Under replace every deploy swaps the resolved inducement for an unresolved one; under merge it adds a duplicate every run.
 
-- [ ] **B3 — Container ids from another environment pair with unrelated live entries.** `NaturalKeys.java:103-109`, `DiffEngine.java:501` (`adoptLiveIds`), `:969-1001` (accrued guard), `:1355` (`applyMerge`). *Confirmed.*
+- [x] **B3 — Container ids from another environment pair with unrelated live entries.** — `3710d26`. Broader than reported: prism pairs by id under *every* strategy, `real-value` included, so a DEV `inducement id=5` re-pointed PROD's unrelated inducement 5. Fixed by `ContainerIds` (foreign numbering detected per list). Residual, documented: one edited entry whose foreign id is taken, with no other entry in the list to show the mismatch. `NaturalKeys.java:103-109`, `DiffEngine.java:501` (`adoptLiveIds`), `:969-1001` (accrued guard), `:1355` (`applyMerge`). *Confirmed.*
   The id rung is tried before the key. DEV `<mapping id="4"><name>fromDev</name>` against PROD `<mapping id="4"><name>prodOnly</name>` under auto + merge gives `mapping/4/name REPLACE fromDev` with no refusal. `applyMerge` also keeps the delete of an admin-added PROD assignment whose id matches a desired id.
   Fix: an id match must not count as pairing/ownership when the contents or filled natural keys disagree. Likely also addresses D1.
 
-- [ ] **B4 — Escaped `\*` in a policy path becomes a wildcard.** `GlobPath.java:58, 97-98, 174`. *Confirmed.*
+- [x] **B4 — Escaped `\*` in a policy path becomes a wildcard.** — `4f03375` `GlobPath.java:58, 97-98, 174`. *Confirmed.*
   `RoleType/\* multivalue=replace scope=full` matches every role. Keep the literal distinct from STAR after parsing. `PolicyTest:307` only covers `\*` inside a longer name.
 
-- [ ] **B5 — `apply=on-create`/`if-absent` items are deleted with their parent container value.** `ApplyRules.java:170-189`; also `DeployCommand` `withoutRestricted`. *Confirmed.*
+- [x] **B5 — `apply=on-create`/`if-absent` items are deleted with their parent container value.** — `52ef6d0`. Also covers a single-valued container (`activation`) deleted around the item; deleting a whole entry the file no longer declares still goes through. `ApplyRules.java:170-189`; also `DeployCommand` `withoutRestricted`. *Confirmed.*
   Only a replace is checked; an add+delete pair strips `valuesToAdd` but the delete of the live value (restricted item included) goes out. Whole-value removals resolve to ALWAYS and delete the nested protected item too. Contradicts DESIGN ("never overwritten or removed").
 
 ## Major
@@ -147,6 +147,8 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [ ] **C34 — `midgie-state` documentation has a long run of spaces.** `SyncState.java:80` (missing `\` in the text block).
 - [ ] **C35 — DESIGN claims `--rollback-plan` dir is excluded from discovery by path.** `DeployCommand.java:1192-1201` vs DESIGN:425. Harmless in practice (marker skips it); fix code or doc.
 - [ ] **C36 — TopoSort cycle breaking is O(V²·(V+E)).** `TopoSort.java:368-375`. Performance only.
+- [ ] **C37 — `RemovalDetector.livePath` pairs history values with live ones through `NaturalKeys.match`'s id step.** `RemovalDetector.java:144`. Found while fixing B3. With ids from another server a nested removal can address the wrong live entry; `heldValue`'s real-value check limits it to values equal to what the tree deployed. Run the history object through `ContainerIds.trustedOnly` against live before pairing.
+- [x] **C38 — Merge sent an empty `<delete>` item delta beside an add.** `DiffEngine.applyMerge`. Found while fixing B3; every merge that kept all values a delete side would have removed emitted it, and the summary read `add+delete`. — `d5b9643`
 
 ### Code hygiene and packaging
 
