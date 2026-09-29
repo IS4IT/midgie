@@ -254,6 +254,87 @@ class ApplyRulesTest {
         assertEquals(List.of("activation/administrativeStatus (apply=if-absent)"), outcome.heldBack);
     }
 
+    // --- a delete above a restricted item ---
+
+    private static final String LIVE_ASSIGNMENT = "<assignment id=\"5\"><description>old</description>"
+            + "<activation><administrativeStatus>disabled</administrativeStatus></activation></assignment>";
+
+    @Test
+    void anEntryReplacedWholeMayNotTakeAnOnCreateItemWithIt(@TempDir Path dir) throws Exception {
+        // Compared by content, the edited entry diffs to "add the new form, delete the old", and the delete
+        // used to carry the on-create status away with the old form.
+        Policy policy = load(dir, "UserType/*/assignment/activation/administrativeStatus apply=on-create");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<assignment><description>new</description></assignment>")),
+                parse(user(LIVE_ASSIGNMENT)));
+
+        assertEquals(Reconciler.Action.FAIL, outcome.action, outcome.detail);
+        assertTrue(outcome.detail.contains("assignment/activation/administrativeStatus"), outcome.detail);
+        assertTrue(outcome.detail.contains("container id"), outcome.detail);
+    }
+
+    @Test
+    void anEntryReplacedWholeMayNotTakeAnIfAbsentItemWithIt(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/assignment/activation apply=if-absent");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<assignment><description>new</description></assignment>")),
+                parse(user(LIVE_ASSIGNMENT)));
+
+        assertEquals(Reconciler.Action.FAIL, outcome.action, outcome.detail);
+        assertTrue(outcome.detail.contains("assignment/activation"), outcome.detail);
+    }
+
+    @Test
+    void anEntryChangedInPlaceKeepsItsOnCreateItem(@TempDir Path dir) throws Exception {
+        // With its id the entry is paired, and the change is made inside it.
+        Policy policy = load(dir, "UserType/*/assignment/activation/administrativeStatus apply=on-create");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<assignment id=\"5\"><description>new</description>"
+                        + "<activation><administrativeStatus>enabled</administrativeStatus></activation>"
+                        + "</assignment>")),
+                parse(user(LIVE_ASSIGNMENT)));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("new"), outcome.modificationXml);
+        assertFalse(outcome.modificationXml.contains("administrativeStatus"), outcome.modificationXml);
+        assertEquals(List.of("assignment/activation/administrativeStatus (apply=on-create)"), outcome.heldBack);
+    }
+
+    @Test
+    void aPairedEntryMayNotDropTheContainerAnOnCreateItemSitsIn(@TempDir Path dir) throws Exception {
+        // The file's entry leaves activation out, so the change deletes it inside the entry — and the
+        // on-create status with it.
+        Policy policy = load(dir, "UserType/*/assignment/activation/administrativeStatus apply=on-create");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<assignment id=\"5\"><description>new</description></assignment>")),
+                parse(user(LIVE_ASSIGNMENT)));
+
+        assertEquals(Reconciler.Action.FAIL, outcome.action, outcome.detail);
+        assertTrue(outcome.detail.contains("assignment/activation/administrativeStatus"), outcome.detail);
+    }
+
+    @Test
+    void anEntryTheFileNoLongerHasIsStillRemovedWhole(@TempDir Path dir) throws Exception {
+        // The rule protects the item inside an entry that exists; it does not pin the entry itself.
+        Policy policy = load(dir, "UserType/*/assignment/activation/administrativeStatus apply=on-create");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.FULL,
+                parse(user("")), parse(user(LIVE_ASSIGNMENT)));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("delete"), outcome.modificationXml);
+    }
+
+    @Test
+    void aSingleValuedContainerIsNotRemovedFromUnderAnOnCreateItem(@TempDir Path dir) throws Exception {
+        // --scope full deleting an activation the file leaves out would delete the on-create status with it.
+        Policy policy = load(dir, "UserType/*/activation/administrativeStatus apply=on-create");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.FULL, parse(user("")),
+                parse(user("<activation><administrativeStatus>disabled</administrativeStatus></activation>")));
+
+        assertEquals(Reconciler.Action.FAIL, outcome.action, outcome.detail);
+        assertTrue(outcome.detail.contains("activation/administrativeStatus"), outcome.detail);
+    }
+
     // --- helpers ---
 
     private static StrategyOptions.Resolved baseline(DiffEngine.Scope scope) {

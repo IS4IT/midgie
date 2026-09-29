@@ -255,6 +255,10 @@ final class Reconciler {
                 }
             }
         }
+        String removesRestricted = strategy.apply.removedWithContainer(delta, current);
+        if (removesRestricted != null) {
+            return fail(restType, targetOid, removesRestricted);
+        }
         PrismObject<? extends Objectable> after = DiffEngine.project(current, delta);
         // Judged on the whole PATCH, removals included, against what the server would hold afterwards. A change
         // prism cannot project locally is not judged here; midPoint has the last word on it anyway.

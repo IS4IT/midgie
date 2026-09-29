@@ -13,6 +13,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **An escaped `\*` in a policy selector stays a literal.** `RoleType/\* multivalue=replace scope=full`, written for a role literally named `*`, unescaped to the same text as the one-segment wildcard and then matched every role, full-replacing all of them. A parsed segment now remembers whether it was written as a wildcard; `\*` and `\*\*` as a whole segment match only a name that is `*` or `**`.
 
+- **`apply=on-create` and `apply=if-absent` items are no longer deleted with their container.** Only a *replace* of a container was checked for such items. A list compared by content changes an entry by adding its new form and deleting its old one, and the delete took the protected item along — `UserType/*/assignment/activation/administrativeStatus apply=on-create` did not stop an edited assignment from losing its status. Deleting a single-valued container around the item (an `activation` the file leaves out, under `--scope full` or inside a paired entry) did the same. The object is now refused instead, naming the item; giving the entry its container id in the file makes the change in place. The check runs on the whole PATCH, so a removal of a value dropped from the tree that pairs with the diff's add is caught too. Removing an entry the file no longer declares still removes it whole.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

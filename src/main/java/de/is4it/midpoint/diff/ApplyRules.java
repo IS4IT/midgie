@@ -210,6 +210,91 @@ final class ApplyRules {
         return new HoldBack(held, null);
     }
 
+    /**
+     * Why {@code delta} cannot be sent as it stands, or {@code null} when it can: it deletes a container value
+     * that holds a restricted item on the server, and the object would not keep that item afterwards.
+     *
+     * <p>{@link #holdBack} guards a <em>replace</em> of such a container, but a list compared by content
+     * changes an entry with an add of the new form and a delete of the old, and the delete takes everything
+     * the old form holds — an {@code on-create} item stripped from the added value included. Two cases lose
+     * the item: the same change also adds a value there (the entry is replaced whole), or the container is
+     * single-valued (the object is left without it). A delete of one entry of a multi-valued container, with
+     * nothing added in its place, removes that entry as a whole and is left to go through.
+     *
+     * <p>Judged on the whole PATCH, after the removals of values dropped from the tree have joined it: a
+     * removal can supply the delete that pairs with the diff's add.
+     *
+     * @param live the object as the server holds it, whose values the deletes are resolved against
+     */
+    String removedWithContainer(ObjectDelta<? extends Objectable> delta, PrismObject<? extends Objectable> live) {
+        if (rules.isEmpty() || delta == null || rules.stream().allMatch(rule -> rule.mode == Mode.ALWAYS)) {
+            return null;
+        }
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            Collection<? extends PrismValue> deleted = mod.getValuesToDelete();
+            if (deleted == null || deleted.isEmpty()) {
+                continue;
+            }
+            List<String> names = localNames(mod.getPath());
+            if (!couldReachBelow(names, false)) {
+                continue;
+            }
+            boolean replacedWhole = addsAt(delta, mod.getPath());
+            if (!replacedWhole && !isSingleValued(mod)) {
+                continue;
+            }
+            List<String> onServer = new ArrayList<>();
+            collectRestricted(liveCounterparts(deleted, live, mod.getPath()), names, onServer);
+            if (onServer.isEmpty()) {
+                continue;
+            }
+            String path = String.join("/", names);
+            String items = String.join(", ", onServer);
+            if (replacedWhole) {
+                return "changing a value of " + path + " replaces it whole, which would remove " + items
+                        + " — the policy does not let a deploy remove it. Give the entry its container id in the"
+                        + " file, so the change is made inside it";
+            }
+            return "removing " + path + " would remove " + items
+                    + ", which the policy does not let a deploy remove";
+        }
+        return null;
+    }
+
+    /** Whether any modification in {@code delta} adds a value at {@code path}. */
+    private static boolean addsAt(ObjectDelta<? extends Objectable> delta, ItemPath path) {
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            Collection<? extends PrismValue> added = mod.getValuesToAdd();
+            if (added != null && !added.isEmpty() && mod.getPath().equivalent(path)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isSingleValued(ItemDelta<?, ?> mod) {
+        return mod.getDefinition() != null && mod.getDefinition().isSingleValue();
+    }
+
+    /**
+     * The server's own copy of each deleted container value, found by id, so what is judged is what the delete
+     * will actually remove; a value without an id, or one the server does not hold, is judged as sent.
+     */
+    private static List<PrismValue> liveCounterparts(Collection<? extends PrismValue> deleted,
+            PrismObject<? extends Objectable> live, ItemPath path) {
+        Item<?, ?> liveItem = (live != null) ? live.findItem(path) : null;
+        List<PrismValue> values = new ArrayList<>();
+        for (PrismValue value : deleted) {
+            PrismValue counterpart = null;
+            if (liveItem instanceof PrismContainer<?> container && value instanceof PrismContainerValue<?> cv
+                    && cv.getId() != null) {
+                counterpart = container.findValue(cv.getId());
+            }
+            values.add((counterpart != null) ? counterpart : value);
+        }
+        return values;
+    }
+
     /** Whether the server holds at least one value at {@code path}. */
     private static boolean holdsValue(PrismObject<? extends Objectable> live, ItemPath path) {
         Item<?, ?> item = (live != null) ? live.findItem(path) : null;
