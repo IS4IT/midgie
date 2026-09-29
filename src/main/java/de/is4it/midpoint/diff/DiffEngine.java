@@ -419,6 +419,52 @@ public final class DiffEngine {
      * counterpart in desired.
      */
     private static Declaration declarationAt(PrismObject<?> desired, PrismObject<?> live, ItemPath path) {
+        PathInDesired walked = resolveInDesired(desired, live, path);
+        return switch (walked.outcome()) {
+            case NO_DESIRED_CONTAINER -> Declaration.UNDECLARED;
+            case NO_COUNTERPART, UNRESOLVABLE -> Declaration.UNKNOWN;
+            case RESOLVED -> {
+                if (walked.rest().isEmpty()) {
+                    yield Declaration.UNKNOWN;
+                }
+                Item<?, ?> item = walked.parent().findItem(walked.rest());
+                yield (item == null || item.hasNoValues()) ? Declaration.UNDECLARED : Declaration.DECLARED;
+            }
+        };
+    }
+
+    /** How far {@link #resolveInDesired} got. */
+    private enum Walk {
+        /** Every container-id segment paired into desired. */
+        RESOLVED,
+        /** Desired does not declare a container the path goes through, or declares it with no values. */
+        NO_DESIRED_CONTAINER,
+        /** The live value at an id has no counterpart in desired: it is not the tree's. */
+        NO_COUNTERPART,
+        /** A segment that is neither a name nor a container id, or an id with no names before it. */
+        UNRESOLVABLE
+    }
+
+    /**
+     * A delta path followed into desired.
+     *
+     * @param parent the desired value the last id segment paired to (the object's own value when there is none);
+     *               meaningful only when {@code outcome} is {@link Walk#RESOLVED}
+     * @param rest   the names after the last id segment, possibly empty
+     */
+    private record PathInDesired(Walk outcome, PrismContainerValue<?> parent, ItemPath rest) {
+    }
+
+    /**
+     * Follow a delta path — built from the live object, so its container ids are the server's — into desired.
+     * Each id segment is resolved to the live value carrying it and paired into desired by
+     * {@link NaturalKeys#match}, container id first and then natural key, the pairing the diff itself uses.
+     *
+     * <p>The one walk behind every question the diff asks of a delta path: whether desired declares the item it
+     * names ({@link #declarationAt}), whether an edit lands on a value the tree declares
+     * ({@link #desiredDeclaresValueAt}), and which desired list a delete belongs to ({@link #desiredContainerAt}).
+     */
+    private static PathInDesired resolveInDesired(PrismObject<?> desired, PrismObject<?> live, ItemPath path) {
         PrismContainerValue<?> desiredParent = desired.getValue();
         PrismContainerValue<?> liveParent = (live != null) ? live.getValue() : null;
         List<QName> names = new ArrayList<>();
@@ -428,28 +474,25 @@ public final class DiffEngine {
                 continue;
             }
             if (!ItemPath.isId(segment) || names.isEmpty()) {
-                return Declaration.UNKNOWN; // an exotic segment: nothing to vouch for either way
+                return new PathInDesired(Walk.UNRESOLVABLE, null, ItemPath.EMPTY_PATH);
             }
             ItemPath containerPath = ItemPath.create(names.toArray());
             names.clear();
             Item<?, ?> desiredItem = desiredParent.findItem(containerPath);
             if (!(desiredItem instanceof PrismContainer<?> desiredContainer) || desiredItem.hasNoValues()) {
-                return Declaration.UNDECLARED;
+                return new PathInDesired(Walk.NO_DESIRED_CONTAINER, null, ItemPath.EMPTY_PATH);
             }
             Long id = ItemPath.toId(segment);
             PrismContainerValue<?> liveValue = containerValueById(liveParent, containerPath, id);
             PrismContainerValue<?> match = NaturalKeys.match(desiredContainer, liveValue, id);
             if (match == null) {
-                return Declaration.UNKNOWN;
+                return new PathInDesired(Walk.NO_COUNTERPART, null, ItemPath.EMPTY_PATH);
             }
             desiredParent = match;
             liveParent = liveValue;
         }
-        if (names.isEmpty()) {
-            return Declaration.UNKNOWN;
-        }
-        Item<?, ?> item = desiredParent.findItem(ItemPath.create(names.toArray()));
-        return (item == null || item.hasNoValues()) ? Declaration.UNDECLARED : Declaration.DECLARED;
+        return new PathInDesired(Walk.RESOLVED, desiredParent,
+                names.isEmpty() ? ItemPath.EMPTY_PATH : ItemPath.create(names.toArray()));
     }
 
     private static <O extends Objectable> ObjectDelta<O> reconcile(PrismObject<O> live, PrismObject<?> desired,
@@ -1012,37 +1055,7 @@ public final class DiffEngine {
      * — which is exactly the intended managed update, not an accrued value being overwritten.
      */
     private static boolean desiredDeclaresValueAt(PrismObject<?> desired, PrismObject<?> live, ItemPath path) {
-        PrismContainerValue<?> desiredParent = desired.getValue();
-        PrismContainerValue<?> liveParent = (live != null) ? live.getValue() : null;
-        List<QName> names = new ArrayList<>();
-        for (Object segment : path.getSegments()) {
-            if (ItemPath.isName(segment)) {
-                names.add(ItemPath.toName(segment));
-                continue;
-            }
-            if (!ItemPath.isId(segment)) {
-                return false; // an exotic segment (e.g. a reference deref): not something we can vouch for
-            }
-            ItemPath containerPath = ItemPath.create(names.toArray());
-            names.clear();
-            if (containerPath.isEmpty()) {
-                return false;
-            }
-            Item<?, ?> desiredItem = desiredParent.findItem(containerPath);
-            if (!(desiredItem instanceof PrismContainer<?> desiredContainer)) {
-                return false; // desired does not declare this container at all -> the value is live-only
-            }
-            PrismContainerValue<?> liveValue =
-                    containerValueById(liveParent, containerPath, ItemPath.toId(segment));
-            PrismContainerValue<?> match =
-                    NaturalKeys.match(desiredContainer, liveValue, ItemPath.toId(segment));
-            if (match == null) {
-                return false;
-            }
-            desiredParent = match;
-            liveParent = liveValue;
-        }
-        return true;
+        return resolveInDesired(desired, live, path).outcome() == Walk.RESOLVED;
     }
 
     /** The container value carrying {@code valueId} at {@code containerPath} under {@code parent}, or null. */
@@ -1371,36 +1384,11 @@ public final class DiffEngine {
      */
     private static PrismContainer<?> desiredContainerAt(PrismObject<?> desired, PrismObject<?> live,
             ItemPath path) {
-        PrismContainerValue<?> desiredParent = desired.getValue();
-        PrismContainerValue<?> liveParent = (live != null) ? live.getValue() : null;
-        List<QName> names = new ArrayList<>();
-        for (Object segment : path.getSegments()) {
-            if (ItemPath.isName(segment)) {
-                names.add(ItemPath.toName(segment));
-                continue;
-            }
-            if (!ItemPath.isId(segment) || names.isEmpty()) {
-                return null;
-            }
-            ItemPath containerPath = ItemPath.create(names.toArray());
-            names.clear();
-            Item<?, ?> desiredItem = desiredParent.findItem(containerPath);
-            if (!(desiredItem instanceof PrismContainer<?> desiredContainer)) {
-                return null;
-            }
-            Long id = ItemPath.toId(segment);
-            PrismContainerValue<?> liveValue = containerValueById(liveParent, containerPath, id);
-            PrismContainerValue<?> match = NaturalKeys.match(desiredContainer, liveValue, id);
-            if (match == null) {
-                return null;
-            }
-            desiredParent = match;
-            liveParent = liveValue;
-        }
-        if (names.isEmpty()) {
+        PathInDesired walked = resolveInDesired(desired, live, path);
+        if (walked.outcome() != Walk.RESOLVED || walked.rest().isEmpty()) {
             return null;
         }
-        Item<?, ?> item = desiredParent.findItem(ItemPath.create(names.toArray()));
+        Item<?, ?> item = walked.parent().findItem(walked.rest());
         return (item instanceof PrismContainer<?> container) ? container : null;
     }
 
