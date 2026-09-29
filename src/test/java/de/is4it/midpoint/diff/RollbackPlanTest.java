@@ -125,6 +125,70 @@ class RollbackPlanTest {
     }
 
     @Test
+    void rotationLeavesEverythingThatIsNotARunAlone(@TempDir Path dir) throws Exception {
+        // --rollback-plan and a tree-local config may name any directory, the tree itself included. Its
+        // folders sort after the timestamps, so they used to be the first thing rotated away.
+        for (String folder : List.of("roles", "users", "archetypes")) {
+            File sub = new File(dir.toFile(), folder);
+            Files.createDirectories(sub.toPath());
+            Files.writeString(new File(sub, "object.xml").toPath(), "<role/>", StandardCharsets.UTF_8);
+        }
+        // Named like a run, but nothing midgie wrote.
+        Files.createDirectories(dir.resolve("20250101-000000"));
+        for (String stamp : List.of("20260101-000000", "20260102-000000")) {
+            File run = new File(dir.toFile(), stamp);
+            Files.createDirectories(run.toPath());
+            Files.writeString(new File(run, RollbackPlan.MANIFEST).toPath(), "<rollbackManifest/>",
+                    StandardCharsets.UTF_8);
+        }
+
+        RollbackPlan.rotate(dir.toFile(), 1);
+
+        for (String folder : List.of("roles", "users", "archetypes")) {
+            assertTrue(new File(dir.toFile(), folder + "/object.xml").exists(), folder + " must survive");
+        }
+        assertTrue(new File(dir.toFile(), "20250101-000000").exists(),
+                "a timestamp name without a manifest is not proof of a run");
+        assertFalse(new File(dir.toFile(), "20260101-000000").exists(), "the older run must be rotated out");
+        assertTrue(new File(dir.toFile(), "20260102-000000").exists());
+    }
+
+    @Test
+    void rotationNeverFollowsLinks(@TempDir Path dir) throws Exception {
+        Path elsewhere = Files.createDirectories(dir.resolve("elsewhere"));
+        Files.writeString(elsewhere.resolve("keep.xml"), "<role/>", StandardCharsets.UTF_8);
+        Files.writeString(elsewhere.resolve(RollbackPlan.MANIFEST), "<rollbackManifest/>",
+                StandardCharsets.UTF_8);
+        Path base = Files.createDirectories(dir.resolve("base"));
+
+        // An old run with a link inside it, and a link named like a run pointing at the same directory.
+        Path old = Files.createDirectories(base.resolve("20260101-000000"));
+        Files.writeString(old.resolve(RollbackPlan.MANIFEST), "<rollbackManifest/>", StandardCharsets.UTF_8);
+        Files.createSymbolicLink(old.resolve("link"), elsewhere);
+        Files.createSymbolicLink(base.resolve("20250101-000000"), elsewhere);
+        Path newer = Files.createDirectories(base.resolve("20260102-000000"));
+        Files.writeString(newer.resolve(RollbackPlan.MANIFEST), "<rollbackManifest/>", StandardCharsets.UTF_8);
+
+        RollbackPlan.rotate(base.toFile(), 1);
+
+        assertFalse(Files.exists(old, java.nio.file.LinkOption.NOFOLLOW_LINKS), "the old run must go");
+        assertTrue(Files.exists(elsewhere.resolve("keep.xml")), "a link's target must never be emptied");
+        assertTrue(Files.isSymbolicLink(base.resolve("20250101-000000")), "a linked directory is not a run");
+    }
+
+    @Test
+    void aDotKeyStaysInsideTheStateRoot() {
+        // An --app of "." or ".." (a tree-local config may set it) must not resolve to the state root or
+        // the directory above it, both of which hold other deployments' nets.
+        File root = RollbackPlan.defaultBase("x", null).getParentFile();
+        for (String key : List.of(".", "..", ".hidden")) {
+            File base = RollbackPlan.defaultBase(key, null);
+            assertEquals(root, base.getParentFile(), key + " resolved to " + base);
+            assertFalse(base.getName().startsWith("."), key + " resolved to " + base);
+        }
+    }
+
+    @Test
     void emptyPlanWritesNothingAndReportsItself() {
         RollbackPlan plan = new RollbackPlan(prismContext, null);
         assertTrue(plan.isEmpty(), "a run that wrote nothing has nothing to undo");

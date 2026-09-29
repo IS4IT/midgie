@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Rollback rotation removes only its own run directories.** After writing a net, `deploy` kept the newest five subdirectories of the base path and deleted every other one, recursively and through symlinks, without checking what they were. The base path can come from `--rollback-plan` or a tree-local `.midgie.properties`, so `rollback-plan = .` deleted the tree's own `roles/`, `users/`, … on the next deploy that wrote — letters sort after the timestamps, so the real net went first. Rotation now considers only directories with a timestamp name that hold a rollback manifest or an unfinished-plan marker, skips symlinked directories, and removes links inside a run without following them. An `--app` (or `app`) of `.` or `..` no longer resolves the default base to the state root or the directory above it.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

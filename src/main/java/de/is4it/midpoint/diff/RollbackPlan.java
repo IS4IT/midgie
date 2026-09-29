@@ -8,7 +8,12 @@ package de.is4it.midpoint.diff;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -16,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +65,9 @@ final class RollbackPlan {
 
     private static final DateTimeFormatter STAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
+
+    /** The names {@link #STAMP} produces. Nothing else under a base path is a run directory. */
+    private static final Pattern RUN_NAME = Pattern.compile("\\d{8}-\\d{6}");
 
     /**
      * What a written net says about itself: where it came from and what state it expects to find.
@@ -318,29 +327,60 @@ final class RollbackPlan {
      *
      * <p>Without this a deploy-then-deploy silently loses the net for the run that actually went wrong.
      * Directory names are the sortable timestamps {@link #write} generates, so "newest" is lexical order.
-     * A directory that cannot be removed is logged and left alone: failing a successful deploy over
+     *
+     * <p>Only {@link #isRunDirectory run directories} are candidates. The base path comes from
+     * {@code --rollback-plan} or a tree-local config file, so it can name a directory that holds anything —
+     * the tree itself, a home directory — and everything that is not a net this class wrote is left alone.
+     * A directory that cannot be removed is logged and left alone too: failing a successful deploy over
      * housekeeping would be the wrong trade.
      */
     static void rotate(File base, int keep) {
-        File[] dirs = base.listFiles(File::isDirectory);
+        File[] dirs = base.listFiles(RollbackPlan::isRunDirectory);
         if (dirs == null || dirs.length <= keep) {
             return;
         }
         Arrays.sort(dirs, Comparator.comparing(File::getName).reversed());
         for (int i = keep; i < dirs.length; i++) {
-            if (!deleteTree(dirs[i])) {
-                LOG.debug("could not remove the stale rollback plan {}", dirs[i]);
-            }
+            deleteTree(dirs[i].toPath());
         }
     }
 
-    private static boolean deleteTree(File dir) {
-        File[] children = dir.listFiles();
-        boolean ok = true;
-        for (File child : (children != null) ? children : new File[0]) {
-            ok &= child.isDirectory() ? deleteTree(child) : child.delete();
+    /**
+     * True if {@code dir} is a net {@link #write} produced: a timestamp name, a real directory rather than a
+     * link to one, and a manifest or the unfinished-plan marker inside. All three, because rotation deletes
+     * what this accepts, and the name alone is not proof of anything.
+     */
+    static boolean isRunDirectory(File dir) {
+        return RUN_NAME.matcher(dir.getName()).matches()
+                && Files.isDirectory(dir.toPath(), LinkOption.NOFOLLOW_LINKS)
+                && (new File(dir, MANIFEST).isFile() || PlanStore.isIncomplete(dir));
+    }
+
+    /**
+     * Delete {@code dir} and everything in it without following links: a link inside is removed, never the
+     * directory it points to.
+     */
+    private static void deleteTree(Path dir) {
+        try {
+            Files.walkFileTree(dir, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.delete(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path visited, IOException failure) throws IOException {
+                    if (failure != null) {
+                        throw failure;
+                    }
+                    Files.delete(visited);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            LOG.debug("could not remove the stale rollback plan {}", dir, e);
         }
-        return ok & dir.delete();
     }
 
     /**
@@ -348,7 +388,7 @@ final class RollbackPlan {
      * An unfinished plan is skipped rather than reported: it cannot be replayed anyway.
      */
     static File newestUnder(File base) {
-        File[] dirs = base.listFiles(File::isDirectory);
+        File[] dirs = base.listFiles(RollbackPlan::isRunDirectory);
         if (dirs == null) {
             return null;
         }
@@ -381,10 +421,14 @@ final class RollbackPlan {
      * One directory name per deployment. A deployment key is a commit prefix plus a tree path, so it needs
      * flattening; a tree with no derivable identity (not a repository, a shallow clone) falls back to its
      * own path instead of a shared bucket, or unrelated trees would rotate each other's nets away.
+     *
+     * <p>A leading dot is flattened too. An {@code --app} name comes from a tree-local config file as easily
+     * as from the command line, and {@code .} or {@code ..} would otherwise resolve to the state root or
+     * the directory above it rather than to a directory of this deployment's own.
      */
     private static String sanitizeKey(String key, File tree) {
         if (key != null && !key.isBlank()) {
-            String cleaned = key.replaceAll("[^A-Za-z0-9._-]", "_");
+            String cleaned = key.replaceAll("[^A-Za-z0-9._-]", "_").replaceFirst("^\\.", "_");
             if (!cleaned.isBlank()) {
                 return cleaned;
             }

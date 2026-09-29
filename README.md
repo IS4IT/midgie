@@ -224,7 +224,7 @@ This is the answer to the ordinary disaster: a missing line in the policy file l
 
 Objects the deploy **created** are named in the plan but never removed: the inverse of an add is an object delete, and an object created an hour ago may already carry links and shadows. Delete those by hand.
 
-Plans go to `$XDG_STATE_HOME/midgie/<deployment>/<timestamp>/` by default, keeping the newest five runs. `--rollback-plan DIR` chooses somewhere else — necessary in a Kubernetes Job, whose filesystem dies with the pod that needed the net, so point it at a mounted volume. `--no-rollback-plan` suppresses it.
+Plans go to `$XDG_STATE_HOME/midgie/<deployment>/<timestamp>/` by default, keeping the newest five runs; rotation removes only run directories midgie wrote, never anything else under the base path. `--rollback-plan DIR` chooses somewhere else — necessary in a Kubernetes Job, whose filesystem dies with the pod that needed the net, so point it at a mounted volume. `--no-rollback-plan` suppresses it.
 
 > There is no `--auto-rollback`. midPoint has no cross-object transaction, so unwinding a partly-applied tree can land you in a third state that is neither old nor new — and the failure that would trigger it is often the one that prevents it. The plan sitting on disk is what makes a considered rollback cheap.
 
