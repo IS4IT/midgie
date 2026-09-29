@@ -37,12 +37,14 @@ final class PlanStore {
         final String restType;
         final String oid; // the address for a PATCH; unused for a CREATE
         final String body;
+        final String fileName;
 
-        Entry(Kind kind, String restType, String oid, String body) {
+        Entry(Kind kind, String restType, String oid, String body, String fileName) {
             this.kind = kind;
             this.restType = restType;
             this.oid = oid;
             this.body = body;
+            this.fileName = fileName;
         }
     }
 
@@ -108,6 +110,7 @@ final class PlanStore {
 
     /** Delete the files of an unfinished plan, so a re-run does not need manual cleanup. */
     static int discardIncomplete(File dir) throws IOException {
+        Files.deleteIfExists(new File(dir, PlanState.FILE).toPath());
         File[] files = dir.listFiles((d, name) -> name.endsWith(".create.xml") || name.endsWith(".patch.xml"));
         int removed = 0;
         for (File file : (files != null) ? files : new File[0]) {
@@ -130,7 +133,7 @@ final class PlanStore {
      * {@link #read} sorts on — is apply order for a plan of any size. At a fixed three digits, unit 1000
      * sorts before unit 999 and a large tree replays out of dependency order.
      */
-    static void write(File dir, int sequence, int width, String restType, String oid, String name, Kind kind,
+    static String write(File dir, int sequence, int width, String restType, String oid, String name, Kind kind,
             String body) throws IOException {
         if (kind == Kind.PATCH && (oid == null || oid.isBlank())) {
             throw new IOException("cannot plan a patch of " + restType + "/" + name
@@ -146,6 +149,7 @@ final class PlanStore {
         Io.restrictToOwner(target);
         Files.writeString(target, markGenerated(body) + System.lineSeparator(), StandardCharsets.UTF_8);
         LOG.trace("plan file written: {}", fileName);
+        return fileName;
     }
 
     /**
@@ -260,7 +264,7 @@ final class PlanStore {
             throw new IOException("not a usable object token in plan file '" + name + "': " + parts[2]);
         }
         String body = Files.readString(file.toPath(), StandardCharsets.UTF_8);
-        return new Entry(kind, parts[1], parts[2], body);
+        return new Entry(kind, parts[1], parts[2], body, name);
     }
 
     private static String sanitize(String name) {

@@ -195,9 +195,9 @@ class RollbackPlanTest {
         plan.recordPatch("roles", oid(1), "first", deltaChangingDescription(oid(1)));
         plan.recordPatch("roles", oid(1), "first", deltaChangingDescription(oid(1))); // a retry: same object
         plan.recordRows(oid(1), List.of(
-                new RollbackPlan.RowChange("root/role.xml", "{\"blob\":\"a&b\"}", "RoleType/first", "{\"blob\":\"c\"}"),
-                new RollbackPlan.RowChange("root/new.xml", null, null, "{\"blob\":\"d\"}")));
-        plan.recordRunRows(List.of(new RollbackPlan.RowChange("root/gone.xml", "{\"blob\":\"e\"}", null, null)));
+                new RollbackPlan.RowChange("root/role.xml", "{\"blob\":\"a&b\"}", "RoleType/first", "{\"blob\":\"c\"}", "RoleType/first"),
+                new RollbackPlan.RowChange("root/new.xml", null, null, "{\"blob\":\"d\"}", null)));
+        plan.recordRunRows(List.of(new RollbackPlan.RowChange("root/gone.xml", "{\"blob\":\"e\"}", null, null, null)));
 
         File run = plan.write(dir.toFile(), "http://server/midpoint", "deploy-key", "abc123");
         RollbackPlan.Manifest manifest = RollbackPlan.Manifest.read(run);
@@ -206,11 +206,11 @@ class RollbackPlanTest {
         List<RollbackPlan.RowChange> rows = manifest.objects.get(0).rows;
         assertEquals(2, rows.size(), rows.toString());
         assertEquals(new RollbackPlan.RowChange("root/role.xml", "{\"blob\":\"a&b\"}", "RoleType/first",
-                "{\"blob\":\"c\"}"), rows.get(0));
-        assertEquals(new RollbackPlan.RowChange("root/new.xml", null, null, "{\"blob\":\"d\"}"), rows.get(1),
+                "{\"blob\":\"c\"}", "RoleType/first"), rows.get(0));
+        assertEquals(new RollbackPlan.RowChange("root/new.xml", null, null, "{\"blob\":\"d\"}", null), rows.get(1),
                 "a row the run added has no earlier value");
         assertTrue(manifest.objects.get(1).rows.isEmpty(), "rows are written once per object");
-        assertEquals(List.of(new RollbackPlan.RowChange("root/gone.xml", "{\"blob\":\"e\"}", null, null)),
+        assertEquals(List.of(new RollbackPlan.RowChange("root/gone.xml", "{\"blob\":\"e\"}", null, null, null)),
                 manifest.runRows);
     }
 

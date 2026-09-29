@@ -31,7 +31,10 @@ import org.slf4j.LoggerFactory;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.schema.DeltaConvertor;
+import com.evolveum.midpoint.schema.constants.ObjectTypes;
 import com.evolveum.midpoint.util.DOMUtil;
+import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
@@ -77,10 +80,10 @@ final class RollbackPlan {
     private static final Pattern RUN_NAME = Pattern.compile("\\d{8}-\\d{6}");
 
     /**
-     * One {@code midgie-state} row a run changed: its value and label before, and its value after. A
-     * {@code null} value means the row did not exist on that side.
+     * One {@code midgie-state} row a run changed: its value and label before and after. A {@code null} value
+     * means the row did not exist on that side.
      */
-    record RowChange(String key, String before, String beforeLabel, String after) {
+    record RowChange(String key, String before, String beforeLabel, String after, String afterLabel) {
     }
 
     /**
@@ -105,14 +108,17 @@ final class RollbackPlan {
             final String name;
             final String version; // null when the version could not be read at write time
             final boolean created;
+            final boolean unrecorded; // written by the run, but its inverse could not be computed
             final List<RowChange> rows;
 
-            Entry(String restType, String oid, String name, String version, boolean created, List<RowChange> rows) {
+            Entry(String restType, String oid, String name, String version, boolean created, boolean unrecorded,
+                    List<RowChange> rows) {
                 this.restType = restType;
                 this.oid = oid;
                 this.name = name;
                 this.version = version;
                 this.created = created;
+                this.unrecorded = unrecorded;
                 this.rows = List.copyOf(rows);
             }
         }
@@ -142,22 +148,23 @@ final class RollbackPlan {
             for (int i = 0; i < nodes.getLength(); i++) {
                 Element element = (Element) nodes.item(i);
                 String version = element.getAttribute("version");
+                String action = element.getAttribute("action");
                 objects.add(new Entry(element.getAttribute("type"), element.getAttribute("oid"),
-                        element.getAttribute("name"), version.isBlank() ? null : version,
-                        "created".equals(element.getAttribute("action")), rowsIn(element)));
+                        element.getAttribute("name"), version.isBlank() ? null : version, "created".equals(action),
+                        "unrecorded".equals(action), rowsIn(element)));
             }
             return new Manifest(text(root, "server"), text(root, "deployment"), text(root, "revision"), objects,
                     rowsIn(root));
         }
 
         /** The {@code <row>} elements directly under {@code parent}. */
-        private static List<RowChange> rowsIn(Element parent) {
+        static List<RowChange> rowsIn(Element parent) {
             List<RowChange> rows = new ArrayList<>();
             NodeList children = parent.getChildNodes();
             for (int i = 0; i < children.getLength(); i++) {
                 if (children.item(i) instanceof Element row && "row".equals(row.getTagName())) {
                     rows.add(new RowChange(row.getAttribute("key"), attribute(row, "before"),
-                            attribute(row, "beforeLabel"), attribute(row, "after")));
+                            attribute(row, "beforeLabel"), attribute(row, "after"), attribute(row, "afterLabel")));
                 }
             }
             return rows;
@@ -180,6 +187,7 @@ final class RollbackPlan {
     /** One object the run wrote to, in apply order. */
     private static final class Item {
         private final boolean created;
+        private boolean unrecorded;
         private final String restType;
         private final String oid;
         private final String name;
@@ -216,26 +224,60 @@ final class RollbackPlan {
     /**
      * Record what a just-executed unit did, so the run can be undone.
      *
-     * <p>Best-effort by design: a unit whose inverse cannot be computed is logged and skipped rather than
-     * failing a deploy that has already succeeded. The manifest is what tells the operator the net is
-     * incomplete.
+     * <p>Best-effort by design: a unit whose inverse cannot be computed is not undone, rather than failing a
+     * deploy that has already succeeded. It is kept as {@linkplain #unrecorded() unrecorded}, which the caller
+     * reports and the manifest names.
      */
     void recordApplied(Reconciler.Action action, Reconciler.Outcome outcome, String affectedOid, String name) {
         String oid = (affectedOid != null) ? affectedOid : outcome.oid;
-        try {
-            if (action == Reconciler.Action.CREATE) {
-                items.add(new Item(true, outcome.restType, oid, name, null));
-                LOG.trace("rollback: recorded creation of {}/{}", outcome.restType, oid);
-            } else if (action == Reconciler.Action.PATCH && outcome.delta != null) {
-                recordPatch(outcome.restType, oid, name, outcome.delta);
-                return;
-            } else {
-                return;
-            }
-            recordVersion(oid, readVersion(outcome.restType, oid));
-        } catch (Exception e) {
-            LOG.debug("could not record a rollback entry for {}/{}", outcome.restType, oid, e);
+        if (action == Reconciler.Action.CREATE) {
+            recordCreated(outcome.restType, oid, name);
+        } else if (action == Reconciler.Action.PATCH && outcome.delta != null) {
+            recordPatch(outcome.restType, oid, name, outcome.delta);
         }
+    }
+
+    /** Record an object the run created: named in the manifest, never undone. */
+    void recordCreated(String restType, String oid, String name) {
+        items.add(new Item(true, restType, oid, name, null));
+        recordVersion(oid, readVersion(restType, oid));
+        LOG.trace("rollback: recorded creation of {}/{}", restType, oid);
+    }
+
+    /**
+     * Record the inverse of a stored plan body {@code --apply-plan} just sent: parsed back into a delta, which
+     * carries the old values {@link DiffEngine} recorded, and reversed like any other.
+     */
+    void recordPlanPatch(String restType, String oid, String body) {
+        try {
+            Class<? extends Objectable> type = classOf(restType);
+            ObjectModificationType modification = prismContext.parserFor(OidComments.strip(body)).xml()
+                    .parseRealValue(ObjectModificationType.class);
+            recordPatch(restType, oid, null, DeltaConvertor.createObjectDelta(modification, type));
+        } catch (Exception e) {
+            unrecorded(restType, oid, null, e);
+        }
+    }
+
+    private static Class<? extends Objectable> classOf(String restType) {
+        for (ObjectTypes type : ObjectTypes.values()) {
+            if (restType.equals(type.getRestType())) {
+                return type.getClassDefinition();
+            }
+        }
+        throw new IllegalArgumentException("not a midPoint REST collection: " + restType);
+    }
+
+    /** Objects the run wrote whose inverse could not be computed, as {@code type/oid}: the net does not undo them. */
+    List<String> unrecorded() {
+        return items.stream().filter(item -> item.unrecorded).map(item -> item.restType + "/" + item.oid).toList();
+    }
+
+    private void unrecorded(String restType, String oid, String name, Exception e) {
+        Item item = new Item(false, restType, oid, name, null);
+        item.unrecorded = true;
+        items.add(item);
+        LOG.debug("could not record a rollback entry for {}/{}", restType, oid, e);
     }
 
     /**
@@ -244,14 +286,16 @@ final class RollbackPlan {
      * back exactly what was changed and removed, and nothing else.
      */
     void recordPatch(String restType, String oid, String name, ObjectDelta<? extends Objectable> delta) {
+        String inverse;
         try {
-            items.add(new Item(false, restType, oid, name,
-                    DeltaOutput.toModificationXml(prismContext, delta.createReverseDelta())));
-            recordVersion(oid, readVersion(restType, oid));
-            LOG.trace("rollback: recorded inverse patch for {}/{}", restType, oid);
+            inverse = DeltaOutput.toModificationXml(prismContext, delta.createReverseDelta());
         } catch (Exception e) {
-            LOG.debug("could not record a rollback entry for {}/{}", restType, oid, e);
+            unrecorded(restType, oid, name, e);
+            return;
         }
+        items.add(new Item(false, restType, oid, name, inverse));
+        recordVersion(oid, readVersion(restType, oid));
+        LOG.trace("rollback: recorded inverse patch for {}/{}", restType, oid);
     }
 
     /**
@@ -307,7 +351,7 @@ final class RollbackPlan {
 
     /** How many entries would actually be replayable (creates are recorded but not undone). */
     int undoableCount() {
-        return (int) items.stream().filter(item -> !item.created).count();
+        return (int) items.stream().filter(item -> !item.created && !item.unrecorded).count();
     }
 
     /**
@@ -322,7 +366,7 @@ final class RollbackPlan {
         PlanStore.markIncomplete(dir);
 
         // Reverse apply order: the last thing written is the first thing undone.
-        List<Item> undoable = items.stream().filter(item -> !item.created).toList();
+        List<Item> undoable = items.stream().filter(item -> !item.created && !item.unrecorded).toList();
         int width = String.valueOf(undoable.size()).length();
         int sequence = undoable.size();
         for (Item item : undoable) {
@@ -348,7 +392,8 @@ final class RollbackPlan {
             xml.append("  <object type=\"").append(escape(item.restType))
                     .append("\" oid=\"").append(escape(item.oid))
                     .append("\" name=\"").append(escape(item.name))
-                    .append("\" action=\"").append(item.created ? "created" : "patched").append('"');
+                    .append("\" action=\"")
+                    .append(item.created ? "created" : item.unrecorded ? "unrecorded" : "patched").append('"');
             if (item.version != null) {
                 xml.append(" version=\"").append(escape(item.version)).append('"');
             }
@@ -371,7 +416,7 @@ final class RollbackPlan {
         Files.writeString(target, xml.toString(), StandardCharsets.UTF_8);
     }
 
-    private static void appendRows(StringBuilder xml, List<RowChange> rows, String indent) {
+    static void appendRows(StringBuilder xml, List<RowChange> rows, String indent) {
         for (RowChange row : rows) {
             xml.append(indent).append("<row key=\"").append(escape(row.key())).append('"');
             if (row.before() != null) {
@@ -382,6 +427,9 @@ final class RollbackPlan {
             }
             if (row.after() != null) {
                 xml.append(" after=\"").append(escape(row.after())).append('"');
+            }
+            if (row.afterLabel() != null) {
+                xml.append(" afterLabel=\"").append(escape(row.afterLabel())).append('"');
             }
             xml.append("/>").append(System.lineSeparator());
         }

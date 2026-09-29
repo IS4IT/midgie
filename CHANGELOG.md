@@ -27,6 +27,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`rollback` moves the tracking rows back with the objects.** On a tracked tree a rollback restored the objects but left `midgie-state` saying the rolled-back revision was applied. Deploying that revision again then found nothing it had dropped, and under merge the values it was meant to remove stayed beside the new ones. The rollback plan now records the rows the deploy moved, before and after, and `rollback` restores them for each object it restored, leaving any row a later deploy has written since. `--dry-run` says how many rows would move.
 
+- **`deploy --apply-plan` leaves a rollback plan and records what it applied.** Replaying a reviewed plan wrote neither, although every deploy that writes is documented to leave a net — so the production path had no undo, and `--rollback-plan` was accepted and ignored. On a tracked tree a pipeline that only ever plans and applies also never moved its `midgie-state` rows, so a value added by one plan and dropped by the next was never detected and stayed under merge. `--plan` now writes `state.xml` into the plan directory with the rows an apply would write, and `--apply-plan` writes them for the entries it applied (leaving any row another run has moved since), builds the inverse of each body it sent, and writes the net where a deploy of that tree would. `--no-rollback-plan` is honoured.
+
+- **An object whose inverse cannot be computed is named.** A rollback plan left such an object out with a debug log line, while `deploy` still reported the net. It is now named in a warning, marked `unrecorded` in the manifest, and reported again by `rollback`.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

@@ -617,6 +617,59 @@ class LiveIntegrationTest {
     }
 
     @Test
+    void aPlanAndApplyPipelineMovesItsRowsOnAndLeavesANet(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
+
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path file = tree.resolve("role.xml");
+        Files.writeString(file, trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        git(tree, "config", "user.email", "test@example.invalid");
+        git(tree, "config", "user.name", "midgie test");
+        commit(tree, "v1");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        Path nets = dir.resolve("nets");
+
+        // v2 adds gamma, through a reviewed plan.
+        Files.writeString(file, trackedRole(List.of("alpha", "gamma"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        planAndApply(tree, dir.resolve("plan2"), nets);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains(">gamma<"));
+
+        // v3 drops it again. Detection compares against what v2's apply recorded; with the rows still at v1,
+        // gamma was never deployed as far as they knew, and merge kept it.
+        Files.writeString(file, trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        commit(tree, "v3");
+        planAndApply(tree, dir.resolve("plan3"), nets);
+        assertFalse(client.getObject("roles", DEPLOY_ROLE_OID).contains(">gamma<"), "v3 dropped gamma");
+
+        // The apply left a net, found where a deploy's would be, and it moves the rows back too.
+        CliResult back = run("rollback", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--rollback-plan", nets.toString());
+        assertEquals(0, back.exit, back.out + back.err);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains(">gamma<"), "rollback puts gamma back");
+        CliResult again = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(0, again.exit, again.out + again.err);
+        assertFalse(client.getObject("roles", DEPLOY_ROLE_OID).contains(">gamma<"),
+                "the rows went back to v2, so deploying v3 removes gamma again");
+    }
+
+    private static void planAndApply(Path tree, Path plan, Path nets) {
+        CliResult planned = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--plan", plan.toString());
+        assertEquals(1, planned.exit, planned.out + planned.err);
+        assertTrue(Files.isRegularFile(plan.resolve(PlanState.FILE)), "the plan records its tracking rows");
+        CliResult applied = run("deploy", "--apply-plan", plan.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes", "--rollback-plan", nets.toString());
+        assertEquals(0, applied.exit, applied.out + applied.err);
+        assertTrue(applied.out.contains("Rollback plan:"), applied.out);
+    }
+
+    @Test
     void mergeKeepsWhatSomeoneElseAddedAndSaysSo(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteDeployObjects();

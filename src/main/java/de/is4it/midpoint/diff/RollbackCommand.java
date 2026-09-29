@@ -243,7 +243,7 @@ public class RollbackCommand implements Callable<Integer> {
     private List<String> findStaleObjects(RollbackPlan.Manifest manifest, MidpointRestClient client) {
         List<String> stale = new ArrayList<>();
         for (RollbackPlan.Manifest.Entry object : manifest.objects) {
-            if (object.created) {
+            if (object.created || object.unrecorded) {
                 continue; // not being restored anyway
             }
             String label = object.restType + "/" + object.oid;
@@ -358,8 +358,15 @@ public class RollbackCommand implements Callable<Integer> {
         }
     }
 
-    /** Name the objects the deploy created, which a rollback deliberately leaves alone. */
+    /** Name the objects the deploy created, which a rollback deliberately leaves alone, and those it cannot undo. */
     private void reportCreated(RollbackPlan.Manifest manifest) {
+        List<String> unrecorded = manifest.objects.stream().filter(object -> object.unrecorded)
+                .map(object -> object.restType + "/" + object.oid).toList();
+        if (!unrecorded.isEmpty()) {
+            System.err.println("midgie: warning: the deploy changed " + unrecorded.size() + " object(s) whose "
+                    + "inverse could not be computed, so this plan does not restore them: "
+                    + String.join(", ", unrecorded) + ".");
+        }
         List<String> created = manifest.objects.stream().filter(object -> object.created)
                 .map(object -> object.restType + "/" + object.oid).toList();
         if (!created.isEmpty()) {

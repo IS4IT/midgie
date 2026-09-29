@@ -497,7 +497,7 @@ public class DeployCommand implements Callable<Integer> {
 
             Integer exit;
             try {
-                exit = (planDir != null) ? runPlan(reconciler, units) : runApply(reconciler, units);
+                exit = (planDir != null) ? runPlan(reconciler, units, tracking) : runApply(reconciler, units);
             } catch (Exception e) {
                 // A lost connection or a rejected login ends the run part way, and what was written before it
                 // is exactly what the net is for; writing it only after a clean pass left none in that case.
@@ -900,43 +900,24 @@ public class DeployCommand implements Callable<Integer> {
             return;
         }
         try {
-            List<DeployObject> applied = new ArrayList<>();
-            Set<String> consumed = new LinkedHashSet<>(orphanPaths);
-            Set<String> notApplied = new LinkedHashSet<>();
-            for (DeployObject unit : units) {
-                if (appliedUnits.contains(unit)) {
-                    applied.add(unit);
-                    consumed.addAll(comparedPaths.getOrDefault(unit, List.of()));
-                } else {
-                    for (File file : unit.sourceFiles()) {
-                        String path = tracking.files.pathOf(file);
-                        if (path != null) {
-                            notApplied.add(path);
-                        }
-                    }
+            StateRows rows = stateRows(tracking, units, appliedUnits);
+            if (rollback != null) {
+                for (DeployObject unit : rows.applied()) {
+                    rollback.recordRows(writtenOids.get(unit), rows.byUnit().getOrDefault(unit, List.of()));
                 }
+                rollback.recordRunRows(rows.run());
             }
-            SyncState.Changes changes = new SyncState.Changes();
-            if (!detectionBroken) {
-                List<String> notes = new ArrayList<>();
-                changes = tracking.files.changesAfter(applied, consumed, notApplied, notes);
-                for (String line : notes) {
-                    note("note: " + line + ".");
-                }
-            }
+            SyncState.Changes changes = rows.changes();
             String value = FileTracking.deployValue(tracking.currentRevision, connectionOptions.account(),
                     VersionSupport.toolVersion(), sent.created, sent.patched, sent.inSync, sent.removed,
                     sent.skipped, sent.failed);
-            if (rollback != null) {
-                recordRowChanges(tracking, applied, changes);
-            }
             for (String scope : tracking.files.scopes()) {
                 changes.set(tracking.files.deployKeyOf(scope), value, null);
             }
             SyncState.apply(prismContext, client, tracking.table, changes);
-            if (!detectionBroken && !applied.isEmpty()) {
-                int left = units.size() - applied.size();
-                status("Recorded " + applied.size() + " applied object(s) at "
+            if (!detectionBroken && !rows.applied().isEmpty()) {
+                int left = units.size() - rows.applied().size();
+                status("Recorded " + rows.applied().size() + " applied object(s) at "
                         + GitRevision.abbreviate(tracking.currentRevision) + " in " + SyncState.TABLE_NAME + "."
                         + (left > 0 ? " " + left + " object(s) not applied keep their earlier record, so what "
                                 + "they dropped stays detectable." : ""));
@@ -949,11 +930,41 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     /**
-     * Tell the rollback plan which file rows this run moves, per object: the rows of its files and of the gone
-     * files it compared against, as they were before and as they will be. What no one object claims — the rows of
-     * an object that left the tree, an earlier version's tree rows — is recorded for the run as a whole.
+     * The file rows a run that applied {@code applied} writes, and how they split: per object, the rows of its
+     * files and of the gone files it compared against, each as it was and as it will be; for the run, what no one
+     * object claims — the rows of an object that left the tree, an earlier version's tree rows.
      */
-    private void recordRowChanges(Tracking tracking, List<DeployObject> applied, SyncState.Changes changes) {
+    private record StateRows(List<DeployObject> applied, SyncState.Changes changes,
+            Map<DeployObject, List<RollbackPlan.RowChange>> byUnit, List<RollbackPlan.RowChange> run) {
+    }
+
+    private StateRows stateRows(Tracking tracking, List<DeployObject> units, Set<DeployObject> appliedSet) {
+        List<DeployObject> applied = new ArrayList<>();
+        Set<String> consumed = new LinkedHashSet<>(orphanPaths);
+        Set<String> notApplied = new LinkedHashSet<>();
+        for (DeployObject unit : units) {
+            if (appliedSet.contains(unit)) {
+                applied.add(unit);
+                consumed.addAll(comparedPaths.getOrDefault(unit, List.of()));
+            } else {
+                for (File file : unit.sourceFiles()) {
+                    String path = tracking.files.pathOf(file);
+                    if (path != null) {
+                        notApplied.add(path);
+                    }
+                }
+            }
+        }
+        Map<DeployObject, List<RollbackPlan.RowChange>> byUnit = new IdentityHashMap<>();
+        if (detectionBroken) {
+            return new StateRows(applied, new SyncState.Changes(), byUnit, List.of());
+        }
+        List<String> notes = new ArrayList<>();
+        SyncState.Changes changes = tracking.files.changesAfter(applied, consumed, notApplied, notes);
+        for (String line : notes) {
+            note("note: " + line + ".");
+        }
+
         Map<String, SyncState.Row> before = new LinkedHashMap<>();
         for (SyncState.Row row : SyncState.rows(tracking.table)) {
             before.putIfAbsent(row.key(), row); // the row SyncState.apply updates
@@ -974,11 +985,11 @@ public class DeployCommand implements Callable<Integer> {
             }
             keys.retainAll(changed);
             claimed.addAll(keys);
-            rollback.recordRows(writtenOids.get(unit), rowChanges(keys, before, changes));
+            byUnit.put(unit, rowChanges(keys, before, changes));
         }
         Set<String> rest = new LinkedHashSet<>(changed);
         rest.removeAll(claimed);
-        rollback.recordRunRows(rowChanges(rest, before, changes));
+        return new StateRows(applied, changes, byUnit, rowChanges(rest, before, changes));
     }
 
     private static List<RollbackPlan.RowChange> rowChanges(Set<String> keys, Map<String, SyncState.Row> before,
@@ -992,8 +1003,8 @@ public class DeployCommand implements Callable<Integer> {
             if (Objects.equals(oldValue, newValue)) {
                 continue; // a row the run leaves as it was has nothing to put back
             }
-            rows.add(new RollbackPlan.RowChange(key, (old != null) ? old.value() : null,
-                    (old != null) ? old.label() : null, (next != null) ? next[0] : null));
+            rows.add(new RollbackPlan.RowChange(key, oldValue, (old != null) ? old.label() : null, newValue,
+                    (next != null) ? next[1] : null));
         }
         return rows;
     }
@@ -1247,20 +1258,30 @@ public class DeployCommand implements Callable<Integer> {
      * off than one who knows there is not.
      */
     private void writeRollbackPlan(MidpointRestClient client, Tracking tracking) {
+        File base = (rollbackPlanDir != null) ? rollbackPlanDir
+                : RollbackPlan.defaultBase(tracking.identity != null ? tracking.identity.key() : null,
+                        (paths != null && !paths.isEmpty()) ? paths.get(0) : null);
+        String deployment = (tracking.identity != null && tracking.identity.isAvailable())
+                ? tracking.identity.key() : null;
+        writeRollbackPlan(client, base, deployment, tracking.currentRevision);
+    }
+
+    private void writeRollbackPlan(MidpointRestClient client, File base, String deployment, String revision) {
         if (rollback == null || rollback.isEmpty()) {
             return;
         }
+        List<String> unrecorded = rollback.unrecorded();
+        if (!unrecorded.isEmpty()) {
+            warn("the rollback plan cannot undo " + unrecorded.size() + " object(s) this run changed, because their "
+                    + "inverse could not be computed: " + String.join(", ", unrecorded) + ".");
+        }
         try {
-            File base = (rollbackPlanDir != null) ? rollbackPlanDir
-                    : RollbackPlan.defaultBase(tracking.identity != null ? tracking.identity.key() : null,
-                            (paths != null && !paths.isEmpty()) ? paths.get(0) : null);
             String server = (client != null) ? String.valueOf(client.host()) : null;
-            String deployment = (tracking.identity != null && tracking.identity.isAvailable())
-                    ? tracking.identity.key() : null;
-            File dir = rollback.write(base, server, deployment, tracking.currentRevision);
+            File dir = rollback.write(base, server, deployment, revision);
             RollbackPlan.rotate(base, RollbackPlan.DEFAULT_KEEP);
             status("Rollback plan: " + dir + " (" + rollback.undoableCount() + " object(s) undoable). "
-                    + "Replay with: midgie rollback --url <url>");
+                    + "Replay with: midgie rollback --url <url>"
+                    + (rollbackPlanDir != null ? " --rollback-plan " + rollbackPlanDir : ""));
         } catch (Exception e) {
             warn("could not write the rollback plan: " + safe(e.getMessage())
                     + " — this run cannot be rolled back automatically.");
@@ -1306,7 +1327,7 @@ public class DeployCommand implements Callable<Integer> {
 
     // --- plan (write reviewable files, no server writes) ---
 
-    private Integer runPlan(Reconciler reconciler, List<DeployObject> units) throws Exception {
+    private Integer runPlan(Reconciler reconciler, List<DeployObject> units, Tracking tracking) throws Exception {
         if (PlanStore.isIncomplete(planDir)) {
             // An unfinished plan cannot be replayed anyway, so there is nothing to protect; refusing until
             // the operator deletes it by hand only makes a failed run harder to repeat.
@@ -1322,6 +1343,9 @@ public class DeployCommand implements Callable<Integer> {
         PlanStore.markIncomplete(planDir);
         int width = String.valueOf(units.size()).length();
         Tally tally = new Tally();
+        // What an apply of this plan would count as applied, for the tracking rows it records (see PlanState).
+        Set<DeployObject> wouldApply = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        Map<DeployObject, String> planFiles = new IdentityHashMap<>();
         int seq = 0;
         for (DeployObject unit : units) {
             seq++;
@@ -1337,18 +1361,26 @@ public class DeployCommand implements Callable<Integer> {
                 reportHeldBack(unit, outcome);
                 reportProtectedSkipped(unit, outcome);
 
+                boolean lands = outcome.action == Reconciler.Action.CREATE || outcome.action == Reconciler.Action.PATCH
+                        || outcome.action == Reconciler.Action.IN_SYNC;
+                if (lands && !outcome.removalsDeferred) {
+                    wouldApply.add(unit);
+                    if (outcome.oid != null) {
+                        writtenOids.put(unit, outcome.oid);
+                    }
+                }
                 switch (outcome.action) {
                     case CREATE:
-                        PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid, unit.name(),
-                                PlanStore.Kind.CREATE,
-                                oidComments.annotate(outcome.createBody, outcome.oid, unit.typeName()));
+                        planFiles.put(unit, PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid,
+                                unit.name(), PlanStore.Kind.CREATE,
+                                oidComments.annotate(outcome.createBody, outcome.oid, unit.typeName())));
                         tally.created++;
                         reportUnit(unit, "would-create", "", false);
                         break;
                     case PATCH:
-                        PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid, unit.name(),
-                                PlanStore.Kind.PATCH,
-                                oidComments.annotate(outcome.modificationXml, outcome.oid, unit.typeName()));
+                        planFiles.put(unit, PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid,
+                                unit.name(), PlanStore.Kind.PATCH,
+                                oidComments.annotate(outcome.modificationXml, outcome.oid, unit.typeName())));
                         tally.patched++;
                         reportUnit(unit, "would-patch", outcome.changes + " change(s)", false);
                         break;
@@ -1386,8 +1418,39 @@ public class DeployCommand implements Callable<Integer> {
                     + "above and re-run --plan.");
             return EXIT_ERROR;
         }
+        writePlanState(tracking, units, wouldApply, planFiles);
         PlanStore.markComplete(planDir);
         return tally.changed() > 0 ? 1 : 0;
+    }
+
+    /**
+     * Record in the plan the tracking rows an apply of it would write (see {@link PlanState}), so that a
+     * plan-and-apply pipeline moves its rows on like a plain deploy does. Nothing on an untracked run, or one
+     * whose removals could not be told.
+     */
+    private void writePlanState(Tracking tracking, List<DeployObject> units, Set<DeployObject> wouldApply,
+            Map<DeployObject, String> planFiles) throws IOException {
+        if (!tracking.canRecord() || detectionBroken) {
+            return;
+        }
+        wouldApply.removeAll(unjudgedUnits);
+        for (RemovalDetector.Removal removal : unprunable) {
+            wouldApply.remove(removal.unit);
+        }
+        StateRows rows = stateRows(tracking, units, wouldApply);
+        List<PlanState.Unit> planned = new ArrayList<>();
+        for (DeployObject unit : rows.applied()) {
+            List<RollbackPlan.RowChange> unitRows = rows.byUnit().getOrDefault(unit, List.of());
+            if (!unitRows.isEmpty()) {
+                planned.add(new PlanState.Unit(planFiles.get(unit), writtenOids.get(unit), unitRows));
+            }
+        }
+        List<String> deployKeys = new ArrayList<>();
+        for (String scope : tracking.files.scopes()) {
+            deployKeys.add(tracking.files.deployKeyOf(scope));
+        }
+        PlanState.write(planDir, new PlanState.Contents(tracking.identity.key(), tracking.currentRevision,
+                deployKeys, planned, rows.run()));
     }
 
     // --- apply-plan (replay saved files verbatim) ---
@@ -1425,17 +1488,116 @@ public class DeployCommand implements Callable<Integer> {
         if (client == null) {
             return EXIT_ERROR;
         }
-        List<PlanStore.Entry> failed = applyEntries(client, entries, confirmEachApply);
-        if (retry && !failed.isEmpty()) {
-            failed = retryUntilStable(failed, remaining -> applyEntries(client, remaining, confirmEachApply));
+        PlanState.Contents state = PlanState.read(applyPlanDir);
+        // Only now is prism worth its start-up: for the inverses of the net, and for the state rows. Extension
+        // schema too, since a stored body may carry extension items.
+        PrismContext prismContext = (!noRollbackPlan || state != null) ? schemaOptions.buildContext(client) : null;
+        if (!noRollbackPlan) {
+            rollback = new RollbackPlan(prismContext, client, oidComments);
+        }
+        File netBase = (rollbackPlanDir != null) ? rollbackPlanDir
+                : RollbackPlan.defaultBase((state != null) ? state.deployment() : null, applyPlanDir);
+        String deployment = (state != null) ? state.deployment() : null;
+        String revision = (state != null) ? state.revision() : null;
+
+        Set<String> applied = new HashSet<>();
+        List<PlanStore.Entry> failed;
+        try {
+            failed = applyEntries(client, entries, confirmEachApply, applied);
+            if (retry && !failed.isEmpty()) {
+                failed = retryUntilStable(failed,
+                        remaining -> applyEntries(client, remaining, confirmEachApply, applied));
+            }
+        } catch (Exception e) {
+            writeRollbackPlan(client, netBase, deployment, revision); // as for a deploy that dies part way
+            throw e;
         }
         status("Done: " + (entries.size() - failed.size() - declinedEntries) + " applied, "
                 + declinedEntries + " declined, " + failed.size() + " failed.");
+        if (state != null) {
+            recordPlannedState(prismContext, client, state, entries, applied);
+        }
+        writeRollbackPlan(client, netBase, deployment, revision);
         return failed.isEmpty() ? 0 : EXIT_ERROR;
     }
 
+    /**
+     * Write the tracking rows the plan recorded, for the objects whose entry was applied — and those already in
+     * sync, which had none — plus the run's own rows when every entry was. A row another run has moved since
+     * the plan was made is that run's and is left alone. Bookkeeping never fails the replay, but a failure is
+     * said whatever {@code --quiet} asks: the next deploy's removal detection depends on these rows.
+     */
+    private void recordPlannedState(PrismContext prismContext, MidpointRestClient client, PlanState.Contents state,
+            List<PlanStore.Entry> entries, Set<String> applied) {
+        try {
+            PrismObject<? extends Objectable> table = SyncState.find(prismContext, client);
+            if (table == null || !SyncState.isEnabled(table)) {
+                warn("the plan records tracking rows, but " + SyncState.TABLE_NAME + " is not in use on this server; "
+                        + "none were written.");
+                return;
+            }
+            Map<String, String> current = new LinkedHashMap<>();
+            for (SyncState.Row row : SyncState.rows(table)) {
+                current.putIfAbsent(row.key(), row.value());
+            }
+            SyncState.Changes changes = new SyncState.Changes();
+            int[] movedOn = {0};
+            for (PlanState.Unit unit : state.units()) {
+                if (unit.entry() != null && !applied.contains(unit.entry())) {
+                    continue; // not applied: its rows stay, so what it dropped stays detectable
+                }
+                List<RollbackPlan.RowChange> written = plannedRows(unit.rows(), current, changes, movedOn);
+                if (rollback != null) {
+                    rollback.recordRows(unit.oid(), written);
+                }
+            }
+            if (applied.size() == entries.size()) {
+                List<RollbackPlan.RowChange> written = plannedRows(state.runRows(), current, changes, movedOn);
+                if (rollback != null) {
+                    rollback.recordRunRows(written);
+                }
+            }
+            int created = (int) entries.stream()
+                    .filter(e -> e.kind == PlanStore.Kind.CREATE && applied.contains(e.fileName)).count();
+            String value = FileTracking.deployValue(state.revision(), connectionOptions.account(),
+                    VersionSupport.toolVersion(), created, applied.size() - created, 0, 0, declinedEntries,
+                    entries.size() - applied.size() - declinedEntries);
+            for (String key : state.deployKeys()) {
+                changes.set(key, value, null);
+            }
+            SyncState.apply(prismContext, client, table, changes);
+            if (movedOn[0] > 0) {
+                warn(movedOn[0] + " tracking row(s) were written by another run after this plan was made and were "
+                        + "left alone; re-plan from the current tree to record them.");
+            }
+        } catch (Exception e) {
+            warn("could not record what was applied in " + SyncState.TABLE_NAME + ": " + safe(e.getMessage())
+                    + " — until the tree is deployed again, removals are judged against the earlier record.");
+            LOG.trace("recording the planned state failed", e);
+        }
+    }
+
+    /** Add the planned {@code rows} that still find the value they replace to {@code changes}; returns those. */
+    private static List<RollbackPlan.RowChange> plannedRows(List<RollbackPlan.RowChange> rows,
+            Map<String, String> current, SyncState.Changes changes, int[] movedOn) {
+        List<RollbackPlan.RowChange> written = new ArrayList<>();
+        for (RollbackPlan.RowChange row : rows) {
+            if (!Objects.equals(current.get(row.key()), row.before())) {
+                movedOn[0]++;
+                continue;
+            }
+            if (row.after() == null) {
+                changes.delete(row.key());
+            } else {
+                changes.set(row.key(), row.after(), row.afterLabel());
+            }
+            written.add(row);
+        }
+        return written;
+    }
+
     private List<PlanStore.Entry> applyEntries(MidpointRestClient client, List<PlanStore.Entry> entries,
-            boolean perUnitPrompt) throws Exception {
+            boolean perUnitPrompt, Set<String> applied) throws Exception {
         List<PlanStore.Entry> failed = new ArrayList<>();
         for (PlanStore.Entry entry : entries) {
             try {
@@ -1448,15 +1610,22 @@ public class DeployCommand implements Callable<Integer> {
                 }
                 if (entry.kind == PlanStore.Kind.CREATE) {
                     // Comments are for the reviewer; the server gets the change and nothing else.
-                    client.createObject(entry.restType, OidComments.strip(entry.body));
+                    String oid = client.createObject(entry.restType, OidComments.strip(entry.body));
+                    if (rollback != null) {
+                        rollback.recordCreated(entry.restType, oid, null);
+                    }
                     reportEntry(entry, "created", "", false);
                 } else {
                     // The body is replayed as reviewed, minus its comments; it is only parsed to see
                     // whether it sets a reference by filter, which decides the re-resolve option.
                     client.patchObject(entry.restType, entry.oid, OidComments.strip(entry.body),
                             PlanStore.setsReferenceByFilter(entry));
+                    if (rollback != null) {
+                        rollback.recordPlanPatch(entry.restType, entry.oid, entry.body);
+                    }
                     reportEntry(entry, "patched", "", false);
                 }
+                applied.add(entry.fileName);
             } catch (Exception e) {
                 if (isFatal(e)) {
                     throw e;
