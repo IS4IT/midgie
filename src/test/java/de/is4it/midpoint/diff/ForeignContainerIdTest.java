@@ -61,6 +61,17 @@ class ForeignContainerIdTest {
     }
 
     @Test
+    void mergeSendsNoEmptyDeleteBesideAnAdd() throws Exception {
+        // Merge drops the delete of the value it keeps; the emptied delete side used to go out as a bare
+        // <delete> item delta next to the add.
+        DiffEngine.DiffResult merged = diff(template(mapping(4, "fromDev", "strong")),
+                template(mapping(4, "prodOnly", "weak")), true);
+
+        assertFalse(xml(merged).contains("<t:modificationType>delete</t:modificationType>"), xml(merged));
+        assertEquals("add mapping", DeltaOutput.toSummary(merged.delta()).strip());
+    }
+
+    @Test
     void aKeylessEntryHeldUnderAnotherIdDoesNotOverwriteTheOneWithItsId() throws Exception {
         // The file's inducement 5 (to A) is inducement 7 here; this server's 5 (to B) was added by an admin.
         PrismObject<? extends Objectable> desired = parse(role(inducement(5, ROLE_A, null)));

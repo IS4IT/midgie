@@ -17,6 +17,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Container ids from another server no longer pair unrelated entries.** prism pairs two list values that both carry a container id by that id, under every `--equivalence`, `real-value` included, and edits one into the other. A file exported from DEV carries DEV's ids, so its `<inducement id="5">` re-pointed whatever PROD holds under 5 — often an entry an admin added there — and `<mapping id="4"><name>fromDev</name>` renamed PROD's unrelated mapping 4, under `merge` too; merge also kept the delete of a PROD entry whose id a DEV entry happened to use. midgie now checks each list's ids against the server's first: a matching id with a different filled-in natural key, a file entry the server holds under another id, or a server entry another file entry declares means the numbering is foreign, and that list's entries are paired by natural key or content instead. `-v` names each such list. A file exported from the target server is unaffected, since midPoint never reuses a container id. One case remains indistinguishable: a single edited entry whose foreign id is taken, with no other entry in the list to show the mismatch.
 
+- **Merge no longer sends an empty delete beside an add.** When merge kept every value a list's delete side would have removed, the emptied delete still went out as a `<delete>` item delta with no value next to the add, and the summary read `add+delete`. It is now left out.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

@@ -1365,6 +1365,10 @@ public final class DiffEngine {
                     }
                 }
                 liveOnly.forEach(mod::removeValueToDelete); // preserve every live-only value (union by real value)
+                if (mod.getValuesToDelete().isEmpty()) {
+                    // An empty set is still a delete: it would go out as a <delete> with no value beside the add.
+                    mod.clearValuesToDelete();
+                }
                 if (mod.isEmpty()) {
                     emptied.add(mod);
                 }
