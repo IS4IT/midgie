@@ -457,6 +457,10 @@ public class InitCommand implements Callable<Integer> {
         Map<String, Integer> filesByType = new LinkedHashMap<>();
         Map<OnCreateSuggestion, Integer> declaredBy = new LinkedHashMap<>();
         int skipped = 0;
+        for (String failure : scan.unreadable()) {
+            System.err.println("midgie: warning: " + failure + "; it has no suggestions.");
+            skipped++;
+        }
         for (File file : scan.objectFiles()) {
             PrismObject<? extends Objectable> object;
             try {

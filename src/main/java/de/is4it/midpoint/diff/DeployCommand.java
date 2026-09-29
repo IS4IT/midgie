@@ -366,6 +366,14 @@ public class DeployCommand implements Callable<Integer> {
             // A plan directory may legitimately sit inside the tree it is planning; its files are output, not
             // source, so they are never discovery input.
             Discovery.ScanResult scan = Discovery.scan(prismContext, paths, planDirectories());
+            if (!scan.unreadable().isEmpty()) {
+                // A file left broken by a merge, say. Deploying the rest would go green with it missing, and on
+                // a tracked tree read everything it used to declare as removed.
+                for (String failure : scan.unreadable()) {
+                    warn(failure);
+                }
+                return EXIT_ERROR;
+            }
             List<SchemaFile> deployableSchemas = scan.schemas().stream()
                     .filter(SchemaFile::deployable).collect(Collectors.toList());
             List<SchemaFile> localSchemas = scan.schemas().stream()

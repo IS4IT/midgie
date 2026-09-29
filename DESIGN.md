@@ -316,8 +316,9 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 - **Extension** schema (custom `extension` attributes, custom `SchemaType` objects) is **runtime**:
   - *File mode:* `--schema <file>` (repeatable) and/or `--schema-dir <dir>`. Both accept either format,
     chosen by extension: a `.xsd` is a raw XSD, a `.xml` is an exported `SchemaType` object (its embedded
-    `<xsd:schema>` is used). Other extensions — and `.xsd`/`.xml` files not in the expected format — are
-    warned about and skipped. Everything collected is registered via
+    `<xsd:schema>` is used). In `--schema-dir`, other extensions — and `.xsd`/`.xml` files not in the
+    expected format — are warned about and skipped, since a directory may hold other files; a file named with
+    `--schema` fails the run, as a missing one does, and so does a `--schema-dir` that cannot be read. Everything collected is registered via
     `schemaRegistry.registerDynamicSchemaExtensions(...)` + `prismContext.reload()` — the same call
     midPoint's `repo-common/SchemaCache.java` (:81, :89) makes at startup.
   - *Live mode:* read the `SchemaType` objects off the server (`--url/--user/--password`) and register
@@ -392,7 +393,7 @@ That folder-loop is now the in-tool **`deploy` subcommand** (see "deploy — app
 
 Apply a whole tree of desired-state object XML to a live server, in dependency order, reusing the `diff` engine — **one JVM bootstrap** for the whole run. midPoint's prism bootstrap costs ~1.5 s, so a shell loop invoking the tool once per file would pay that per object; an in-process subcommand pays it once and can sort with prism's precise reference walk instead of a text heuristic. **Structure-agnostic**: objects are discovered by content, so the config repo can use any folder layout the team likes. The deploy model is **per object**: the files describing one object are combined and applied together (one `itemDelta` per object, however many files it took), and *schema extensions follow the same model* — an extension is a `SchemaType` object deployed like any other, so schema files are first-class nodes in the same dependency sort.
 
-`midgie deploy <path...> [--url <url>] [creds/TLS/retry — the same mixins as diff] [flags]` (paths are files or directories, walked recursively).
+`midgie deploy <path...> [--url <url>] [creds/TLS/retry — the same mixins as diff] [flags]` (paths are files or directories, walked recursively, following symbolic links — a Kubernetes ConfigMap mounts each key as a link into a hidden `..data` directory, which the dot-directory rule keeps from being walked twice; a link back into the tree is skipped with a warning). A `.xml` that is not well-formed, or a `SchemaType` that does not parse, fails the run before any server contact, as an unparseable object does.
 
 ### Increment 1 (built): read-only discovery + schema-aware dependency sort
 

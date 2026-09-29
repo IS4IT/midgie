@@ -100,7 +100,7 @@ public final class SchemaOptions {
                     // affected items diffed as raw and nothing but a warning to say so.
                     throw new SchemaException("--schema file does not exist or is not readable: " + file);
                 }
-                addFile(prismContext, "--schema " + file.getPath(), file, schemas);
+                addFile(prismContext, "--schema " + file.getPath(), file, schemas, true);
             }
         }
         if (liveClient != null && !noLiveSchema) {
@@ -138,42 +138,56 @@ public final class SchemaOptions {
             return lower.endsWith(".xsd") || lower.endsWith(".xml");
         });
         if (files == null) {
-            return;
+            // An unreadable directory is not an empty one: every extension item would diff as raw.
+            throw new SchemaException("--schema-dir cannot be read: " + dir);
         }
         Arrays.sort(files);
         for (File file : files) {
-            addFile(prismContext, "--schema-dir " + file.getName(), file, schemas);
+            addFile(prismContext, "--schema-dir " + file.getName(), file, schemas, false);
         }
     }
 
-    /** Resolve one file to its {@code <xsd:schema>} element and add it, or warn and skip on the wrong format. */
-    private static void addFile(PrismContext prismContext, String description, File file, Map<String, Element> schemas) {
+    /**
+     * Resolve one file to its {@code <xsd:schema>} element and add it. A file in the wrong format is skipped with
+     * a warning when it was found in {@code --schema-dir}, which may hold other files; one named with
+     * {@code --schema} fails the run, as a missing one does — it was asked for, and carrying on without it would
+     * diff every item it defines as raw.
+     */
+    private static void addFile(PrismContext prismContext, String description, File file, Map<String, Element> schemas,
+            boolean named) throws SchemaException {
         String lower = file.getName().toLowerCase();
+        String problem;
         try {
             if (lower.endsWith(".xsd")) {
                 Element root = DOMUtil.parseFile(file).getDocumentElement();
-                if (!SchemaSupport.isXsdSchema(root)) {
-                    warnSkip(file, "its root element is not <xsd:schema>");
+                if (SchemaSupport.isXsdSchema(root)) {
+                    schemas.put(description, root);
                     return;
                 }
-                schemas.put(description, root);
+                problem = "its root element is not <xsd:schema>";
             } else if (lower.endsWith(".xml")) {
                 schemas.put(description,
                         SchemaSupport.schemaElement(file.getName(), prismContext.parseObject(file).asObjectable()));
+                return;
             } else {
-                warnSkip(file, "unsupported extension (expected .xsd or .xml)");
+                problem = "unsupported extension (expected .xsd or .xml)";
             }
         } catch (Exception e) {
-            warnSkip(file, e.getMessage());
+            problem = e.getMessage();
         }
+        if (named) {
+            throw new SchemaException("--schema " + file + " cannot be used: " + reason(problem));
+        }
+        warnSkip(file, problem);
     }
 
-    private static void warnSkip(File file, String reason) {
-        String detail = (reason == null || reason.isBlank()) ? "unrecognised format" : reason.strip();
-        if (detail.endsWith(".")) {
-            detail = detail.substring(0, detail.length() - 1);
-        }
-        System.err.println("midgie: warning: ignoring schema file '" + file + "' — " + detail + ".");
+    private static String reason(String problem) {
+        String detail = (problem == null || problem.isBlank()) ? "unrecognised format" : problem.strip();
+        return detail.endsWith(".") ? detail.substring(0, detail.length() - 1) : detail;
+    }
+
+    private static void warnSkip(File file, String problem) {
+        System.err.println("midgie: warning: ignoring schema file '" + file + "' — " + reason(problem) + ".");
     }
 
     /** Read {@code SchemaType} objects off the server and add their schemas. Best-effort: warns on failure. */

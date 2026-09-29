@@ -8,6 +8,8 @@ package de.is4it.midpoint.diff;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.FileSystemLoopException;
+import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,6 +17,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,7 +39,13 @@ import com.evolveum.midpoint.util.DOMUtil;
  * yet parsing the objects (extension schema must be registered first). A {@code <xsd:schema>} root is a
  * raw XSD (local schema input); a {@code {…common-3}schema} root is an exported {@code SchemaType}
  * (schema input <em>and</em> a deployable object); anything else is a candidate object file, parsed later.
- * Files that are not well-formed XML are skipped with a warning.
+ * A file that is not well-formed XML, or a {@code SchemaType} that does not parse, is {@linkplain
+ * ScanResult#unreadable() unreadable}: the caller fails the run rather than deploy the tree without it.
+ *
+ * <p>Symbolic links are followed, to files and to directories alike: a Kubernetes ConfigMap mounts every key
+ * as a link into a hidden {@code ..data} directory, and a tree reached through a linked directory is still the
+ * tree. The hidden directories themselves are not walked (see {@link #collectFiles}), so each file is found
+ * once, by the name it is mounted under.
  */
 final class Discovery {
 
@@ -48,18 +57,30 @@ final class Discovery {
     private Discovery() {
     }
 
-    /** The outcome of a scan: discovered schema files, candidate object files, and skip warnings. */
+    /** The outcome of a scan: discovered schema files, candidate object files, skip warnings, and failures. */
     static final class ScanResult {
         private final List<SchemaFile> schemas;
         private final List<File> objectFiles;
         private final List<String> warnings;
+        private final List<String> unreadable;
         private final int walkedFiles;
 
-        ScanResult(List<SchemaFile> schemas, List<File> objectFiles, List<String> warnings, int walkedFiles) {
+        ScanResult(List<SchemaFile> schemas, List<File> objectFiles, List<String> warnings, List<String> unreadable,
+                int walkedFiles) {
             this.schemas = schemas;
             this.objectFiles = objectFiles;
             this.warnings = warnings;
+            this.unreadable = unreadable;
             this.walkedFiles = walkedFiles;
+        }
+
+        /**
+         * Files in the tree that cannot be read — not well-formed XML (a merge that left its conflict markers
+         * behind), or a {@code SchemaType} that does not parse — each as a printable sentence. Deploying the rest
+         * would exit 0 with them missing, and on a tracked tree read their objects as removed.
+         */
+        List<String> unreadable() {
+            return unreadable;
         }
 
         List<SchemaFile> schemas() {
@@ -100,16 +121,17 @@ final class Discovery {
         List<SchemaFile> schemas = new ArrayList<>();
         List<File> objectFiles = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
+        List<String> unreadable = new ArrayList<>();
         List<File> generated = new ArrayList<>();
         int[] walked = { 0 };
         for (File file : collectFiles(paths, excludedDirs, warnings, walked)) {
-            classify(prismContext, file, schemas, objectFiles, warnings, generated);
+            classify(prismContext, file, schemas, objectFiles, unreadable, generated);
         }
         if (!generated.isEmpty()) {
             warnings.add("skipped " + generated.size() + " midgie-generated plan file(s) (" + generated.get(0)
                     + (generated.size() > 1 ? ", …" : "") + ") — a plan is midgie's output, not deploy input.");
         }
-        return new ScanResult(schemas, objectFiles, warnings, walked[0]);
+        return new ScanResult(schemas, objectFiles, warnings, unreadable, walked[0]);
     }
 
     /**
@@ -127,12 +149,12 @@ final class Discovery {
     }
 
     private static void classify(PrismContext prismContext, File file, List<SchemaFile> schemas,
-            List<File> objectFiles, List<String> warnings, List<File> generated) {
+            List<File> objectFiles, List<String> unreadable, List<File> generated) {
         Document document;
         try {
             document = DOMUtil.parseFile(file);
         } catch (Exception e) {
-            warnings.add("skipped " + file + " — not well-formed XML (" + e.getMessage() + ")");
+            unreadable.add("cannot read " + file + ": not well-formed XML (" + e.getMessage() + ")");
             LOG.trace("classify {} → not well-formed XML", file, e);
             return;
         }
@@ -156,8 +178,8 @@ final class Discovery {
                         SchemaSupport.importedNamespaces(schemaElement), Fragment.of(object, file)));
                 LOG.trace("classify {} → SchemaType object (deployable schema)", file);
             } catch (Exception e) {
-                warnings.add("skipped schema " + file + " — " + e.getMessage());
-                LOG.trace("classify {} → skipped SchemaType", file, e);
+                unreadable.add("cannot read the schema " + file + ": " + e.getMessage());
+                LOG.trace("classify {} → unreadable SchemaType", file, e);
             }
         } else {
             objectFiles.add(file);
@@ -190,7 +212,7 @@ final class Discovery {
                 throw new FileNotFoundException("path does not exist: " + path);
             }
             if (path.isDirectory()) {
-                skippedByExclusion += walkDirectory(path, excluded, byCanonicalPath, walked);
+                skippedByExclusion += walkDirectory(path, excluded, byCanonicalPath, walked, warnings);
                 continue;
             }
             walked[0]++;
@@ -217,10 +239,11 @@ final class Discovery {
      * @return how many considered files were dropped because they sit under an excluded directory
      */
     private static int walkDirectory(File root, List<String> excluded, Map<String, File> byCanonicalPath,
-            int[] walked) throws IOException {
+            int[] walked, List<String> warnings) throws IOException {
         Path rootPath = root.toPath();
         int[] skipped = { 0 };
-        Files.walkFileTree(rootPath, new SimpleFileVisitor<Path>() {
+        Files.walkFileTree(rootPath, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE,
+                new SimpleFileVisitor<Path>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                 if (!dir.equals(rootPath) && dir.getFileName().toString().startsWith(".")) {
@@ -254,6 +277,11 @@ final class Discovery {
 
             @Override
             public FileVisitResult visitFileFailed(Path file, IOException e) throws IOException {
+                if (e instanceof FileSystemLoopException) {
+                    // A link back to a directory already on the way down: everything below it has been walked.
+                    warnings.add("skipped " + file + " — a symbolic link back into the tree above it");
+                    return FileVisitResult.CONTINUE;
+                }
                 // Both the root and any subdirectory that cannot be opened arrive here, so this is the one
                 // place that turns the file system's bare-path message into something diagnosable. It still
                 // fails the run: a subtree midgie cannot read is not a subtree it may quietly skip, or

@@ -49,6 +49,17 @@ class SchemaExtensionTest {
         assertLcmAttributeResolves(options.buildContext(null));
     }
 
+    @Test
+    void aSchemaFileNamedOutrightThatIsNotASchemaFailsTheRun() {
+        // Named on purpose, like a missing file: carrying on would diff every item it defines as raw.
+        SchemaOptions options = new SchemaOptions();
+        options.schemaFiles = new File[] { new File("src/test/resources/schema/notaschema.xml") };
+
+        com.evolveum.midpoint.util.exception.SchemaException e = org.junit.jupiter.api.Assertions.assertThrows(
+                com.evolveum.midpoint.util.exception.SchemaException.class, () -> options.buildContext(null));
+        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("notaschema.xml"), e.getMessage());
+    }
+
     /** Diff two users differing only in the custom extension attribute and assert it resolves as dateTime. */
     private static void assertLcmAttributeResolves(PrismContext prismContext) throws Exception {
         PrismObject<?> desired = prismContext.parseObject(userWithLcm("2026-02-02T00:00:00.000Z"));

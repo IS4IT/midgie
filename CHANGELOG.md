@@ -41,6 +41,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Standard output is UTF-8.** Under a C/POSIX locale every non-ASCII character in a payload came out as `?`, and piping that body into a PATCH wrote the damage back to the server.
 
+- **Symbolic links in a deployed tree are followed.** A linked file was skipped without a word, and a linked directory as the root read as holding no files at all — which is how a Kubernetes ConfigMap mounts. Links are followed now; the ConfigMap's hidden `..data` directories are still not walked, so each file is found once, and a link back into the tree is skipped with a warning.
+
+- **A broken file in a deployed tree fails the run.** A `.xml` that is not well-formed — a merge that left its conflict markers behind — or a `SchemaType` that does not parse was skipped with a warning that `--quiet` hid: the run exited 0 without it, and on a tracked tree its object read as removed. Both are errors now, reported before any server contact, as an unparseable object already was.
+
+- **A `--schema` file that cannot be used fails the run.** One named outright that was not a schema or did not parse was warned about and skipped, so every extension item it defines diffed as raw; a missing one already failed. An unreadable `--schema-dir` fails too instead of reading as empty. Files inside `--schema-dir` in the wrong format are still skipped with a warning.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

@@ -11,6 +11,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -470,6 +471,58 @@ class DeployCliTest {
 
         assertEquals(2, quiet.exit, "an unreadable object is an error: " + quiet.err);
         assertTrue(quiet.err.contains("broken.xml"), "and --quiet must not hide it: " + quiet.err);
+    }
+
+    @Test
+    void aFileThatIsNotWellFormedFailsTheRunInsteadOfBeingSkipped(@TempDir Path dir) throws Exception {
+        // A merge that left its conflict markers behind. Skipping it with a warning deployed the rest and
+        // exited 0, and on a tracked tree read the missing object as removed.
+        Files.writeString(dir.resolve("conflict.xml"),
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\">\n"
+                        + "<<<<<<< HEAD\n  <name>Ours</name>\n=======\n  <name>Theirs</name>\n>>>>>>> branch\n</role>",
+                StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("ok.xml"),
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\"><name>Ok</name></role>",
+                StandardCharsets.UTF_8);
+
+        Result quiet = run("deploy", dir.toString(), "--quiet");
+
+        assertEquals(2, quiet.exit, quiet.out + quiet.err);
+        assertTrue(quiet.err.contains("conflict.xml") && quiet.err.contains("not well-formed"), quiet.err);
+    }
+
+    @Test
+    void aTreeReachedThroughSymbolicLinksIsDeployedWhole(@TempDir Path dir) throws Exception {
+        // A Kubernetes ConfigMap mounts each key as a link into a hidden ..data directory, which is itself a
+        // link; a link to a file used to be dropped without a word, and a linked root held "no files at all".
+        Path payload = Files.createDirectories(dir.resolve("..2026_09_29"));
+        Files.writeString(payload.resolve("role.xml"),
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\"><name>Mounted</name></role>",
+                StandardCharsets.UTF_8);
+        Path mount = Files.createDirectories(dir.resolve("mount"));
+        Files.createSymbolicLink(mount.resolve("..data"), payload);
+        Files.createSymbolicLink(mount.resolve("role.xml"), mount.resolve("..data/role.xml"));
+        Path linkedRoot = Files.createSymbolicLink(dir.resolve("config"), mount);
+
+        Discovery.ScanResult scan = Discovery.scan(null, List.of(linkedRoot.toFile()));
+
+        assertEquals(1, scan.objectFiles().size(), "found once, by the name it is mounted under: " + scan.objectFiles());
+        assertTrue(scan.objectFiles().get(0).getPath().endsWith("config/role.xml"), scan.objectFiles().toString());
+        assertTrue(scan.unreadable().isEmpty(), scan.unreadable().toString());
+    }
+
+    @Test
+    void aLinkBackIntoTheTreeIsSkippedNotFollowedForever(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("role.xml"),
+                "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\"><name>R</name></role>",
+                StandardCharsets.UTF_8);
+        Path sub = Files.createDirectories(dir.resolve("sub"));
+        Files.createSymbolicLink(sub.resolve("loop"), dir);
+
+        Discovery.ScanResult scan = Discovery.scan(null, List.of(dir.toFile()));
+
+        assertEquals(1, scan.objectFiles().size(), scan.objectFiles().toString());
+        assertTrue(scan.warnings().stream().anyMatch(w -> w.contains("symbolic link back")), scan.warnings().toString());
     }
 
     @Test
