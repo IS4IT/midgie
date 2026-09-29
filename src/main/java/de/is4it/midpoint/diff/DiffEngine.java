@@ -1035,7 +1035,7 @@ public final class DiffEngine {
             PrismContainerValue<?> liveValue =
                     containerValueById(liveParent, containerPath, ItemPath.toId(segment));
             PrismContainerValue<?> match =
-                    matchingDesiredValue(desiredContainer, liveValue, ItemPath.toId(segment));
+                    NaturalKeys.match(desiredContainer, liveValue, ItemPath.toId(segment));
             if (match == null) {
                 return false;
             }
@@ -1043,24 +1043,6 @@ public final class DiffEngine {
             liveParent = liveValue;
         }
         return true;
-    }
-
-    /**
-     * The desired container value matching {@code valueId} — by container id, else by natural key.
-     *
-     * <p>The same pairing {@link FragmentUnion} uses to decide whether two files describe one entry, which is
-     * why it lives in {@link NaturalKeys}: "is this the same entry of the list?" has to be answered
-     * identically wherever it is asked, or a value combined on the way in would be flagged as accrued on the
-     * way out.
-     */
-    private static PrismContainerValue<?> matchingDesiredValue(PrismContainer<?> desiredContainer,
-            PrismContainerValue<?> liveValue, Long valueId) {
-        return NaturalKeys.match(desiredContainer, liveValue, valueId);
-    }
-
-    /** Whether {@code value} actually carries the natural key's constituent item(s) — a discriminating key. */
-    private static boolean carriesKey(NaturalKeyDefinition naturalKey, PrismContainerValue<?> value) {
-        return NaturalKeys.carries(naturalKey, value);
     }
 
     /** The container value carrying {@code valueId} at {@code containerPath} under {@code parent}, or null. */
@@ -1120,12 +1102,12 @@ public final class DiffEngine {
             PrismContainer<?> liveContainer = containerAt(liveValue, item.getElementName());
 
             if (definition.isMultiValue()) {
-                NaturalKeyDefinition naturalKey = naturalKeyOf(desiredContainer);
+                NaturalKeyDefinition naturalKey = NaturalKeys.of(desiredContainer);
                 if (naturalKey != null) {
                     checkKeyedContainer(desiredContainer, liveContainer, naturalKey, path, multiValue, warnings);
                 }
                 for (PrismContainerValue<?> child : desiredContainer.getValues()) {
-                    checkContainers(child, matchingLiveValue(liveContainer, child, naturalKey),
+                    checkContainers(child, NaturalKeys.match(liveContainer, child, child.getId()),
                             path, multiValue, warnings);
                 }
             } else {
@@ -1148,7 +1130,7 @@ public final class DiffEngine {
         // `inducement` rarely carries an <identifier>); warning on those would be pure noise.
         boolean keyInPlay = false;
         for (PrismContainerValue<?> live : liveContainer.getValues()) {
-            if (carriesKey(naturalKey, live)) {
+            if (NaturalKeys.carries(naturalKey, live)) {
                 keyInPlay = true;
                 break;
             }
@@ -1157,9 +1139,9 @@ public final class DiffEngine {
             int index = 0;
             for (PrismContainerValue<?> value : desiredContainer.getValues()) {
                 index++;
-                if (!carriesKey(naturalKey, value)) {
+                if (!NaturalKeys.carries(naturalKey, value)) {
                     warnings.add("'" + path + "' value #" + index + " does not carry its natural key ("
-                            + keyNames(desiredContainer) + "), so it cannot be matched to a live value; it will "
+                            + NaturalKeys.names(desiredContainer) + "), so it cannot be matched to a live value; it will "
                             + "be treated as a whole-value change instead of an update of the matching entry.");
                 }
             }
@@ -1170,7 +1152,7 @@ public final class DiffEngine {
         }
         int unmatched = 0;
         for (PrismContainerValue<?> live : liveContainer.getValues()) {
-            if (!declaredInDesired(desiredContainer, live, naturalKey)) {
+            if (!declaredInDesired(desiredContainer, live)) {
                 unmatched++;
             }
         }
@@ -1186,23 +1168,18 @@ public final class DiffEngine {
             // object and mispair the values whose key nothing fills in, which is what auto exists to avoid.
             boolean keyUsable = keyInPlay;
             for (PrismContainerValue<?> value : desiredContainer.getValues()) {
-                keyUsable = keyUsable && carriesKey(naturalKey, value);
+                keyUsable = keyUsable && NaturalKeys.carries(naturalKey, value);
             }
             warnings.add("'" + path + "': desired matches " + matched + " of "
                     + liveContainer.getValues().size() + " live value(s), and this path is on "
                     + "multivalue=replace, so the other " + unmatched + " will be DELETED. Set '" + path
                     + " multivalue=merge' to update just the entries you list."
-                    + (keyUsable ? "" : " Their natural key (" + keyNames(desiredContainer)
+                    + (keyUsable ? "" : " Their natural key (" + NaturalKeys.names(desiredContainer)
                             + ") is not filled in on every value, so they can only be matched by content — "
                             + "fill it in to have them updated individually."));
         }
     }
 
-    /**
-     * Whether desired declares {@code live} — by container id, by natural key, or by plain content
-     * equivalence. Content is the generous fallback that keeps this check quiet for keyless-in-practice
-     * containers, where a fragment simply restates the values it manages verbatim.
-     */
     /** Live values of one multi-valued container that the desired object does not declare. */
     record LiveOnly(ItemPath path, String pathText, int count) {
     }
@@ -1242,11 +1219,10 @@ public final class DiffEngine {
             ItemPath path = prefix.append(item.getElementName());
             PrismContainer<?> liveContainer = containerAt(liveValue, item.getElementName());
             if (definition.isMultiValue()) {
-                NaturalKeyDefinition naturalKey = naturalKeyOf(desiredContainer);
                 if (liveContainer != null) {
                     int undeclared = 0;
                     for (PrismContainerValue<?> live : liveContainer.getValues()) {
-                        if (!declaredInDesired(desiredContainer, live, naturalKey)) {
+                        if (!declaredInDesired(desiredContainer, live)) {
                             undeclared++;
                         }
                     }
@@ -1258,7 +1234,7 @@ public final class DiffEngine {
                     }
                 }
                 for (PrismContainerValue<?> child : desiredContainer.getValues()) {
-                    collectLiveOnly(child, matchingLiveValue(liveContainer, child, naturalKey), path, found);
+                    collectLiveOnly(child, NaturalKeys.match(liveContainer, child, child.getId()), path, found);
                 }
             } else {
                 PrismContainerValue<?> liveChild = (liveContainer != null && !liveContainer.getValues().isEmpty())
@@ -1270,43 +1246,22 @@ public final class DiffEngine {
         }
     }
 
-    private static boolean declaredInDesired(PrismContainer<?> desiredContainer, PrismContainerValue<?> live,
-            NaturalKeyDefinition naturalKey) {
-        boolean keyed = naturalKey != null && carriesKey(naturalKey, live);
+    /**
+     * Whether desired declares {@code live} — paired the way the diff pairs ({@link NaturalKeys#match}: container
+     * id, else natural key), or failing that equal by content. Content is the generous fallback that keeps this
+     * check quiet for keyless-in-practice containers, where a fragment simply restates the values it manages
+     * verbatim.
+     */
+    private static boolean declaredInDesired(PrismContainer<?> desiredContainer, PrismContainerValue<?> live) {
+        if (NaturalKeys.match(desiredContainer, live, live.getId()) != null) {
+            return true;
+        }
         for (PrismContainerValue<?> value : desiredContainer.getValues()) {
-            if (live.getId() != null && live.getId().equals(value.getId())) {
-                return true;
-            }
-            if (keyed && carriesKey(naturalKey, value) && naturalKey.valuesMatch(live, value)) {
-                return true;
-            }
             if (EquivalenceStrategy.REAL_VALUE.equals(live, value)) {
                 return true;
             }
         }
         return false;
-    }
-
-    /** The live container value matching {@code desiredValue} by container id, else by natural key. */
-    private static PrismContainerValue<?> matchingLiveValue(PrismContainer<?> liveContainer,
-            PrismContainerValue<?> desiredValue, NaturalKeyDefinition naturalKey) {
-        if (liveContainer == null) {
-            return null;
-        }
-        for (PrismContainerValue<?> live : liveContainer.getValues()) {
-            if (live.getId() != null && live.getId().equals(desiredValue.getId())) {
-                return live;
-            }
-        }
-        if (naturalKey == null || !carriesKey(naturalKey, desiredValue)) {
-            return null;
-        }
-        for (PrismContainerValue<?> live : liveContainer.getValues()) {
-            if (carriesKey(naturalKey, live) && naturalKey.valuesMatch(live, desiredValue)) {
-                return live;
-            }
-        }
-        return null;
     }
 
     private static PrismContainer<?> containerAt(PrismContainerValue<?> parent, QName name) {
@@ -1315,16 +1270,6 @@ public final class DiffEngine {
         }
         Item<?, ?> item = parent.findItem(ItemPath.create(name));
         return (item instanceof PrismContainer<?> container) ? container : null;
-    }
-
-    /** The local names of the container's natural-key constituents, for the warning message. */
-    private static String keyNames(PrismContainer<?> container) {
-        return NaturalKeys.names(container);
-    }
-
-    /** The container's schema-declared natural key ({@code a:naturalKey}), or null when it has none. */
-    private static NaturalKeyDefinition naturalKeyOf(PrismContainer<?> container) {
-        return NaturalKeys.of(container);
     }
 
     /** The paths of {@code paths} that the delta still modifies. */
