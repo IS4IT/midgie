@@ -5,7 +5,17 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.0] - 2026-09-30
+
+### Changed
+
+- **Each object's result and its notes are printed together.** `deploy` printed an object's result row on stdout and its notes and warnings on stderr, before the row and each prefixed with the object's path, so telling which note belonged to which object took reading — and a CI log that captures the two streams apart could reorder them. Each object now gets one block on one stream: the result alone in the first column, and in the second the file and the object, the change, and its warnings and notes. In a terminal the second column wraps to the window width (re-read after a resize); elsewhere it is not wrapped unless `COLUMNS` is set. Per-object notes therefore now appear on stdout; notes about the run as a whole stay on stderr. `--plan` also shows an object's warnings, which it used to leave out. `rollback` uses the same first column.
+
+- **A key left empty inside an entry no longer demotes the whole list.** One `<addFocus/>` without a `<name>` in a synchronization reaction made `--equivalence auto` compare every `schemaHandling/objectType` by content, so any edit inside an object type replaced it whole — a new container id, and what the server had added inside it gone — and under merge relied on the old-form and duplicate-key safeguards to avoid a second copy. The same held for an `objectDetailsPage` with one panel lacking its `<identifier>`. A list that fills in its own key is now paired by it and edited in place; only the list below that leaves its key empty is compared by content. `-v` names that inner list. A list that leaves its own key empty (`assignment`, `inducement`) is compared by content as before.
+
+- **A broken file in a deployed tree fails the run.** A `.xml` that is not well-formed — a merge that left its conflict markers behind — or a `SchemaType` that does not parse was skipped with a warning that `--quiet` hid: the run exited 0 without it, and on a tracked tree its object read as removed. Both are errors now, reported before any server contact, as an unparseable object already was.
+
+- **A `--schema` file that cannot be used fails the run.** One named outright that was not a schema or did not parse was warned about and skipped, so every extension item it defines diffed as raw; a missing one already failed. An unreadable `--schema-dir` fails too instead of reading as empty. Files inside `--schema-dir` in the wrong format are still skipped with a warning.
 
 ### Fixed
 
@@ -43,17 +53,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Symbolic links in a deployed tree are followed.** A linked file was skipped without a word, and a linked directory as the root read as holding no files at all — which is how a Kubernetes ConfigMap mounts. Links are followed now; the ConfigMap's hidden `..data` directories are still not walked, so each file is found once, and a link back into the tree is skipped with a warning.
 
-- **A broken file in a deployed tree fails the run.** A `.xml` that is not well-formed — a merge that left its conflict markers behind — or a `SchemaType` that does not parse was skipped with a warning that `--quiet` hid: the run exited 0 without it, and on a tracked tree its object read as removed. Both are errors now, reported before any server contact, as an unparseable object already was.
-
-- **A `--schema` file that cannot be used fails the run.** One named outright that was not a schema or did not parse was warned about and skipped, so every extension item it defines diffed as raw; a missing one already failed. An unreadable `--schema-dir` fails too instead of reading as empty. Files inside `--schema-dir` in the wrong format are still skipped with a warning.
-
 - **A connector's password is left alone like any other protected value.** midPoint returns `<cfg:bindPassword><t:encryptedData>…` without `xsi:type` (checked against 4.10.5), and the connector schema that defines it is not loaded, so neither side read as protected: every run's PATCH carried the file's cleartext and the server's ciphertext, and so did plan files and rollback plans. A value without a definition that consists of `ProtectedDataType`'s elements is now recognised, dropped from the delta and reported.
 
 - **The duplicate-key check says when it could not run.** A change prism could not apply to a local copy of the object skipped the check silently; `deploy` and `diff` now say so.
-
-- **A key left empty inside an entry no longer demotes the whole list.** One `<addFocus/>` without a `<name>` in a synchronization reaction made `--equivalence auto` compare every `schemaHandling/objectType` by content, so any edit inside an object type replaced it whole — a new container id, and what the server had added inside it gone — and under merge relied on the old-form and duplicate-key safeguards to avoid a second copy. The same held for an `objectDetailsPage` with one panel lacking its `<identifier>`. A list that fills in its own key is now paired by it and edited in place; only the list below that leaves its key empty is compared by content. `-v` names that inner list. A list that leaves its own key empty (`assignment`, `inducement`) is compared by content as before.
-
-- **Each object's result and its notes are printed together.** `deploy` printed an object's result row on stdout and its notes and warnings on stderr, before the row and each prefixed with the object's path, so telling which note belonged to which object took reading — and a CI log that captures the two streams apart could reorder them. Each object now gets one block on one stream: the result alone in the first column, and in the second the file and the object, the change, and its warnings and notes. In a terminal the second column wraps to the window width (re-read after a resize); elsewhere it is not wrapped unless `COLUMNS` is set. Per-object notes therefore now appear on stdout; notes about the run as a whole stay on stderr. `--plan` also shows an object's warnings, which it used to leave out. `rollback` uses the same first column.
 
 ## [0.16.3] - 2026-09-28
 
@@ -563,7 +565,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.16.3...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/IS4IT/midgie/compare/v0.16.3...v0.17.0
 [0.16.3]: https://github.com/IS4IT/midgie/compare/v0.16.2...v0.16.3
 [0.16.2]: https://github.com/IS4IT/midgie/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/IS4IT/midgie/compare/v0.16.0...v0.16.1
