@@ -111,6 +111,18 @@ class ProxyConfigTest {
     }
 
     @Test
+    void aRefusedProxyUrlIsNamedWithoutItsPassword() {
+        // The environment is where a CI job carries proxy credentials, and the error went straight to its log.
+        for (String value : new String[] {"https://bob:S3cret@proxy.corp:3128", "socks5://bob:S3cret@proxy.corp",
+                "ftp://bob:S3cret@proxy.corp", "http://bob:S3cret@proxy corp:3128"}) {
+            String message = assertThrows(IllegalArgumentException.class,
+                    () -> resolve(null, HTTPS, "https_proxy", value)).getMessage();
+            assertFalse(message.contains("S3cret") || message.contains("bob"), message);
+            assertTrue(message.contains("***@proxy"), message);
+        }
+    }
+
+    @Test
     void credentialsAreTakenFromTheEnvironmentUrl() {
         ProxyConfig proxy = resolve(null, HTTPS, "https_proxy", "http://alice:s3cret@proxy.corp:3128");
         assertTrue(proxy.hasCredentials());

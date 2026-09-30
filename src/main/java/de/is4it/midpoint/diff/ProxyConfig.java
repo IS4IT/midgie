@@ -151,24 +151,25 @@ public final class ProxyConfig {
         try {
             uri = new URI(text);
         } catch (URISyntaxException e) {
-            throw new IllegalArgumentException(source + " is not a URL: " + value);
+            throw new IllegalArgumentException(source + " is not a URL: " + shown(value));
         }
         String scheme = (uri.getScheme() == null) ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
         if (scheme.startsWith("socks")) {
-            throw new IllegalArgumentException(source + " names a SOCKS proxy (" + value + "); java.net.http "
-                    + "speaks only to HTTP proxies. Use an HTTP proxy, or -DsocksProxyHost via JAVA_OPTS.");
+            throw new IllegalArgumentException(source + " names a SOCKS proxy (" + shown(value) + "); "
+                    + "java.net.http speaks only to HTTP proxies. Use an HTTP proxy, or -DsocksProxyHost via "
+                    + "JAVA_OPTS.");
         }
         if ("https".equals(scheme)) {
-            throw new IllegalArgumentException(source + " names an https:// proxy (" + value + "); the JDK's "
-                    + "HTTP client cannot wrap the connection to the proxy itself in TLS. Use http:// for the "
-                    + "proxy — an https:// target is still tunnelled end-to-end through it with CONNECT.");
+            throw new IllegalArgumentException(source + " names an https:// proxy (" + shown(value) + "); "
+                    + "the JDK's HTTP client cannot wrap the connection to the proxy itself in TLS. Use http:// for "
+                    + "the proxy — an https:// target is still tunnelled end-to-end through it with CONNECT.");
         }
         if (!"http".equals(scheme)) {
             throw new IllegalArgumentException(source + " must be an http:// proxy URL or host:port, not "
-                    + value);
+                    + shown(value));
         }
         if (uri.getHost() == null || uri.getHost().isBlank()) {
-            throw new IllegalArgumentException(source + " has no host: " + value);
+            throw new IllegalArgumentException(source + " has no host: " + shown(value));
         }
         // No port means the scheme's default, as it would for any other http:// URL. Guessing a proxy port
         // instead (3128, 8080) would be right for one site and quietly wrong for the next.
@@ -176,8 +177,22 @@ public final class ProxyConfig {
         try {
             return new URI("http", uri.getUserInfo(), uri.getHost(), port, null, null, null);
         } catch (URISyntaxException e) {
-            throw new IllegalArgumentException(source + " is not a usable proxy URL: " + value);
+            throw new IllegalArgumentException(source + " is not a usable proxy URL: " + shown(value));
         }
+    }
+
+    /**
+     * {@code value} as a message may show it: with any {@code user:password@} before the host replaced. Done on
+     * the text, since the messages that need it are the ones about a value that does not parse — and a proxy
+     * variable is the one place a CI job is likely to carry a password, straight into its log.
+     */
+    static String shown(String value) {
+        int scheme = value.indexOf("://");
+        int start = (scheme < 0) ? 0 : scheme + 3;
+        int slash = value.indexOf('/', start);
+        int end = (slash < 0) ? value.length() : slash;
+        int at = value.lastIndexOf('@', end - 1);
+        return (at < start) ? value : value.substring(0, start) + "***@" + value.substring(at + 1);
     }
 
     private static URI withoutUserInfo(URI uri) {

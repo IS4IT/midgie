@@ -11,6 +11,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **An OID is checked before it becomes part of a URL.** Object addresses are built by concatenation, and an OID from a tree file, `--oid`, or a plan or rollback file went in as it stood: `../roles/x?options=raw` addressed another collection and added a query option to the PATCH or DELETE, and an OID with a space failed with "Illegal character in path". Anything but a UUID — the only form midPoint's native repository stores — now fails that object with a message naming it, before any request is sent, and `--plan` refuses to write a plan file for one.
 
+- **A refused proxy URL is named without its password.** `https_proxy=https://bob:S3cret@proxy:3128` and every other proxy value midgie cannot use was echoed in full in the error, credentials included — and the environment is where a CI job carries them, straight into its log. The part before the host is now shown as `***@`.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed
