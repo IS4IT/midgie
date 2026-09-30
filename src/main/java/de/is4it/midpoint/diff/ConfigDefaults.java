@@ -576,6 +576,42 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
         return value != null && "true".equalsIgnoreCase(value.trim());
     }
 
+    /**
+     * A warning per config file that supplies {@code password} or {@code proxy-password} — bare or qualified with
+     * a command — and that users other than its owner may read. Said rather than refused: a file mounted into a
+     * container is often readable by its group on purpose, and failing every run over it would be the wrong
+     * trade, but a password nobody knew was exposed is worse than one that is said to be.
+     */
+    List<String> readablePasswords() {
+        Set<File> holding = new LinkedHashSet<>();
+        for (String key : properties.stringPropertyNames()) {
+            String option = key.substring(key.lastIndexOf('.') + 1);
+            if (("password".equals(option) || "proxy-password".equals(option)) && origin.get(key) != null) {
+                holding.add(origin.get(key));
+            }
+        }
+        List<String> warnings = new ArrayList<>();
+        for (File file : holding) {
+            java.nio.file.Path path = file.toPath();
+            try {
+                if (path.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+                    Set<java.nio.file.attribute.PosixFilePermission> permissions =
+                            java.nio.file.Files.getPosixFilePermissions(path);
+                    if (permissions.contains(java.nio.file.attribute.PosixFilePermission.GROUP_READ)
+                            || permissions.contains(java.nio.file.attribute.PosixFilePermission.OTHERS_READ)) {
+                        warnings.add(file + " holds a password and other users can read it ("
+                                + java.nio.file.attribute.PosixFilePermissions.toString(permissions)
+                                + "); make it owner-only (chmod 600), or keep the password in password-file or "
+                                + "MIDPOINT_PASSWORD instead");
+                    }
+                }
+            } catch (IOException e) {
+                LOG.debug("could not read the permissions of {}", file, e);
+            }
+        }
+        return warnings;
+    }
+
     /** The files this configuration came from, lowest precedence first. */
     List<File> sources() {
         return sources;

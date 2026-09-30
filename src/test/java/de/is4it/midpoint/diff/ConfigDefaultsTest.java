@@ -495,6 +495,26 @@ class ConfigDefaultsTest {
     }
 
     @Test
+    void aPasswordInAFileOthersMayReadIsSaid(@TempDir Path dir) throws Exception {
+        Path user = write(dir, "user.properties", "url = https://mp\nmidgie.deploy.password = s3cret");
+        Files.setPosixFilePermissions(user, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                user.toFile(), null);
+
+        List<String> warnings = defaults.readablePasswords();
+        assertEquals(1, warnings.size(), warnings.toString());
+        assertTrue(warnings.get(0).contains("chmod 600") && !warnings.get(0).contains("s3cret"), warnings.get(0));
+
+        Files.setPosixFilePermissions(user, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        assertTrue(defaults.readablePasswords().isEmpty(), "owner-only is fine");
+
+        Path noSecret = write(dir, "plain.properties", "url = https://mp");
+        Files.setPosixFilePermissions(noSecret, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+        assertTrue(ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(), noSecret.toFile(), null)
+                .readablePasswords().isEmpty(), "a file without a password may be read by anyone");
+    }
+
+    @Test
     void inACheckoutTheNearestTreeFileUpToTheRootApplies(@TempDir Path dir) throws Exception {
         Path root = Files.createDirectories(dir.resolve("repo"));
         Files.createDirectories(root.resolve(".git"));

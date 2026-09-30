@@ -107,6 +107,9 @@ public class Main implements java.util.concurrent.Callable<Integer> {
                 defaults.validate(commandLine);
                 commandLine.setDefaultValueProvider(defaults);
                 LOG.debug("defaults from {}", defaults.sources());
+                for (String warning : defaults.readablePasswords()) {
+                    System.err.println("midgie: warning: " + warning + ".");
+                }
                 String fromTree = defaults.treeFileSummary();
                 if (fromTree != null) {
                     // Named outright, not logged at debug: a config file that arrived with the checkout is

@@ -21,6 +21,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A tree-local `.midgie.properties` is only read from the tree.** The search walked up from the working directory until it met a repository root — and outside a checkout never met one, so from `/tmp/work` it read a `/tmp/.midgie.properties` anyone could have left, whose `policy` or `rollback-plan` then applied. Outside a git checkout only the working directory's own file is read now, and a tree file that any user may change, or that belongs to another user who is not root, is ignored with a warning.
 
+- **A config file with a password that others can read is said.** A `password` or `proxy-password` in a group- or world-readable `midgie.properties` passed without a word; each run now starts with a warning naming the file and its permissions.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed
