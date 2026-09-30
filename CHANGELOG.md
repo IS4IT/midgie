@@ -53,6 +53,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A key left empty inside an entry no longer demotes the whole list.** One `<addFocus/>` without a `<name>` in a synchronization reaction made `--equivalence auto` compare every `schemaHandling/objectType` by content, so any edit inside an object type replaced it whole — a new container id, and what the server had added inside it gone — and under merge relied on the old-form and duplicate-key safeguards to avoid a second copy. The same held for an `objectDetailsPage` with one panel lacking its `<identifier>`. A list that fills in its own key is now paired by it and edited in place; only the list below that leaves its key empty is compared by content. `-v` names that inner list. A list that leaves its own key empty (`assignment`, `inducement`) is compared by content as before.
 
+- **Each object's result and its notes are printed together.** `deploy` printed an object's result row on stdout and its notes and warnings on stderr, before the row and each prefixed with the object's path, so telling which note belonged to which object took reading — and a CI log that captures the two streams apart could reorder them. Each object now gets one block on one stream: the result alone in the first column, and in the second the file and the object, the change, and its warnings and notes. In a terminal the second column wraps to the window width (re-read after a resize); elsewhere it is not wrapped unless `COLUMNS` is set. Per-object notes therefore now appear on stdout; notes about the run as a whole stay on stderr. `--plan` also shows an object's warnings, which it used to leave out. `rollback` uses the same first column.
+
 ## [0.16.3] - 2026-09-28
 
 ### Fixed

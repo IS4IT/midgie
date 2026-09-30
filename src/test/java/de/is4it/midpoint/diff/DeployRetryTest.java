@@ -12,6 +12,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -123,6 +124,32 @@ class DeployRetryTest {
         assertEquals(0, result.exit(), result.err());
         assertFalse(result.err().contains("matched no object"),
                 "the rule applies to both roles in the tree: " + result.err());
+    }
+
+    @Test
+    void eachObjectsNotesFollowItsOwnRowOnTheSameStream(@TempDir Path dir) throws Exception {
+        // Notes used to go to stderr before the row they were about, so which note belonged to which object had
+        // to be read off a repeated object path — and a CI log capturing the two streams apart could reorder them.
+        writeTree(dir);
+        Path policy = dir.resolve("midgie.policy");
+        Files.writeString(policy, "RoleType/*/description  apply=on-create\n", StandardCharsets.UTF_8);
+
+        Result result = deployCapturing(dir, "--policy", policy.toString(), "--dry-run");
+
+        assertEquals(0, result.exit(), result.out() + result.err());
+        List<String> lines = result.out().lines().toList();
+        List<Integer> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).startsWith("  in-sync")) {
+                rows.add(i);
+            }
+        }
+        assertEquals(2, rows.size(), result.out());
+        for (int row : rows) {
+            assertTrue(lines.get(row + 1).strip().startsWith("note: left alone by the policy: description"),
+                    "each row carries its own note directly beneath it:\n" + result.out());
+        }
+        assertFalse(result.err().contains("left alone by the policy"), result.err());
     }
 
     @Test

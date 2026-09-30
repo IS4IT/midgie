@@ -342,6 +342,12 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   - `deploy` (real write): `0` = success (applied, created, already in sync, or user-declined) · `2` = error.
 - `--quiet` / `-q` drops advisory notes/warnings and (for `deploy`) status lines, keeping the delta payload,
   error messages, and the exit code — for clean pipeline output.
+- `deploy`/`rollback` result rows use a two-column layout (`OutputLayout`): the result alone in column 1, and in
+  column 2 the file and object, the change detail, and that object's warnings and notes, printed as one block on
+  the row's stream (stdout; stderr for a failure or when the payload is on stdout) so a CI log that captures the
+  streams apart cannot separate a note from its object. Column 2 wraps to the terminal width (`stty size` on
+  `/dev/tty`, re-read after `SIGWINCH`) with a hanging indent; with no terminal it is not wrapped unless `COLUMNS`
+  is set. Notes about the run as a whole stay on stderr.
 
 ## Packaging & license
 

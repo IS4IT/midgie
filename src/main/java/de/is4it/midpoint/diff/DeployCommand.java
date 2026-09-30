@@ -8,6 +8,7 @@ package de.is4it.midpoint.diff;
 import java.io.Console;
 import java.io.File;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -772,7 +773,7 @@ public class DeployCommand implements Callable<Integer> {
      * merge keeps, and on a tracked run items inside values the tree declares that it never deployed. One line
      * per object; the fix, when the tree should own a list, is a policy rule.
      */
-    private void reportKept(DeployObject unit, Reconciler.Outcome outcome) {
+    private void reportKept(OutputLayout.Block block, DeployObject unit, Reconciler.Outcome outcome) {
         if (outcome.kept.isEmpty() && outcome.keptNested.isEmpty()) {
             return;
         }
@@ -785,8 +786,7 @@ public class DeployCommand implements Callable<Integer> {
             parts.add(String.join(", ", outcome.keptNested) + " (inside values the tree declares; it never "
                     + "deployed them)");
         }
-        note("note: " + unit.objectPath() + ": keeps live value(s) the tree does not list: "
-                + String.join("; ", parts) + ".");
+        note(block, unit, "note: keeps live value(s) the tree does not list: " + String.join("; ", parts) + ".");
     }
 
     /**
@@ -795,24 +795,23 @@ public class DeployCommand implements Callable<Integer> {
      * inside an entry is an edit in place or a replacement of the entry, and it was visible only inside a debug
      * log line.
      */
-    private void reportKeyPairingDeclined(DeployObject unit, Reconciler.Outcome outcome) {
+    private void reportKeyPairingDeclined(OutputLayout.Block block, DeployObject unit, Reconciler.Outcome outcome) {
         if (!verbose()) {
             return;
         }
         for (String declined : outcome.keyPairingDeclined) {
-            note("note: " + unit.objectPath() + ": " + declined + ".");
+            note(block, unit, "note: " + declined + ".");
         }
     }
 
     /** Name the dropped values an object's PATCH deletes, so the change being confirmed is the whole change. */
-    private void reportRemoving(DeployObject unit, Reconciler.Outcome outcome) {
+    private void reportRemoving(OutputLayout.Block block, DeployObject unit, Reconciler.Outcome outcome) {
         if (outcome.removing.isEmpty()) {
             return;
         }
-        note("note: " + unit.objectPath() + ": removing " + outcome.removing.size()
-                + " value(s) no longer declared by the tree:");
+        note(block, unit, "note: removing " + outcome.removing.size() + " value(s) no longer declared by the tree:");
         for (RemovalDetector.Removal removal : outcome.removing) {
-            note("  " + removal);
+            noteItem(block, String.valueOf(removal));
         }
     }
 
@@ -821,10 +820,9 @@ public class DeployCommand implements Callable<Integer> {
      * back — otherwise a task shown as {@code in-sync} while its {@code executionState} plainly differs reads
      * as a diff that missed something. Each path names the rule that held it back.
      */
-    private void reportHeldBack(DeployObject unit, Reconciler.Outcome outcome) {
+    private void reportHeldBack(OutputLayout.Block block, DeployObject unit, Reconciler.Outcome outcome) {
         if (!outcome.heldBack.isEmpty()) {
-            note("note: " + unit.objectPath() + ": left alone by the policy: "
-                    + String.join(", ", outcome.heldBack));
+            note(block, unit, "note: left alone by the policy: " + String.join(", ", outcome.heldBack));
         }
     }
 
@@ -834,11 +832,11 @@ public class DeployCommand implements Callable<Integer> {
      * tree — protected since midPoint 4.10.5 — looked applied when it had been ignored. Printed on every run,
      * not just a preview, because nothing else tells the operator the value was never written.
      */
-    private void reportProtectedSkipped(DeployObject unit, Reconciler.Outcome outcome) {
+    private void reportProtectedSkipped(OutputLayout.Block block, DeployObject unit, Reconciler.Outcome outcome) {
         if (!outcome.protectedSkipped.isEmpty()) {
-            note("note: " + unit.objectPath() + ": skipped protected value(s) at "
-                    + String.join(", ", outcome.protectedSkipped) + " — encrypted values are never patched; "
-                    + "they are written only when midgie creates the object. Change them through midPoint.");
+            note(block, unit, "note: skipped protected value(s) at " + String.join(", ", outcome.protectedSkipped)
+                    + " — encrypted values are never patched; they are written only when midgie creates the "
+                    + "object. Change them through midPoint.");
         }
     }
 
@@ -1213,48 +1211,65 @@ public class DeployCommand implements Callable<Integer> {
 
     private void record(Tally tally, DeployObject unit, Reconciler.Action action, Reconciler.Outcome outcome,
             boolean preview) {
-        // Input advisories and the blast radius go to stderr per unit, so a destructive change is visible
-        // in the plan before anything is written (and still shows in a real apply).
-        for (String warning : outcome.warnings) {
-            note("warning: " + unit.objectPath() + ": " + warning);
-        }
-        // Once per run: in the preview when there is one, else in the pass that writes.
-        if (preview || assumeYes || confirmEachApply) {
-            reportKeyPairingDeclined(unit, outcome);
-            reportRemoving(unit, outcome);
-            reportKept(unit, outcome);
-        }
-        if (preview) {
-            reportHeldBack(unit, outcome);
-        }
-        reportProtectedSkipped(unit, outcome);
+        String label;
+        String detail = "";
+        boolean error = false;
         switch (action) {
             case CREATE:
                 tally.created++;
-                reportUnit(unit, preview ? "would-create" : "created", "", false);
+                label = preview ? "would-create" : "created";
                 break;
             case PATCH:
                 tally.patched++;
                 tally.removed += outcome.removing.size();
-                String detail = (outcome.changes > 0 ? outcome.changes + " change(s): " : "")
-                        + safe(outcome.detail);
-                reportUnit(unit, preview ? "would-patch" : "patched", detail, false);
+                label = preview ? "would-patch" : "patched";
+                detail = (outcome.changes > 0 ? outcome.changes + " change(s): " : "") + safe(outcome.detail);
                 break;
             case IN_SYNC:
                 tally.inSync++;
-                reportUnit(unit, "in-sync", "", false);
+                label = "in-sync";
                 break;
             case SKIP:
                 tally.skipped++;
-                reportUnit(unit, preview ? "skip" : "skipped", safe(outcome.detail), false);
+                label = preview ? "skip" : "skipped";
+                detail = safe(outcome.detail);
                 break;
             case FAIL:
             default:
                 tally.failed++;
                 tally.failedUnits.add(unit);
-                reportUnit(unit, preview ? "error" : "failed", safe(outcome.detail), true);
+                label = preview ? "error" : "failed";
+                detail = safe(outcome.detail);
+                error = true;
                 break;
         }
+        OutputLayout.Block block = unitBlock(unit, label, detail);
+        addNotes(block, unit, outcome,
+                preview || assumeYes || confirmEachApply, // once per run: in the preview when there is one
+                preview);
+        print(block, error);
+    }
+
+    /**
+     * The warnings and notes about one object, under its result. Input advisories and the blast radius come
+     * first, so a destructive change is visible in the plan before anything is written (and still shows in a real
+     * apply); the notes that are said once per run only when {@code oncePerRun}; what a policy holds back only in
+     * a preview.
+     */
+    private void addNotes(OutputLayout.Block block, DeployObject unit, Reconciler.Outcome outcome, boolean oncePerRun,
+            boolean preview) {
+        for (String warning : outcome.warnings) {
+            note(block, unit, "warning: " + warning);
+        }
+        if (oncePerRun) {
+            reportKeyPairingDeclined(block, unit, outcome);
+            reportRemoving(block, unit, outcome);
+            reportKept(block, unit, outcome);
+        }
+        if (preview) {
+            reportHeldBack(block, unit, outcome);
+        }
+        reportProtectedSkipped(block, unit, outcome);
     }
 
     /**
@@ -1363,11 +1378,6 @@ public class DeployCommand implements Callable<Integer> {
                 // fragment of a to-be-created object became a patch rather than a second create — has
                 // nothing left to answer for now that an object's files are reconciled together.
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune());
-                reportKeyPairingDeclined(unit, outcome);
-                reportRemoving(unit, outcome);
-                reportKept(unit, outcome);
-                reportHeldBack(unit, outcome);
-                reportProtectedSkipped(unit, outcome);
 
                 boolean lands = outcome.action == Reconciler.Action.CREATE || outcome.action == Reconciler.Action.PATCH
                         || outcome.action == Reconciler.Action.IN_SYNC;
@@ -1377,35 +1387,45 @@ public class DeployCommand implements Callable<Integer> {
                         writtenOids.put(unit, outcome.oid);
                     }
                 }
+                String label;
+                String detail = "";
+                boolean error = false;
                 switch (outcome.action) {
                     case CREATE:
                         planFiles.put(unit, PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid,
                                 unit.name(), PlanStore.Kind.CREATE,
                                 oidComments.annotate(outcome.createBody, outcome.oid, unit.typeName())));
                         tally.created++;
-                        reportUnit(unit, "would-create", "", false);
+                        label = "would-create";
                         break;
                     case PATCH:
                         planFiles.put(unit, PlanStore.write(planDir, seq, width, outcome.restType, outcome.oid,
                                 unit.name(), PlanStore.Kind.PATCH,
                                 oidComments.annotate(outcome.modificationXml, outcome.oid, unit.typeName())));
                         tally.patched++;
-                        reportUnit(unit, "would-patch", outcome.changes + " change(s)", false);
+                        label = "would-patch";
+                        detail = outcome.changes + " change(s)";
                         break;
                     case IN_SYNC:
                         tally.inSync++;
-                        reportUnit(unit, "in-sync", "", false);
+                        label = "in-sync";
                         break;
                     case SKIP:
                         tally.skipped++;
-                        reportUnit(unit, "skip", safe(outcome.detail), false);
+                        label = "skip";
+                        detail = safe(outcome.detail);
                         break;
                     case FAIL:
                     default:
                         tally.failed++;
-                        reportUnit(unit, "error", safe(outcome.detail), true);
+                        label = "error";
+                        detail = safe(outcome.detail);
+                        error = true;
                         break;
                 }
+                OutputLayout.Block block = unitBlock(unit, label, detail);
+                addNotes(block, unit, outcome, true, true);
+                print(block, error);
             } catch (Exception e) {
                 // One unit that cannot be planned must not abandon the loop mid-write: the plan would be
                 // both partial and unexplained. Record it and carry on, as the apply pass does.
@@ -1793,35 +1813,67 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     private void reportUnit(DeployObject unit, String label, String detail, boolean error) {
-        // source (file) -> target (object): the object path sits last so it reads into the change detail's
-        // item path (e.g. SystemConfigurationType/SystemConfiguration  …deploymentInformation/headerColor).
-        report(label, unit.sourceLabel(), verbose() ? unit.oidLabel() : null,
-                unit.objectPath(), detail, error);
+        print(unitBlock(unit, label, detail), error);
+    }
+
+    /**
+     * One object's block: the result, then source (file) and target (object) — the object path last, so it reads
+     * into the change detail's item paths — with the OID between them under {@code --debug}, and the detail.
+     */
+    private OutputLayout.Block unitBlock(DeployObject unit, String label, String detail) {
+        String head = unit.sourceLabel() + "  " + (verbose() ? unit.oidLabel() + "  " : "") + unit.objectPath();
+        return new OutputLayout.Block(label, head).add(detail);
     }
 
     private void reportEntry(PlanStore.Entry entry, String label, String detail, boolean error) {
         // Plan files are keyed by OID and carry no name, so an apply-plan row is identified by its OID.
-        report(label, entry.restType, safe(entry.oid),
-                entry.kind == PlanStore.Kind.CREATE ? "(create)" : "(patch)", detail, error);
+        String head = entry.restType + "  " + safe(entry.oid) + "  "
+                + (entry.kind == PlanStore.Kind.CREATE ? "(create)" : "(patch)");
+        print(new OutputLayout.Block(label, head).add(detail), error);
     }
 
-    /** One result row: {@code label  source  [oid — only under --debug]  target  detail}. */
-    private void report(String label, String source, String oid, String target, String detail, boolean error) {
-        StringBuilder out = new StringBuilder(String.format("  %-12s %-44s", label, source));
-        if (oid != null) {
-            out.append(String.format(" %-38s", oid));
+    /**
+     * Print one block, whole, on one stream: where the result rows go ({@link #status}), or stderr for a failure,
+     * which is printed whatever {@code --quiet} asks. A block's notes were left out under {@code --quiet} already.
+     */
+    private void print(OutputLayout.Block block, boolean error) {
+        if (!error && (quiet || asDiff)) {
+            return;
         }
-        if (target != null && !target.isEmpty()) {
-            out.append(" ").append(target);
+        PrintStream stream = (error || payloadOnStdout()) ? System.err : System.out;
+        for (String line : block.render(OutputLayout.width())) {
+            stream.println(line);
         }
-        if (detail != null && !detail.isEmpty()) {
-            out.append("  ").append(detail);
+    }
+
+    /**
+     * A warning or note about one object, into its block. Under {@code --quiet} it is left out, as notes always
+     * were; for a live {@code diff}, which prints no result rows, it goes to stderr as a line of its own, naming
+     * the object.
+     */
+    private void note(OutputLayout.Block block, DeployObject unit, String text) {
+        if (quiet) {
+            return;
         }
-        if (error) {
-            System.err.println(out);
-        } else {
-            status(out.toString());
+        if (asDiff) {
+            int colon = text.indexOf(": ");
+            System.err.println("midgie: " + text.substring(0, colon + 2) + unit.objectPath() + ": "
+                    + text.substring(colon + 2));
+            return;
         }
+        block.add(text);
+    }
+
+    /** An item under the note before it, such as one removed value. */
+    private void noteItem(OutputLayout.Block block, String text) {
+        if (quiet) {
+            return;
+        }
+        if (asDiff) {
+            System.err.println("midgie:   " + text);
+            return;
+        }
+        block.addItem(text);
     }
 
     /** True when the OID should be shown: {@code --debug} (or {@code --trace}, which implies it). */

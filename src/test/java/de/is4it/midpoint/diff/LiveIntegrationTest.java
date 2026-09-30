@@ -719,8 +719,14 @@ class LiveIntegrationTest {
         // The tracked tree keeps it (merge), and names it rather than passing over it in silence.
         CliResult kept = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
         assertEquals(0, kept.exit, kept.out + kept.err);
-        assertTrue(kept.err.contains("keeps live value(s) the tree does not list") && kept.err.contains("inducement ×1"),
-                kept.err);
+        // In the object's own block, under its result row, on the row's stream.
+        String[] lines = kept.out.split("\\R");
+        int row = java.util.stream.IntStream.range(0, lines.length)
+                .filter(i -> lines[i].contains("RoleType/IT Deploy Role")).findFirst().orElse(-1);
+        assertTrue(row >= 0 && row + 1 < lines.length && lines[row + 1].contains("note: keeps live value(s) the tree "
+                + "does not list"), "the note follows its object's row:\n" + kept.out);
+        assertTrue(kept.out.contains("inducement ×1"), kept.out);
+        assertFalse(kept.err.contains("keeps live value(s)"), "and is not left on stderr:\n" + kept.err);
 
         // Owning the list is one flag (or policy rule) away, and then it is a change to preview.
         CliResult owned = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run",

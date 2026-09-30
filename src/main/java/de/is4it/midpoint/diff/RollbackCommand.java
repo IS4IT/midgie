@@ -136,7 +136,7 @@ public class RollbackCommand implements Callable<Integer> {
 
             status("Rollback plan " + run + " — " + entries.size() + " object(s) to restore.");
             for (PlanStore.Entry entry : entries) {
-                status("  " + (dryRun ? "would-restore" : "restore") + "  " + entry.restType + "/" + entry.oid);
+                row(dryRun ? "would-restore" : "restore", entry.restType + "/" + entry.oid);
             }
             reportCreated(manifest);
 
@@ -286,7 +286,7 @@ public class RollbackCommand implements Callable<Integer> {
                         PlanStore.setsReferenceByFilter(entry));
                 applied++;
                 restored.add(entry.oid);
-                status("  restored     " + entry.restType + "/" + entry.oid);
+                row("restored", entry.restType + "/" + entry.oid);
             } catch (Exception e) {
                 failed++;
                 System.err.println("midgie: could not restore " + entry.restType + "/" + entry.oid + ": "
@@ -391,6 +391,13 @@ public class RollbackCommand implements Callable<Integer> {
             return 0;
         }
         return null;
+    }
+
+    /** One result row, in the same two columns as {@code deploy}'s. */
+    private void row(String label, String object) {
+        for (String line : new OutputLayout.Block(label, object).render(OutputLayout.width())) {
+            status(line);
+        }
     }
 
     private void status(String message) {
