@@ -511,6 +511,53 @@ class ConfigDefaultsTest {
     }
 
     @Test
+    void aCommandQualifiedInsecureAppliesToThatCommandOnly(@TempDir Path dir) throws Exception {
+        // Any key ending in "insecure" used to count, so a setting meant for init switched hostname verification
+        // off for deploy as well.
+        useConfig(dir, "midgie.init.insecure = true");
+        assertTrue(Main.insecureRequested(new String[] {"init", "--create-state"}));
+        assertFalse(Main.insecureRequested(new String[] {"deploy", "tree"}), "deploy is not init");
+
+        useConfig(dir, "insecure = true\nmidgie.deploy.insecure = false");
+        assertFalse(Main.insecureRequested(new String[] {"deploy", "tree"}),
+                "the qualified key wins for its command, as picocli resolves it");
+        assertTrue(Main.insecureRequested(new String[] {"diff", "a.xml"}));
+    }
+
+    @Test
+    void theCommandLineSettlesInsecureAgainstCacertInsteadOfRefusing(@TempDir Path dir) throws Exception {
+        Path user = write(dir, "user.properties", "insecure = true");
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                user.toFile(), null);
+        CommandLine commandLine = Main.commandLine();
+        commandLine.setDefaultValueProvider(defaults);
+        CommandLine.ParseResult parsed = commandLine.parseArgs("diff", "a.xml", "--url", "https://mp.invalid",
+                "-u", "u", "-p", "p", "--cacert", "src/test/resources/tls/test-ca.crt");
+        DiffCommand diff = (DiffCommand) parsed.subcommand().commandSpec().userObject();
+
+        java.io.PrintStream originalErr = System.err;
+        java.io.ByteArrayOutputStream err = new java.io.ByteArrayOutputStream();
+        MidpointRestClient client;
+        try {
+            System.setErr(new java.io.PrintStream(err, true, StandardCharsets.UTF_8));
+            client = diff.connectionOptions.newClient();
+        } finally {
+            System.setErr(originalErr);
+        }
+        assertTrue(client != null, "the command line's --cacert wins over the file's insecure: " + err);
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("ignoring insecure from the config file"),
+                err.toString());
+    }
+
+    @Test
+    void aCaCertOnTheCommandLineOutranksAFilesInsecure(@TempDir Path dir) throws Exception {
+        useConfig(dir, "insecure = true");
+        assertFalse(Main.insecureRequested(new String[] {"deploy", "tree", "--cacert", "ca.pem"}),
+                "verification stays on when the command line names a CA");
+        assertFalse(Main.insecureRequested(new String[] {"deploy", "tree", "--cacert=ca.pem"}));
+    }
+
+    @Test
     void proxyCredentialsAreVisibleBeforeAnyCommandRuns(@TempDir Path dir) throws Exception {
         // Same reason as the insecure latch above: the property that allows Basic on a CONNECT tunnel is read
         // once, on first use of java.net.http, so every place credentials can come from has to be seen here.

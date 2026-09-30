@@ -175,9 +175,27 @@ public final class ConnectionOptions {
 
     /** Build a REST client, or print an error and return {@code null} if the connection args are invalid. */
     public MidpointRestClient newClient() {
+        boolean trustAll = insecure;
+        File trustedCa = caCert;
         if (insecure && caCert != null) {
-            System.err.println("midgie: use either --insecure or --cacert, not both.");
-            return null;
+            // One from the command line and one from a config file: the command line decides, as it does for
+            // every other option. Both from the same place is a contradiction to be settled by whoever wrote it.
+            boolean insecureHere = onCommandLine("--insecure");
+            boolean caCertHere = onCommandLine("--cacert");
+            if (insecureHere == caCertHere) {
+                System.err.println("midgie: use either --insecure or --cacert, not both"
+                        + (insecureHere ? "." : " — the config file sets both."));
+                return null;
+            }
+            if (caCertHere) {
+                trustAll = false;
+                System.err.println("midgie: note: ignoring insecure from the config file: --cacert on the command "
+                        + "line verifies the server.");
+            } else {
+                trustedCa = null;
+                System.err.println("midgie: note: ignoring cacert from the config file: --insecure was given on "
+                        + "the command line.");
+            }
         }
         String user = user();
         if (user == null) {
@@ -197,11 +215,11 @@ public final class ConnectionOptions {
         }
         warnIfCleartextOverTheNetwork();
         LOG.debug("live mode: url={}, user={}, insecure={}, cacert={}, proxy={}, timeout={}s, retries={}",
-                url(), user, insecure, caCert, (proxy != null) ? proxy.describe() : "none",
+                url(), user, trustAll, trustedCa, (proxy != null) ? proxy.describe() : "none",
                 timeoutSeconds, retries);
         MidpointRestClient.Config config = new MidpointRestClient.Config()
-                .insecure(insecure)
-                .caCert(caCert)
+                .insecure(trustAll)
+                .caCert(trustedCa)
                 .proxy(proxy)
                 .requestTimeout(timeout())
                 .maxRetries(retries);

@@ -13,6 +13,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A refused proxy URL is named without its password.** `https_proxy=https://bob:S3cret@proxy:3128` and every other proxy value midgie cannot use was echoed in full in the error, credentials included — and the environment is where a CI job carries them, straight into its log. The part before the host is now shown as `***@`.
 
+- **`insecure` in a config file applies to the command it names.** Any key ending in `insecure` counted before any command ran, so `midgie.init.insecure = true` switched hostname verification off for `deploy` and every other command too. The file is now read the way picocli reads it: `midgie.<command>.insecure` for that command, else bare `insecure`; the same goes for `proxy-user`. And one of `--insecure`/`--cacert` on the command line against the other in a config file no longer refuses the run: the command line wins, with a note.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

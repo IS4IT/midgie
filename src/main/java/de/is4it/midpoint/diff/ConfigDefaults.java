@@ -493,28 +493,33 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     }
 
     /**
-     * Whether a boolean option is set to true anywhere in the file, bare or qualified. Needed for
-     * {@code insecure}, whose effect is latched before any command runs (see {@link Main#main}).
+     * The file's value for {@code option} as {@code command} would see it: {@code midgie.<command>.<option>} when
+     * that is set, else the bare {@code option} — the lookup picocli itself makes. For the settings read before any
+     * command runs ({@link Main#main}); matching any key that ends in the option's name made
+     * {@code midgie.init.insecure = true} switch hostname verification off for every command.
+     *
+     * @param command the subcommand being run, or {@code null} when there is none
      */
-    /** Whether the file gives this option any value at all — for the settings that are not simple switches. */
-    boolean isSet(String option) {
-        for (String key : properties.stringPropertyNames()) {
-            if ((key.equals(option) || key.endsWith("." + option))
-                    && !properties.getProperty(key).isBlank()) {
-                return true;
+    private String valueFor(String option, String command) {
+        if (command != null) {
+            String qualified = properties.getProperty("midgie." + command + "." + option);
+            if (qualified != null) {
+                return qualified;
             }
         }
-        return false;
+        return properties.getProperty(option);
     }
 
-    boolean isEnabled(String option) {
-        for (String key : properties.stringPropertyNames()) {
-            if ((key.equals(option) || key.endsWith("." + option))
-                    && "true".equalsIgnoreCase(properties.getProperty(key).trim())) {
-                return true;
-            }
-        }
-        return false;
+    /** Whether the file gives this option a value for {@code command} — for settings that are not switches. */
+    boolean isSet(String option, String command) {
+        String value = valueFor(option, command);
+        return value != null && !value.isBlank();
+    }
+
+    /** Whether the file sets this boolean option to true for {@code command}. */
+    boolean isEnabled(String option, String command) {
+        String value = valueFor(option, command);
+        return value != null && "true".equalsIgnoreCase(value.trim());
     }
 
     /** The files this configuration came from, lowest precedence first. */

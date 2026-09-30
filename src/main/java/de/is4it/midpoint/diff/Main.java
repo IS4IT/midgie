@@ -220,8 +220,26 @@ public class Main implements java.util.concurrent.Callable<Integer> {
             if ("--insecure".equals(arg)) {
                 return true;
             }
+            if ("--cacert".equals(arg) || arg.startsWith("--cacert=")) {
+                // A CA certificate named on the command line means verify: it outranks a file's insecure, as
+                // ConnectionOptions decides too.
+                return false;
+            }
         }
-        return configuredInsecure();
+        return configuredInsecure(subcommand(args));
+    }
+
+    /** The subcommand named in {@code args} — the first token that is not an option — or {@code null}. */
+    static String subcommand(String[] args) {
+        for (String arg : args) {
+            if ("--".equals(arg)) {
+                break;
+            }
+            if (!arg.startsWith("-")) {
+                return arg;
+            }
+        }
+        return null;
     }
 
     /**
@@ -233,7 +251,8 @@ public class Main implements java.util.concurrent.Callable<Integer> {
      * is fixed on first use of {@code java.net.http}, which is long before a command has parsed anything.
      */
     static boolean proxyAuthRequested(String[] args) {
-        return proxyAuthOnCommandLine(args) || proxyAuthInEnvironment(System::getenv) || configuredProxyUser();
+        return proxyAuthOnCommandLine(args) || proxyAuthInEnvironment(System::getenv)
+                || configuredProxyUser(subcommand(args));
     }
 
     private static boolean proxyAuthOnCommandLine(String[] args) {
@@ -265,10 +284,10 @@ public class Main implements java.util.concurrent.Callable<Integer> {
     }
 
     /** {@code proxy-user} in the config file. A broken file is not diagnosed here; the run will say so. */
-    private static boolean configuredProxyUser() {
+    private static boolean configuredProxyUser(String command) {
         try {
             ConfigDefaults defaults = ConfigDefaults.load();
-            return defaults != null && defaults.isSet("proxy-user");
+            return defaults != null && defaults.isSet("proxy-user", command);
         } catch (Exception e) {
             LOG.debug("could not read the config file while latching proxy authentication: {}", e.getMessage());
             return false;
@@ -276,10 +295,10 @@ public class Main implements java.util.concurrent.Callable<Integer> {
     }
 
     /** {@code insecure=true} in the config file. A broken file is not diagnosed here; the run will say so. */
-    private static boolean configuredInsecure() {
+    private static boolean configuredInsecure(String command) {
         try {
             ConfigDefaults defaults = ConfigDefaults.load();
-            return defaults != null && defaults.isEnabled("insecure");
+            return defaults != null && defaults.isEnabled("insecure", command);
         } catch (Exception e) {
             // A one-liner, not the stack: nothing else reports this path, and the run itself will fail on the
             // same file a moment later with a message of its own.
