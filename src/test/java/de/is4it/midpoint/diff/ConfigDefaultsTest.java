@@ -495,6 +495,48 @@ class ConfigDefaultsTest {
     }
 
     @Test
+    void inACheckoutTheNearestTreeFileUpToTheRootApplies(@TempDir Path dir) throws Exception {
+        Path root = Files.createDirectories(dir.resolve("repo"));
+        Files.createDirectories(root.resolve(".git"));
+        Path file = write(root, ".midgie.properties", "scope = full");
+        Path sub = Files.createDirectories(root.resolve("config/roles"));
+
+        assertEquals(file.toFile(), ConfigDefaults.locateTreeFile(sub.toFile()).file());
+    }
+
+    @Test
+    void outsideACheckoutOnlyTheWorkingDirectorysOwnFileApplies(@TempDir Path dir) throws Exception {
+        // Walking up without a repository to stop at climbed to /, and from /tmp/work picked up a
+        // /tmp/.midgie.properties anyone could have left there.
+        write(dir, ".midgie.properties", "policy = /somewhere/else.policy");
+        Path work = Files.createDirectories(dir.resolve("work"));
+
+        ConfigDefaults.TreeFile above = ConfigDefaults.locateTreeFile(work.toFile());
+        assertEquals(null, above.file());
+        assertTrue(above.ignored().contains("outside any git checkout"), above.ignored());
+
+        Path own = write(work, ".midgie.properties", "scope = full");
+        assertEquals(own.toFile(), ConfigDefaults.locateTreeFile(work.toFile()).file(),
+                "a ConfigMap-mounted tree has no .git and still carries its own file");
+    }
+
+    @Test
+    void aTreeFileAnyoneMayChangeIsNotRead(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir.resolve(".git"));
+        Path file = write(dir, ".midgie.properties", "scope = full");
+        Files.setPosixFilePermissions(file, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-rw-"));
+
+        ConfigDefaults.TreeFile found = ConfigDefaults.locateTreeFile(dir.toFile());
+
+        assertEquals(null, found.file());
+        assertTrue(found.ignored().contains("any user may change it"), found.ignored());
+
+        Files.setPosixFilePermissions(file, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-r--"));
+        assertEquals(file.toFile(), ConfigDefaults.locateTreeFile(dir.toFile()).file(),
+                "group-writable is fine: the container image runs in group 0 with g=u");
+    }
+
+    @Test
     void insecureIsVisibleBeforeAnyCommandRuns(@TempDir Path dir) throws Exception {
         // Hostname verification is latched once, before a client exists, so the file has to be read there
         // too — otherwise 'insecure' in a file would half-apply.

@@ -205,7 +205,7 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
 
     static ConfigDefaults load(UnaryOperator<String> env) throws IOException {
         return load(env, new File(SYSTEM_FILE), new File(System.getProperty("user.home", ""), USER_FILE),
-                findTreeFile(new File(System.getProperty("user.dir", "."))));
+                locateTreeFile(new File(System.getProperty("user.dir", "."))).file());
     }
 
     static ConfigDefaults load(UnaryOperator<String> env, File siteFile, File userFile) throws IOException {
@@ -213,33 +213,87 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     }
 
     /**
-     * The nearest {@code .midgie.properties} at or above {@code start}, or {@code null}.
+     * The tree-local file that applies from {@code start}, or none; and when a file was found but is not used,
+     * why — for a warning the caller prints once.
+     *
+     * @param file    the file to read, or {@code null}
+     * @param ignored the reason a file that was found is not read, or {@code null}
+     */
+    record TreeFile(File file, String ignored) {
+        private static final TreeFile NONE = new TreeFile(null, null);
+    }
+
+    /**
+     * The {@code .midgie.properties} that applies from {@code start}.
      *
      * <p>Upward from the working directory rather than from the deployed path, because the config has to be
      * in hand before the command line is parsed and the path is not known yet. That makes it the same
      * convention {@code .editorconfig} and {@code .gitignore} use, and it is predictable: the file that
      * applies is the one belonging to the checkout you are standing in.
      *
-     * <p>The walk stops at a repository root, so it cannot wander out of one checkout and into a parent
-     * directory that happens to hold an unrelated file.
+     * <p>Inside a git checkout the nearest file up to the repository root applies, and the walk never goes
+     * above that root. Outside one only the working directory's own file does: walking up without a repository
+     * to stop at climbed to {@code /}, and from {@code /tmp/work} picked up a {@code /tmp/.midgie.properties}
+     * anyone could have left there. (Outside a checkout is still worth supporting — a ConfigMap-mounted tree has
+     * no {@code .git}, and its {@code rollback-plan} setting has to keep working.)
+     *
+     * <p>A file that anyone may change, or that belongs to another user who is not root, is not read either.
+     * Group-writable is allowed: the container image runs in group 0 with {@code g=u} on purpose.
      *
      * <p>Since the file may be found from any subdirectory, a relative path in it is read from the file's own
      * directory (see {@link #defaultValue}), so {@code policy = midgie.policy} at the repository root names the
      * same file wherever in the checkout midgie is run.
      */
-    private static File findTreeFile(File start) {
-        File dir = start.getAbsoluteFile();
-        while (dir != null) {
+    static TreeFile locateTreeFile(File start) {
+        File cwd = start.getAbsoluteFile();
+        File nearest = null;
+        for (File dir = cwd; dir != null; dir = dir.getParentFile()) {
             File candidate = new File(dir, TREE_FILE);
-            if (candidate.isFile()) {
-                return candidate;
+            if (nearest == null && candidate.isFile()) {
+                nearest = candidate;
             }
             if (new File(dir, ".git").exists()) {
-                return null; // the repository root, and it has no tree file
+                return (nearest != null) ? trusted(nearest) : TreeFile.NONE; // the repository root
             }
-            dir = dir.getParentFile();
         }
-        return null;
+        File own = new File(cwd, TREE_FILE);
+        if (own.isFile()) {
+            return trusted(own);
+        }
+        return (nearest != null)
+                ? new TreeFile(null, nearest + ": it is above the working directory and outside any git checkout, "
+                        + "so it is not this tree's")
+                : TreeFile.NONE;
+    }
+
+    /** {@code file}, or why it is not read: anyone may write it, or it belongs to another user who is not root. */
+    private static TreeFile trusted(File file) {
+        java.nio.file.Path path = file.toPath();
+        try {
+            if (path.getFileSystem().supportedFileAttributeViews().contains("posix")
+                    && java.nio.file.Files.getPosixFilePermissions(path)
+                            .contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE)) {
+                return new TreeFile(null, file + ": any user may change it");
+            }
+            Integer owner = uid(path);
+            Integer self = uid(java.nio.file.Path.of("/proc/self"));
+            if (owner != null && self != null && owner != 0 && !owner.equals(self)) {
+                return new TreeFile(null, file + ": it belongs to another user ("
+                        + java.nio.file.Files.getOwner(path).getName() + ")");
+            }
+        } catch (IOException e) {
+            LOG.debug("could not check who may change {}", file, e);
+        }
+        return new TreeFile(file, null);
+    }
+
+    /** The numeric owner of {@code path}, or {@code null} where the file system does not say (not Linux). */
+    private static Integer uid(java.nio.file.Path path) {
+        try {
+            return (Integer) java.nio.file.Files.getAttribute(path, "unix:uid");
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

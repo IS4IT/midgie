@@ -95,6 +95,12 @@ public class Main implements java.util.concurrent.Callable<Integer> {
      * the exception — it is how you look up what a valid key is called.
      */
     private static void installConfigDefaults(CommandLine commandLine) {
+        // Said here, once: the file is looked for again by the latches in main, which must stay quiet.
+        String ignored = ConfigDefaults.locateTreeFile(new java.io.File(System.getProperty("user.dir", ".")))
+                .ignored();
+        if (ignored != null) {
+            System.err.println("midgie: warning: not reading the tree-local config " + ignored + ".");
+        }
         try {
             ConfigDefaults defaults = ConfigDefaults.load();
             if (defaults != null) {

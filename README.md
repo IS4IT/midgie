@@ -581,7 +581,7 @@ Three things the file will not do. **A key that is not an option is an error**, 
 
 ### A `.midgie.properties` in the tree
 
-Some settings belong to the *deployment* rather than to the machine or the person — where its rollback plans go, which policy file it uses. midgie reads the nearest `.midgie.properties` at or above the working directory, stopping at the repository root, and it sits at the **lowest** precedence of the file layers: the tree suggests, your own files override. The file and the keys it supplied are printed at the start of the run, because a config that arrived with a checkout is the one nobody remembers is there.
+Some settings belong to the *deployment* rather than to the machine or the person — where its rollback plans go, which policy file it uses. midgie reads the nearest `.midgie.properties` at or above the working directory, stopping at the repository root — or, outside a git checkout (a ConfigMap-mounted tree, say), only the one in the working directory itself. A file any user may change, or one owned by another user who is not root, is not read, with a warning. It sits at the **lowest** precedence of the file layers: the tree suggests, your own files override. The file and the keys it supplied are printed at the start of the run, because a config that arrived with a checkout is the one nobody remembers is there.
 
 That is also how a tree brings its policy file along without anyone typing `--policy`:
 
