@@ -86,15 +86,15 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 ### Security hardening
 
-- [ ] **S1 — OIDs concatenated into REST URLs unescaped.** `MidpointRestClient.java:340, 626-632`. `../roles/x?options=raw` is sent verbatim; a space throws `IllegalArgumentException`. Validate or percent-encode.
-- [ ] **S2 — Proxy parse errors echo credentials.** `ProxyConfig.java:154-179`. Strip userinfo as elsewhere in the class.
-- [ ] **S3 — `isEnabled("insecure")` matches any qualified key.** `ConfigDefaults.java:496-517`, `Main.configuredInsecure`. `midgie.init.insecure=true` disables hostname checks for every command. Also: file `insecure=true` + CLI `--cacert` is refused instead of CLI winning (`ConnectionOptions:165`).
-- [ ] **S4 — Tree-local config walk only stops at `.git`.** `ConfigDefaults.java:230-243`. Outside a checkout it walks to `/` and picks up e.g. `/tmp/.midgie.properties` from another user.
-- [ ] **S5 — No permission check on config files holding `password`.** `ConfigDefaults` / `ConnectionOptions`. *Plausible.* Warn on group/world-readable.
-- [ ] **S6 — `--trace` prints full request/response bodies incl. `clearValue`.** `MidpointRestClient.java:401-411`. Document the risk or redact; `shortBody` (`:429`) also echoes 800 chars of error body regardless of `-q`.
-- [ ] **S7 — Release workflow persists a write token during the build.** `release.yml:467-499`. Set `persist-credentials: false` or split build and publish jobs.
-- [ ] **S8 — `-o FILE` rewrites in place and keeps an existing file's mode.** `Io.java:111-113`. Write to a temp file and rename; restrict mode on overwrite too.
-- [ ] **S9 — Live `diff -` leaves the desired object in `/tmp/midgie-stdin-NNN.xml` if killed.** `DiffCommand.java:172-173`, `Io.java:62`. *Plausible.* Messages also name the temp path instead of "stdin".
+- [x] **S1 — OIDs concatenated into REST URLs unescaped.** `MidpointRestClient.java:340, 626-632`. `../roles/x?options=raw` is sent verbatim; a space throws `IllegalArgumentException`. Validate or percent-encode. — `bf0dcda`; also covers C27 (plan files refuse a non-UUID OID)
+- [x] **S2 — Proxy parse errors echo credentials.** `ProxyConfig.java:154-179`. Strip userinfo as elsewhere in the class. — `d76fa87`
+- [x] **S3 — `isEnabled("insecure")` matches any qualified key.** `ConfigDefaults.java:496-517`, `Main.configuredInsecure`. `midgie.init.insecure=true` disables hostname checks for every command. Also: file `insecure=true` + CLI `--cacert` is refused instead of CLI winning (`ConnectionOptions:165`). — `e52c56b`
+- [x] **S4 — Tree-local config walk only stops at `.git`.** `ConfigDefaults.java:230-243`. Outside a checkout it walks to `/` and picks up e.g. `/tmp/.midgie.properties` from another user. — `03d46df` — outside a checkout only the working directory's own file; untrusted files ignored with a warning
+- [x] **S5 — No permission check on config files holding `password`.** `ConfigDefaults` / `ConnectionOptions`. *Plausible.* Warn on group/world-readable. — `9569f5c` — warns, does not refuse
+- [x] **S6 — `--trace` prints full request/response bodies incl. `clearValue`.** `MidpointRestClient.java:401-411`. Document the risk or redact; `shortBody` (`:429`) also echoes 800 chars of error body regardless of `-q`. — `7502f19` — `clearValue`/`cipherValue`/`digestValue` masked
+- [x] **S7 — Release workflow persists a write token during the build.** `release.yml:467-499`. Set `persist-credentials: false` or split build and publish jobs. — `f98693a` — every checkout in release and CI
+- [x] **S8 — `-o FILE` rewrites in place and keeps an existing file's mode.** `Io.java:111-113`. Write to a temp file and rename; restrict mode on overwrite too. — `b47fdde`
+- [x] **S9 — Live `diff -` leaves the desired object in `/tmp/midgie-stdin-NNN.xml` if killed.** `DiffCommand.java:172-173`, `Io.java:62`. *Plausible.* Messages also name the temp path instead of "stdin". — `e8f8791` — private directory, removed in `finally`; a `kill -9` can still leave it
 
 ### Swallowed or under-reported errors
 
@@ -137,7 +137,7 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [ ] **C24 — Lone non-self-signed leaf becomes the trust anchor without saying so.** `ServerCertificates.java:112-117`. `--cacert` then breaks at renewal.
 - [ ] **C25 — Retrying a partly failed rollback needs `--force`, which disables staleness protection for all objects.** `RollbackCommand.java:257-276`.
 - [ ] **C26 — Unfinished rollback run gives `--plan`/`--apply-plan` wording.** `PlanStore.java:173, 176`.
-- [ ] **C27 — OID characters not validated when writing plan files.** `PlanStore.java:139-146` vs `:256`. *Plausible.*
+- [x] **C27 — OID characters not validated when writing plan files.** `PlanStore.java:139-146` vs `:256`. *Plausible.* — `bf0dcda` (with S1)
 - [ ] **C28 — `init` writes some files, then refuses.** `InitCommand.java:200-202, 231-250, 261-265, 529-535`.
 - [ ] **C29 — `init --write-cacert -` mixes status text into the PEM on stdout.** `InitCommand.java:331-339`.
 - [ ] **C30 — `init` ignores `app` when reporting identity; `--app` Javadoc contradicts code.** `InitCommand.java:382, 562`; `DeploymentIdentity.java:29-30` vs `:69-75`.
