@@ -32,6 +32,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false   # nothing here pushes; keep the token out of .git/config
           # Tags, not just the tip: the build stamps the version into the JAR with 'git describe', and a
           # shallow checkout has no tag to describe — the JAR would claim the pom's placeholder version.
           fetch-depth: 0
@@ -55,6 +56,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false   # nothing here pushes; keep the token out of .git/config
           fetch-depth: 0   # same reason as the build job: 'git describe' needs the tags
 
       - name: Set up JDK 17
@@ -91,6 +93,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false   # nothing here pushes; keep the token out of .git/config
 
       # helm ships with the GitHub-hosted runner image; no action to pin for this.
       - name: Lint and render
@@ -124,6 +128,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false   # nothing here pushes; keep the token out of .git/config
 
       - name: REUSE lint
         uses: fsfe/reuse-action@bb774aa972c2a89ff34781233d275075cbddf542 # v5

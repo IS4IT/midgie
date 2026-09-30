@@ -71,6 +71,10 @@ jobs:
           # With the tags present, the build's own 'git describe' arrives at the same version versions:set
           # stamps below, so the two cannot disagree about what this JAR is.
           fetch-depth: 0
+          # This job's token can write to the repository, and the build runs tests and plugins fetched from
+          # outside it. Nothing here pushes with git — the release step takes the token as its own input — so
+          # the token is not left in .git/config for anything else to find.
+          persist-credentials: false
 
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
