@@ -408,7 +408,7 @@ public final class MidpointRestClient {
             try {
                 LOG.debug("→ {}  {}", what, request.uri());
                 if (requestBody != null && !requestBody.isEmpty()) {
-                    LOG.trace("→ {} request body:\n{}", what, requestBody.stripTrailing());
+                    LOG.trace("→ {} request body:\n{}", what, masked(requestBody).stripTrailing());
                 }
                 HttpResponse<String> response =
                         httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -416,7 +416,7 @@ public final class MidpointRestClient {
                 String responseBody = response.body();
                 LOG.debug("← {}  HTTP {} ({} byte body)", what, status, bodyLength(responseBody));
                 if (responseBody != null && !responseBody.isEmpty()) {
-                    LOG.trace("← {} response body:\n{}", what, responseBody.stripTrailing());
+                    LOG.trace("← {} response body:\n{}", what, masked(responseBody).stripTrailing());
                 }
                 if (isTransient(status) && retryable && attempt < maxRetries) {
                     LOG.debug("{}  HTTP {} is transient — retry {} of {}", what, status, attempt + 1, maxRetries);
@@ -716,8 +716,24 @@ public final class MidpointRestClient {
         if (body == null || body.isBlank()) {
             return "";
         }
-        String trimmed = body.strip();
+        String trimmed = masked(body).strip();
         return "\n" + (trimmed.length() > 800 ? trimmed.substring(0, 800) + " …" : trimmed);
+    }
+
+    /** The elements of a protected value that carry the secret itself, in any namespace prefix. */
+    private static final java.util.regex.Pattern SECRET_ELEMENT = java.util.regex.Pattern.compile(
+            "(<(?:[\\w.-]+:)?(clearValue|cipherValue|digestValue)\\b[^>]*>)(.*?)(</(?:[\\w.-]+:)?\\2\\s*>)",
+            java.util.regex.Pattern.DOTALL);
+
+    /**
+     * {@code body} with the content of every {@code clearValue}, {@code cipherValue} and {@code digestValue}
+     * replaced by {@code ***}. A PATCH or a create carries a desired password as {@code clearValue}, and a
+     * server's object its encrypted or hashed form; {@code --trace} printed both into whatever log the run went
+     * to, and so did an error body that echoed the request. Other values a file keeps in plain text are not
+     * recognisable here, which is why {@code --trace} still says it may show sensitive values.
+     */
+    static String masked(String body) {
+        return (body == null) ? null : SECRET_ELEMENT.matcher(body).replaceAll("$1***$4");
     }
 
     /** SSLContext that trusts exactly the CA certificate(s) in {@code caCertFile} (proper verification). */

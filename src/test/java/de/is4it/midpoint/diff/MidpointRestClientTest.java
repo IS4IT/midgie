@@ -81,6 +81,20 @@ class MidpointRestClientTest {
     }
 
     @Test
+    void passwordValuesAreMaskedInWhatIsLogged() {
+        String body = "<t:value><t:clearValue>hunter2</t:clearValue></t:value>"
+                + "<encryptedData><cipherData><cipherValue>\nQUJD\n</cipherValue></cipherData></encryptedData>"
+                + "<t:hashedData><t:digestValue>ZGln</t:digestValue></t:hashedData><description>kept</description>";
+
+        String masked = MidpointRestClient.masked(body);
+
+        assertFalse(masked.contains("hunter2") || masked.contains("QUJD") || masked.contains("ZGln"), masked);
+        assertTrue(masked.contains("<t:clearValue>***</t:clearValue>") && masked.contains("<cipherValue>***</cipherValue>"),
+                masked);
+        assertTrue(masked.contains("<description>kept</description>"), "anything else is left as it is: " + masked);
+    }
+
+    @Test
     void anOidThatIsNotAUuidIsRefusedBeforeAnythingIsSent() {
         // Built by concatenation, an OID like this one addressed another collection and added a query option.
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,

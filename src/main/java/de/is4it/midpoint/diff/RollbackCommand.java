@@ -97,7 +97,8 @@ public class RollbackCommand implements Callable<Integer> {
     @Option(names = {"--debug", "-v"}, description = "Log at DEBUG on stderr.")
     boolean debug;
 
-    @Option(names = "--trace", description = "Log at TRACE on stderr (implies --debug).")
+    @Option(names = "--trace", description = "Log at TRACE on stderr (implies --debug), REST request and "
+            + "response bodies included (password values masked, other sensitive values may show).")
     boolean trace;
 
     @Override

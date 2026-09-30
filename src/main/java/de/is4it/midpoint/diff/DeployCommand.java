@@ -193,7 +193,8 @@ public class DeployCommand implements Callable<Integer> {
 
     @Option(names = "--trace",
             description = "Everything --debug shows plus the detail behind it: per-file and per-value "
-                    + "decisions, stack traces, REST request/response bodies (may include sensitive values), "
+                    + "decisions, stack traces, REST request/response bodies (password values masked; "
+                    + "other sensitive values may show), "
                     + "and the prism/framework logs.")
     boolean trace;
 

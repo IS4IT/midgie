@@ -15,6 +15,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`insecure` in a config file applies to the command it names.** Any key ending in `insecure` counted before any command ran, so `midgie.init.insecure = true` switched hostname verification off for `deploy` and every other command too. The file is now read the way picocli reads it: `midgie.<command>.insecure` for that command, else bare `insecure`; the same goes for `proxy-user`. And one of `--insecure`/`--cacert` on the command line against the other in a config file no longer refuses the run: the command line wins, with a note.
 
+- **`--trace` masks password values.** It printed every REST request and response body in full, so a desired password travelling as `<clearValue>` and the server's encrypted or hashed form went into whatever log the run wrote to — as did an error message quoting the response. The content of `clearValue`, `cipherValue` and `digestValue` is now shown as `***`. Plain-text values that are not recognisable as secrets can still appear, which `--trace`'s help says.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed
