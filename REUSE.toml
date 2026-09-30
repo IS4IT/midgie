@@ -2,7 +2,7 @@ version = 1
 SPDX-PackageName = "midgie"
 
 [[annotations]]
-path = [".gitignore", "docker/.gitignore", "README.md", "DESIGN.md", "CLAUDE.md", "TODO.md", "CHANGELOG.md", "docs/**.md", "docker/README.md", "docker/tls/README.md", "docker/tls/desired.xml", "examples/**.xml", "src/test/resources/**", "src/test/resources/schema/**", "src/test/resources/golden/**", "src/test/resources/tls/**"]
+path = [".gitignore", "docker/.gitignore", "README.md", "DESIGN.md", "CLAUDE.md", "TODO.md", "CHANGELOG.md", "REVIEW-1.0.md", "docs/**.md", "docker/README.md", "docker/tls/README.md", "docker/tls/desired.xml", "examples/**.xml", "src/test/resources/**", "src/test/resources/schema/**", "src/test/resources/golden/**", "src/test/resources/tls/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 IS4IT"
 SPDX-License-Identifier = "EUPL-1.2"
