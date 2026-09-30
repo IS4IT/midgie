@@ -144,6 +144,32 @@ class CliTest {
     }
 
     @Test
+    void aLiveDiffOfStdinLeavesNoCopyBehind() throws Exception {
+        // The copy is the desired object verbatim, and it used to stay in the shared temp directory until the JVM
+        // exited — for good, if the run was killed.
+        java.nio.file.Path tmp = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"));
+        java.util.function.Supplier<java.util.Set<String>> copies = () -> {
+            try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.list(tmp)) {
+                return files.map(p -> p.getFileName().toString()).filter(n -> n.startsWith("midgie-stdin-"))
+                        .collect(java.util.stream.Collectors.toSet());
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        };
+        java.util.Set<String> before = copies.get();
+        java.io.InputStream originalIn = System.in;
+        try {
+            System.setIn(new java.io.FileInputStream(A));
+            run("diff", "-", "--url", DEAD_HOST, "-u", "u", "-p", "p");
+        } finally {
+            System.setIn(originalIn);
+        }
+        java.util.Set<String> left = copies.get();
+        left.removeAll(before);
+        assertTrue(left.isEmpty(), "the copy of stdin must be gone once the diff is: " + left);
+    }
+
+    @Test
     void aSecretJoinedToAMistypedOptionIsWithheldToo() {
         Result r = run("diff", A, B, "--pasword=hunter2", "-Phunter2");
 

@@ -55,15 +55,33 @@ final class Io {
     }
 
     /**
-     * Drain stdin into an owner-only temporary {@code .xml} file, deleted on exit, for the code paths that take
-     * files rather than streams — a live {@code diff -} runs through deploy's discovery, which walks paths.
-     * {@code createTempFile} already creates it {@code rw-------} on a POSIX file system.
+     * Drain stdin into {@code stdin.xml} in a fresh owner-only temporary directory, for the code paths that take
+     * files rather than streams — a live {@code diff -} runs through deploy's discovery, which walks paths. The
+     * caller removes it with {@link #deleteStdinCopy} as soon as it is done; the exit hook is only the fallback.
+     *
+     * <p>The copy is the desired object verbatim, a {@code clearValue} password and all. It used to sit directly in
+     * the shared temporary directory until the JVM exited, so a run that was killed left it there; and its name,
+     * {@code midgie-stdin-NNN.xml}, said nothing of where it came from in the messages that named it.
      */
     static File stdinToTempFile() throws IOException {
-        java.nio.file.Path temp = Files.createTempFile("midgie-stdin-", ".xml");
-        temp.toFile().deleteOnExit();
-        Files.write(temp, System.in.readAllBytes());
-        return temp.toFile();
+        java.nio.file.Path dir = Files.createTempDirectory("midgie-stdin-");
+        restrictDirToOwner(dir);
+        java.nio.file.Path copy = dir.resolve("stdin.xml");
+        restrictToOwner(copy);
+        dir.toFile().deleteOnExit();
+        copy.toFile().deleteOnExit(); // registered last, so it runs first: the directory must be empty
+        Files.write(copy, System.in.readAllBytes());
+        return copy.toFile();
+    }
+
+    /** Remove the copy {@link #stdinToTempFile} made, and its directory. */
+    static void deleteStdinCopy(File copy) {
+        try {
+            Files.deleteIfExists(copy.toPath());
+            Files.deleteIfExists(copy.toPath().getParent());
+        } catch (IOException e) {
+            LOG.debug("could not remove the copy of stdin at {}", copy, e);
+        }
     }
 
     /**

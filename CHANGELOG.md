@@ -23,6 +23,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A config file with a password that others can read is said.** A `password` or `proxy-password` in a group- or world-readable `midgie.properties` passed without a word; each run now starts with a warning naming the file and its permissions.
 
+- **A live `diff -` removes its copy of stdin when it is done.** The desired object — a `clearValue` password and all — was copied to `midgie-stdin-NNN.xml` in the shared temporary directory and only removed when the JVM exited, so a run that was killed left it there. It is now written as `stdin.xml` into an owner-only directory of its own and removed as soon as the diff finishes; only a run killed outright can still leave it behind.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

@@ -193,7 +193,13 @@ public class DiffCommand implements Callable<Integer> {
         preview.quiet = quiet;
         preview.debug = debug;
         preview.trace = trace;
-        return preview.call();
+        try {
+            return preview.call();
+        } finally {
+            if (desired != desiredFile) {
+                Io.deleteStdinCopy(desired);
+            }
+        }
     }
 
     /** Two local files: no server, no policy, no tracking — just the delta that turns CURRENT into DESIRED. */
