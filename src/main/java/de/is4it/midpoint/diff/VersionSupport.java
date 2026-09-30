@@ -70,7 +70,7 @@ final class VersionSupport {
      */
     static String liveVersion(PrismContext prismContext, MidpointRestClient client) {
         try {
-            String xml = client.getObject("nodes", "current");
+            String xml = client.getCurrentNode();
             NodeType node = prismContext.parserFor(xml).xml().parseRealValue(NodeType.class);
             BuildInformationType build = (node != null) ? node.getBuild() : null;
             return (build != null) ? blankToNull(build.getVersion()) : null;

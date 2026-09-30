@@ -32,6 +32,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  */
 class ProxyRoutingTest {
 
+    private static final String OID = "aaaaaaaa-0000-0000-0000-000000000001";
+
     private HttpServer server;
     private URI host;
 
@@ -67,7 +69,7 @@ class ProxyRoutingTest {
     @Test
     void requestsGoThroughTheProxy() throws Exception {
         try (StubProxy proxy = StubProxy.open()) {
-            String body = clientThrough(proxyAt(proxy, "")).getObject("users", "aaa");
+            String body = clientThrough(proxyAt(proxy, "")).getObject("users", OID);
 
             assertEquals("<user><name>through-the-proxy</name></user>", body);
             assertEquals(1, proxy.requests().size(), "the proxy should have seen exactly one request");
@@ -79,7 +81,7 @@ class ProxyRoutingTest {
     @Test
     void loopbackBypassesTheProxyByDefault() throws Exception {
         try (StubProxy proxy = StubProxy.open()) {
-            String body = clientThrough(proxyAt(proxy, null)).getObject("users", "aaa");
+            String body = clientThrough(proxyAt(proxy, null)).getObject("users", OID);
 
             assertEquals("<user><name>through-the-proxy</name></user>", body);
             assertTrue(proxy.requests().isEmpty(),
@@ -91,7 +93,7 @@ class ProxyRoutingTest {
     void anExplicitBypassEntryKeepsAHostDirect() throws Exception {
         try (StubProxy proxy = StubProxy.open()) {
             assertEquals("<user><name>through-the-proxy</name></user>",
-                    clientThrough(proxyAt(proxy, "127.0.0.1")).getObject("users", "aaa"));
+                    clientThrough(proxyAt(proxy, "127.0.0.1")).getObject("users", OID));
             assertTrue(proxy.requests().isEmpty(), "a bypassed host must not reach the proxy");
         }
     }
@@ -102,7 +104,7 @@ class ProxyRoutingTest {
             ProxyConfig config = proxyAt(proxy, "").withCredentials("alice", "s3cret");
 
             assertEquals("<user><name>through-the-proxy</name></user>",
-                    clientThrough(config).getObject("users", "aaa"));
+                    clientThrough(config).getObject("users", OID));
             assertEquals(1, proxy.countAuthenticated(), "the retry after 407 must carry the credentials");
         }
     }
@@ -113,7 +115,7 @@ class ProxyRoutingTest {
             ProxyConfig config = proxyAt(proxy, "").withCredentials("alice", "wrong");
 
             IOException failure = assertThrows(IOException.class,
-                    () -> clientThrough(config).getObject("users", "aaa"));
+                    () -> clientThrough(config).getObject("users", OID));
             assertTrue(failure.getMessage().contains("proxy"), failure.getMessage());
             assertTrue(failure.getMessage().contains("alice"), failure.getMessage());
         }
@@ -123,7 +125,7 @@ class ProxyRoutingTest {
     void anUnauthenticatedRunAgainstAnAuthenticatingProxyIsExplained() throws Exception {
         try (StubProxy proxy = StubProxy.requiringAuth("alice", "s3cret")) {
             IOException failure = assertThrows(IOException.class,
-                    () -> clientThrough(proxyAt(proxy, "")).getObject("users", "aaa"));
+                    () -> clientThrough(proxyAt(proxy, "")).getObject("users", OID));
             assertTrue(failure.getMessage().contains("--proxy-user"),
                     "a bare 407 should name the flag that fixes it: " + failure.getMessage());
         }
@@ -166,7 +168,7 @@ class ProxyRoutingTest {
                     new MidpointRestClient.Config().proxy(config).caCert(RigTls.caCert())
                             .requestTimeout(Duration.ofSeconds(10)));
 
-            assertEquals("<user><name>tunnelled</name></user>", client.getObject("users", "aaa"));
+            assertEquals("<user><name>tunnelled</name></user>", client.getObject("users", OID));
             assertTrue(proxy.requests().get(0).startsWith("CONNECT 127.0.0.1:"), proxy.requests().toString());
             assertEquals(1, proxy.countAuthenticated(),
                     "the CONNECT is retried with credentials once the proxy asks: " + proxy.requests());

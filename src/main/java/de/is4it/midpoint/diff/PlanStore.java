@@ -139,6 +139,12 @@ final class PlanStore {
             throw new IOException("cannot plan a patch of " + restType + "/" + name
                     + " without an OID: a patch is addressed by OID, and the plan would fail on replay.");
         }
+        if (oid != null && !oid.isBlank() && !MidpointRestClient.isOid(oid)) {
+            // Checked here, not only at replay: the OID names the file, and one that cannot be replayed should
+            // not make a plan that reads as valid under review.
+            throw new IOException("cannot plan " + restType + "/" + name + ": '" + oid + "' is not a midPoint OID "
+                    + "(a UUID).");
+        }
         String token = (oid != null && !oid.isBlank()) ? oid : sanitize(name);
         String fileName = String.format("%0" + Math.max(3, width) + "d-%s-%s.%s.xml", sequence, restType, token,
                 kind == Kind.CREATE ? "create" : "patch");

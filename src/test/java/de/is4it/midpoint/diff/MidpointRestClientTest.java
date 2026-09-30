@@ -68,6 +68,29 @@ class MidpointRestClientTest {
         return new MidpointRestClient(host, "administrator", "s3cret", config);
     }
 
+    /** A UUID standing for a stub behaviour, since the client refuses anything but a UUID as an OID. */
+    private static String oid(String tag) {
+        return java.util.UUID.nameUUIDFromBytes(tag.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    private static final java.util.Map<String, String> TAG_BY_OID = new java.util.HashMap<>();
+    static {
+        for (String tag : new String[] {"aaa", "missing", "unauth", "forbidden", "redirect", "x", "flaky", "any", "u1", "partial", "partial-with-object", "slow"}) {
+            TAG_BY_OID.put(oid(tag), tag);
+        }
+    }
+
+    @Test
+    void anOidThatIsNotAUuidIsRefusedBeforeAnythingIsSent() {
+        // Built by concatenation, an OID like this one addressed another collection and added a query option.
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> client.deleteObject("users", "../roles/x?options=raw"));
+        assertTrue(ex.getMessage().contains("not a midPoint OID"), ex.getMessage());
+        assertNull(lastMethod, "no request may reach the server");
+        assertThrows(IllegalArgumentException.class, () -> client.getObject("users", "has space"));
+        assertThrows(IllegalArgumentException.class, () -> client.listObjects("users/../roles"));
+    }
+
     @AfterEach
     void stopServer() {
         server.stop(0);
@@ -75,11 +98,11 @@ class MidpointRestClientTest {
 
     @Test
     void getReturnsBodyAndSendsBasicAuth() throws Exception {
-        String body = client.getObject("users", "aaa");
+        String body = client.getObject("users", oid("aaa"));
 
         assertEquals("<user><name>from-server</name></user>", body);
         assertEquals("GET", lastMethod);
-        assertEquals("/midpoint/ws/rest/users/aaa", lastPath, "type + oid must append to /ws/rest");
+        assertEquals("/midpoint/ws/rest/users/" + oid("aaa"), lastPath, "type + oid must append to /ws/rest");
         assertEquals("application/xml", lastAccept);
         // administrator:s3cret base64
         assertEquals("Basic YWRtaW5pc3RyYXRvcjpzM2NyZXQ=", lastAuth);
@@ -87,10 +110,10 @@ class MidpointRestClientTest {
 
     @Test
     void patchSendsBodyWithPatchMethod() throws Exception {
-        client.patchObject("users", "aaa", "<objectModification/>");
+        client.patchObject("users", oid("aaa"), "<objectModification/>");
 
         assertEquals("PATCH", lastMethod);
-        assertEquals("/midpoint/ws/rest/users/aaa", lastPath);
+        assertEquals("/midpoint/ws/rest/users/" + oid("aaa"), lastPath);
         assertEquals("application/xml", lastContentType);
         assertEquals("<objectModification/>", lastBody);
     }
@@ -98,7 +121,7 @@ class MidpointRestClientTest {
     @Test
     void notFoundIsMappedToRestExceptionWithFlag() {
         MidpointRestClient.RestException ex = assertThrows(
-                MidpointRestClient.RestException.class, () -> client.getObject("users", "missing"));
+                MidpointRestClient.RestException.class, () -> client.getObject("users", oid("missing")));
         assertEquals(404, ex.statusCode());
         assertTrue(ex.isNotFound());
     }
@@ -106,12 +129,12 @@ class MidpointRestClientTest {
     @Test
     void unauthorizedAndForbiddenCarryActionableHints() {
         MidpointRestClient.RestException unauthorized = assertThrows(
-                MidpointRestClient.RestException.class, () -> client.getObject("users", "unauth"));
+                MidpointRestClient.RestException.class, () -> client.getObject("users", oid("unauth")));
         assertEquals(401, unauthorized.statusCode());
         assertTrue(unauthorized.getMessage().contains("authentication failed"), unauthorized.getMessage());
 
         MidpointRestClient.RestException forbidden = assertThrows(
-                MidpointRestClient.RestException.class, () -> client.getObject("users", "forbidden"));
+                MidpointRestClient.RestException.class, () -> client.getObject("users", oid("forbidden")));
         assertEquals(403, forbidden.statusCode());
         assertTrue(forbidden.getMessage().contains("not authorized"), forbidden.getMessage());
     }
@@ -119,7 +142,7 @@ class MidpointRestClientTest {
     @Test
     void redirectIsReportedWithLocationAndAHint() {
         MidpointRestClient.RestException ex = assertThrows(
-                MidpointRestClient.RestException.class, () -> client.getObject("users", "redirect"));
+                MidpointRestClient.RestException.class, () -> client.getObject("users", oid("redirect")));
         assertEquals(302, ex.statusCode());
         assertTrue(ex.getMessage().contains("redirected"), ex.getMessage());
         assertTrue(ex.getMessage().contains("/midpoint/"), ex.getMessage());   // the Location header
@@ -130,7 +153,7 @@ class MidpointRestClientTest {
     void connectionRefusedGivesAClearMessage() {
         MidpointRestClient dead = new MidpointRestClient(
                 java.net.URI.create("http://127.0.0.1:1/midpoint"), "u", "p", false);
-        java.io.IOException ex = assertThrows(java.io.IOException.class, () -> dead.getObject("users", "x"));
+        java.io.IOException ex = assertThrows(java.io.IOException.class, () -> dead.getObject("users", oid("x")));
         assertTrue(ex.getMessage().contains("cannot connect"), ex.getMessage());
     }
 
@@ -144,7 +167,7 @@ class MidpointRestClientTest {
                 java.net.URI.create("https://midgie-no-such-host.invalid/midpoint"), "u", "p", false);
 
         java.io.IOException ex =
-                assertThrows(java.io.IOException.class, () -> unresolvable.getObject("users", "x"));
+                assertThrows(java.io.IOException.class, () -> unresolvable.getObject("users", oid("x")));
 
         assertTrue(ex.getMessage().contains("cannot resolve host"), ex.getMessage());
         assertTrue(ex.getMessage().contains("midgie-no-such-host.invalid"), ex.getMessage());
@@ -173,10 +196,10 @@ class MidpointRestClientTest {
 
     @Test
     void deleteSendsDeleteMethod() throws Exception {
-        client.deleteObject("users", "aaa");
+        client.deleteObject("users", oid("aaa"));
 
         assertEquals("DELETE", lastMethod);
-        assertEquals("/midpoint/ws/rest/users/aaa", lastPath);
+        assertEquals("/midpoint/ws/rest/users/" + oid("aaa"), lastPath);
     }
 
     @Test
@@ -185,7 +208,7 @@ class MidpointRestClientTest {
         MidpointRestClient retrying = clientWith(
                 new MidpointRestClient.Config().maxRetries(3).retryBaseDelay(Duration.ofMillis(2)));
 
-        String body = retrying.getObject("users", "flaky");
+        String body = retrying.getObject("users", oid("flaky"));
 
         assertTrue(body.contains("recovered"), body);
         assertEquals(3, flakyRequests.get(), "one initial GET + two retries");
@@ -198,7 +221,7 @@ class MidpointRestClientTest {
                 new MidpointRestClient.Config().maxRetries(2).retryBaseDelay(Duration.ofMillis(2)));
 
         MidpointRestClient.RestException ex = assertThrows(
-                MidpointRestClient.RestException.class, () -> retrying.getObject("users", "flaky"));
+                MidpointRestClient.RestException.class, () -> retrying.getObject("users", oid("flaky")));
         assertEquals(503, ex.statusCode());
         assertEquals(3, flakyRequests.get(), "one initial GET + two retries, then gives up");
     }
@@ -225,7 +248,7 @@ class MidpointRestClientTest {
         MidpointRestClient client = new MidpointRestClient(withCredentials, "administrator", "s3cret",
                 new MidpointRestClient.Config().maxRetries(0));
 
-        IOException ex = assertThrows(IOException.class, () -> client.getObject("users", "any"));
+        IOException ex = assertThrows(IOException.class, () -> client.getObject("users", oid("any")));
         assertFalse(ex.getMessage().contains("s3cr3t-pw"), "the password must not reach the message: "
                 + ex.getMessage());
         assertFalse(ex.getMessage().contains("mpuser"), ex.getMessage());
@@ -237,11 +260,11 @@ class MidpointRestClientTest {
     void aPatchSettingAReferenceByFilterAsksMidpointToResolveIt() throws Exception {
         // A modify does not resolve a search filter on its own, so without this option midPoint stores the
         // reference unresolved and the object is left pointing at nothing.
-        client.patchObject("users", "u1", "<objectModification/>", true);
-        assertEquals("/midpoint/ws/rest/users/u1", lastPath);
+        client.patchObject("users", oid("u1"), "<objectModification/>", true);
+        assertEquals("/midpoint/ws/rest/users/" + oid("u1"), lastPath);
         assertEquals("options=reevaluateSearchFilters", lastQuery);
 
-        client.patchObject("users", "u1", "<objectModification/>", false);
+        client.patchObject("users", oid("u1"), "<objectModification/>", false);
         assertNull(lastQuery, "an ordinary patch keeps the plain path: " + lastQuery);
     }
 
@@ -251,7 +274,7 @@ class MidpointRestClientTest {
         // succeed. Both are 2xx, so "is it 2xx" reads them as plain success and a PATCH that half-worked was
         // reported as applied.
         MidpointRestClient.RestException ex = assertThrows(MidpointRestClient.RestException.class,
-                () -> client.patchObject("users", "partial", "<objectModification/>"));
+                () -> client.patchObject("users", oid("partial"), "<objectModification/>"));
 
         assertEquals(250, ex.statusCode());
         assertTrue(ex.getMessage().contains("partial error"), ex.getMessage());
@@ -270,7 +293,7 @@ class MidpointRestClientTest {
         String body;
         try {
             System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
-            body = client.getObject("users", "partial-with-object");
+            body = client.getObject("users", oid("partial-with-object"));
         } finally {
             System.setErr(originalErr);
         }
@@ -285,7 +308,7 @@ class MidpointRestClientTest {
         // Some endpoints answer 240/250 with the OperationResult instead of the payload. There is then
         // nothing to parse, so a read fails too rather than handing the caller a result it will misread.
         MidpointRestClient.RestException ex = assertThrows(MidpointRestClient.RestException.class,
-                () -> client.getObject("users", "partial"));
+                () -> client.getObject("users", oid("partial")));
         assertEquals(250, ex.statusCode());
     }
 
@@ -296,7 +319,7 @@ class MidpointRestClientTest {
                 new MidpointRestClient.Config().maxRetries(3).retryBaseDelay(Duration.ofMillis(2)));
 
         assertThrows(MidpointRestClient.RestException.class,
-                () -> retrying.patchObject("users", "flaky", "<objectModification/>"));
+                () -> retrying.patchObject("users", oid("flaky"), "<objectModification/>"));
         assertEquals(1, flakyRequests.get(), "a PATCH must not be retried");
     }
 
@@ -305,7 +328,7 @@ class MidpointRestClientTest {
         MidpointRestClient impatient = clientWith(
                 new MidpointRestClient.Config().requestTimeout(Duration.ofMillis(300)));
 
-        IOException ex = assertThrows(IOException.class, () -> impatient.getObject("users", "slow"));
+        IOException ex = assertThrows(IOException.class, () -> impatient.getObject("users", oid("slow")));
         assertTrue(ex.getMessage().contains("timed out"), ex.getMessage());
     }
 
@@ -326,52 +349,55 @@ class MidpointRestClientTest {
     private void handle(HttpExchange exchange) throws IOException {
         lastMethod = exchange.getRequestMethod();
         lastPath = exchange.getRequestURI().getPath();
+        // The client only sends UUID OIDs; the stub's behaviours are named, so map one back to the other.
+        String last = lastPath.substring(lastPath.lastIndexOf('/') + 1);
+        String logical = lastPath.substring(0, lastPath.lastIndexOf('/') + 1) + TAG_BY_OID.getOrDefault(last, last);
         lastQuery = exchange.getRequestURI().getQuery();
         lastAuth = exchange.getRequestHeaders().getFirst("Authorization");
         lastAccept = exchange.getRequestHeaders().getFirst("Accept");
         lastContentType = exchange.getRequestHeaders().getFirst("Content-Type");
         lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
-        if (lastPath.endsWith("/users/partial")) {
+        if (logical.endsWith("/users/partial")) {
             // The shape midPoint uses when it sends the OperationResult rather than the payload.
             respond(exchange, 250, "<t:object xmlns:t=\"http://prism.evolveum.com/xml/ns/public/types-3\""
                     + " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
                     + " xsi:type=\"c:OperationResultType\""
                     + " xmlns:c=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\">"
                     + "<status>partial_error</status><message>something did not finish</message></t:object>");
-        } else if (lastPath.endsWith("/users/partial-with-object")) {
+        } else if (logical.endsWith("/users/partial-with-object")) {
             // And the shape it uses when the payload still comes back (search does this).
             respond(exchange, 250, "<user xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\">"
                     + "<name>still-usable</name></user>");
-        } else if (lastPath.endsWith("/users/flaky")) {
+        } else if (logical.endsWith("/users/flaky")) {
             flakyRequests.incrementAndGet();
             if (failuresRemaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
                 respond(exchange, 503, "service unavailable");
             } else {
                 respond(exchange, 200, "<user><name>recovered</name></user>");
             }
-        } else if (lastPath.endsWith("/users/slow")) {
+        } else if (logical.endsWith("/users/slow")) {
             sleep(2000);
             respond(exchange, 200, "<user/>");
-        } else if (lastPath.endsWith("/users/missing")) {
+        } else if (logical.endsWith("/users/missing")) {
             respond(exchange, 404, "not found");
-        } else if (lastPath.endsWith("/users/unauth")) {
+        } else if (logical.endsWith("/users/unauth")) {
             respond(exchange, 401, "unauthorized");
-        } else if (lastPath.endsWith("/users/forbidden")) {
+        } else if (logical.endsWith("/users/forbidden")) {
             respond(exchange, 403, "forbidden");
-        } else if (lastPath.endsWith("/users/redirect")) {
+        } else if (logical.endsWith("/users/redirect")) {
             exchange.getResponseHeaders().add("Location", "/midpoint/");
             respond(exchange, 302, "");
-        } else if ("POST".equals(lastMethod) && lastPath.endsWith("/roles/search")) {
+        } else if ("POST".equals(lastMethod) && logical.endsWith("/roles/search")) {
             flakyRequests.incrementAndGet();
             if (failuresRemaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
                 respond(exchange, 503, "service unavailable");
             } else {
                 respond(exchange, 200, "<objectList><object oid=\"found-oid\"/></objectList>");
             }
-        } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users/search")) {
+        } else if ("POST".equals(lastMethod) && logical.endsWith("/users/search")) {
             respond(exchange, 200, "<objectList><object oid=\"found-oid\"/></objectList>");
-        } else if ("POST".equals(lastMethod) && lastPath.endsWith("/users")) {
+        } else if ("POST".equals(lastMethod) && logical.endsWith("/users")) {
             exchange.getResponseHeaders().add("Location",
                     "http://127.0.0.1/midpoint/ws/rest/users/new-oid-123");
             respond(exchange, 201, "");

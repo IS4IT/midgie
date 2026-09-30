@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An OID is checked before it becomes part of a URL.** Object addresses are built by concatenation, and an OID from a tree file, `--oid`, or a plan or rollback file went in as it stood: `../roles/x?options=raw` addressed another collection and added a query option to the PATCH or DELETE, and an OID with a space failed with "Illegal character in path". Anything but a UUID — the only form midPoint's native repository stores — now fails that object with a message naming it, before any request is sent, and `--plan` refuses to write a plan file for one.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

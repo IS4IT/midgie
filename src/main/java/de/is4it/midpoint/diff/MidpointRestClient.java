@@ -296,6 +296,15 @@ public final class MidpointRestClient {
         return send(request, "GET " + restType + "/" + oid, null, true);
     }
 
+    /** {@code GET nodes/current}: the node answering this request, which carries the server's build version. */
+    public String getCurrentNode() throws IOException {
+        HttpRequest request = baseRequest(URI.create(restCollectionUri("nodes") + "/current"))
+                .header("Accept", "application/xml")
+                .GET()
+                .build();
+        return send(request, "GET nodes/current", null, true);
+    }
+
     /** {@code GET {type}} → an {@code ObjectListType} of all objects of that type (used to read schemas). */
     public String listObjects(String restType) throws IOException {
         HttpRequest request = baseRequest(restCollectionUri(restType))
@@ -624,11 +633,39 @@ public final class MidpointRestClient {
     }
 
     private URI objectUri(String restType, String oid) {
-        return URI.create(restBase + "/" + restType + "/" + oid);
+        return URI.create(restCollectionUri(restType) + "/" + requireOid(oid));
     }
 
     private URI restCollectionUri(String restType) {
+        if (restType == null || !REST_TYPE.matcher(restType).matches()) {
+            throw new IllegalArgumentException("not a midPoint REST collection: '" + restType + "'");
+        }
         return URI.create(restBase + "/" + restType);
+    }
+
+    private static final java.util.regex.Pattern REST_TYPE = java.util.regex.Pattern.compile("[A-Za-z]+");
+    private static final java.util.regex.Pattern OID =
+            java.util.regex.Pattern.compile("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+
+    /** Whether {@code oid} is one midPoint's repository can hold: a UUID. */
+    static boolean isOid(String oid) {
+        return oid != null && OID.matcher(oid).matches();
+    }
+
+    /**
+     * {@code oid}, if it is a UUID — the only form midPoint 4.10's native repository stores.
+     *
+     * <p>Every object address is built by concatenation, and an OID arrives from a tree file, {@code --oid}, or a
+     * plan or rollback file anyone may have edited. Unchecked, {@code ../roles/x?options=raw} addressed another
+     * collection and added a query option to a PATCH or DELETE, and an OID with a space failed with a bare
+     * "Illegal character in path". A runtime exception, so it fails the one object rather than the run.
+     */
+    static String requireOid(String oid) {
+        if (!isOid(oid)) {
+            throw new IllegalArgumentException("'" + oid + "' is not a midPoint OID — midPoint stores objects "
+                    + "under UUIDs, e.g. 00000000-0000-0000-0000-000000000002");
+        }
+        return oid;
     }
 
     /**
