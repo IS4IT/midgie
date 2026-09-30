@@ -17,6 +17,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`--trace` masks password values.** It printed every REST request and response body in full, so a desired password travelling as `<clearValue>` and the server's encrypted or hashed form went into whatever log the run wrote to — as did an error message quoting the response. The content of `clearValue`, `cipherValue` and `digestValue` is now shown as `***`. Plain-text values that are not recognisable as secrets can still appear, which `--trace`'s help says.
 
+- **`-o FILE` is written whole and owner-only.** The payload was written over the file in place, so a crash or a full disk left half a PATCH body behind, and a file that already existed kept its permissions — world-readable, say — while now holding the desired object, which may carry a `clearValue` password. It is now written to an owner-only file beside the target and renamed over it; a link is written through.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

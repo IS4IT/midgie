@@ -97,9 +97,9 @@ final class Io {
     /**
      * Write {@code content} to {@code output} (trailing newline), or to stdout when {@code output} is null.
      *
-     * <p>Created owner-readable where the filesystem supports it: a delta, and especially a create body, is
-     * the desired object verbatim and may carry a {@code clearValue} password, so the default umask would
-     * leave it readable to every local user of a shared build host.
+     * <p>Owner-readable where the filesystem supports it: a delta, and especially a create body, is the desired
+     * object verbatim and may carry a {@code clearValue} password, so the default umask would leave it readable to
+     * every local user of a shared build host. Written whole or not at all (see {@link #writeAtomically}).
      */
     static void writePayload(File output, String content) throws IOException {
         // null and '-' both mean stdout. Handled here rather than at each call site, the same way parseObject
@@ -114,10 +114,36 @@ final class Io {
             return;
         }
         try {
-            restrictToOwner(output.toPath());
-            Files.writeString(output.toPath(), content + System.lineSeparator(), StandardCharsets.UTF_8);
+            writeAtomically(output.toPath(), content + System.lineSeparator());
         } catch (IOException e) {
             throw cannotWrite(output, e);
+        }
+    }
+
+    /**
+     * Replace {@code target} with {@code content} in one step: written to an owner-only temporary file beside it,
+     * then renamed over it. Rewriting in place left a half-written PATCH body behind a crash or a full disk, and a
+     * file that already existed kept its old permissions — world-readable, say — while now holding the desired
+     * object. A link is followed, so the file it points to is replaced rather than the link.
+     */
+    static void writeAtomically(java.nio.file.Path target, String content) throws IOException {
+        java.nio.file.Path destination = Files.isSymbolicLink(target) ? target.toRealPath() : target;
+        java.nio.file.Path dir = destination.toAbsolutePath().getParent();
+        java.nio.file.Path temp = dir.getFileSystem().supportedFileAttributeViews().contains("posix")
+                ? Files.createTempFile(dir, "." + destination.getFileName() + ".", ".tmp",
+                        java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")))
+                : Files.createTempFile(dir, "." + destination.getFileName() + ".", ".tmp");
+        try {
+            Files.writeString(temp, content, StandardCharsets.UTF_8);
+            try {
+                Files.move(temp, destination, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(temp, destination, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temp);
         }
     }
 

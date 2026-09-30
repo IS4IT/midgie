@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -102,6 +103,37 @@ class UnreadablePathTest {
 
         assertTrue(e.getMessage().startsWith("cannot write " + target), e.getMessage());
         assertTrue(e.getMessage().contains("no such file or directory"), e.getMessage());
+    }
+
+    @Test
+    void anExistingOutputFileIsReplacedWholeAndMadeOwnerOnly(@TempDir Path dir) throws Exception {
+        // It kept its old mode — here world-readable — while now holding the desired object, and a failed write
+        // left half of it behind.
+        Path target = dir.resolve("out.xml");
+        java.nio.file.Files.writeString(target, "old");
+        java.nio.file.Files.setPosixFilePermissions(target,
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+
+        Io.writePayload(target.toFile(), "<x/>");
+
+        assertEquals("<x/>" + System.lineSeparator(), java.nio.file.Files.readString(target));
+        assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(
+                java.nio.file.Files.getPosixFilePermissions(target)));
+        try (java.util.stream.Stream<Path> files = java.nio.file.Files.list(dir)) {
+            assertEquals(List.of(target), files.toList(), "no temporary file is left beside it");
+        }
+    }
+
+    @Test
+    void anOutputLinkIsWrittenThroughNotReplaced(@TempDir Path dir) throws Exception {
+        Path real = dir.resolve("real.xml");
+        java.nio.file.Files.writeString(real, "old");
+        Path link = java.nio.file.Files.createSymbolicLink(dir.resolve("link.xml"), real);
+
+        Io.writePayload(link.toFile(), "<x/>");
+
+        assertTrue(java.nio.file.Files.isSymbolicLink(link), "the link stays a link");
+        assertEquals("<x/>" + System.lineSeparator(), java.nio.file.Files.readString(real));
     }
 
     /**
