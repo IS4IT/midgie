@@ -87,6 +87,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Proxy authentication failures are recognised more precisely.** Any error mentioning `exchImpl` was reported as rejected proxy credentials.
 
+- **`init` refuses before it writes anything.** A run with several steps wrote the properties file and then refused `--create-state` without a server, `--write-cacert` without a terminal, or a policy file with broken markers — an error, with a file left behind.
+
+- **`init --write-cacert -` writes only the PEM to stdout.** The certificate listing went there too, into the file being piped. Two files cannot both go to stdout.
+
+- **`init` takes `--app`.** It reported the identity derived from git even for a tree deploy tracks under a fixed name.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

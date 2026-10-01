@@ -127,6 +127,14 @@ public class InitCommand implements Callable<Integer> {
             description = "Desired-state tree whose deployment identity should be reported (optional).")
     File path;
 
+    @Option(names = "--app", paramLabel = "NAME",
+            description = "The name deploy tracks PATH under, when it is given one with --app: the identity "
+                    + "reported, and whether the tree counts as tracked, are then the ones deploy will use.")
+    String app;
+
+    /** Whether a file is being written to stdout, which then belongs to it alone. */
+    private boolean stdoutTaken;
+
     @Spec
     CommandSpec spec;   // to print this subcommand's own help when no step is asked for
 
@@ -225,6 +233,41 @@ public class InitCommand implements Callable<Integer> {
             System.err.println("midgie: " + writePolicy + " is not a regular file.");
             return EXIT_ERROR;
         }
+        // The rest of what can refuse, also before anything is written: a run that wrote the properties file
+        // and then refused --write-cacert or --create-state left a file behind for a command reported as failed.
+        int toStdout = 0;
+        for (File target : new File[] {writePolicy, writeCacert, writeProperties}) {
+            if (target != null && Io.isStdout(target)) {
+                toStdout++;
+            }
+        }
+        if (toStdout > 1) {
+            System.err.println("midgie: only one of --write-policy, --write-cacert and --write-properties can go "
+                    + "to stdout; they would be written into one stream.");
+            return EXIT_ERROR;
+        }
+        stdoutTaken = toStdout == 1;
+        if ((createState || writePolicy != null) && !connectionOptions.isLive()) {
+            System.err.println("midgie: init needs a running server for --create-state/--write-policy — "
+                    + "pass --url (or set MIDPOINT_URL).");
+            return EXIT_ERROR;
+        }
+        if (writeCacert != null && connectionOptions.url() == null) {
+            System.err.println("midgie: --write-cacert needs --url (or MIDPOINT_URL) to fetch a "
+                    + "certificate from.");
+            return EXIT_ERROR;
+        }
+        if (writeCacert != null && !assumeYes && Io.console() == null) {
+            System.err.println("midgie: refusing to write a trust file without confirmation in a "
+                    + "non-interactive session; re-run interactively, or with --yes if the fingerprints "
+                    + "are already known to be right.");
+            return EXIT_ERROR;
+        }
+        String brokenPolicy = brokenPolicyMarkers();
+        if (brokenPolicy != null) {
+            System.err.println("midgie: " + brokenPolicy);
+            return EXIT_ERROR;
+        }
 
         try {
             // Needs nothing but the command model, so it works offline — you write the file that holds the
@@ -258,11 +301,6 @@ public class InitCommand implements Callable<Integer> {
 
         if (!createState && writePolicy == null) {
             return 0;   // the offline steps are done and neither of the live ones was asked for
-        }
-        if (!connectionOptions.isLive()) {
-            System.err.println("midgie: init needs a running server for --create-state/--write-policy — "
-                    + "pass --url (or set MIDPOINT_URL).");
-            return EXIT_ERROR;
         }
         MidpointRestClient client = connectionOptions.newClient();
         if (client == null) {
@@ -387,7 +425,7 @@ public class InitCommand implements Callable<Integer> {
             System.err.println("midgie: warning: " + path + " does not exist; skipping the identity report.");
             return;
         }
-        DeploymentIdentity identity = DeploymentIdentity.of(path, null);
+        DeploymentIdentity identity = DeploymentIdentity.of(path, app);
         if (identity.isAvailable()) {
             status("Tree " + path + " will be tracked as '" + identity.key() + "' (" + identity.label() + ").");
         } else {
@@ -540,9 +578,7 @@ public class InitCommand implements Callable<Integer> {
         } else {
             merged = mergeSuggestions(existing, block);
             if (merged == null) {
-                System.err.println("midgie: " + writePolicy + " has a '" + BLOCK_BEGIN.substring(0, 30)
-                        + "…' marker with no matching end marker; refusing to guess where the generated "
-                        + "section stops. Repair or remove the markers and re-run.");
+                System.err.println("midgie: " + brokenMarkersMessage());
                 return EXIT_ERROR;
             }
         }
@@ -571,7 +607,7 @@ public class InitCommand implements Callable<Integer> {
      * two conditions deploy checks; a failure to read the state object counts as untracked, as it does there.
      */
     private boolean treeIsTracked(PrismContext prismContext, MidpointRestClient client) {
-        if (!DeploymentIdentity.of(path, null).isAvailable()) {
+        if (!DeploymentIdentity.of(path, app).isAvailable()) {
             return false;
         }
         try {
@@ -764,10 +800,32 @@ public class InitCommand implements Callable<Integer> {
         return name.replace("*", "\\*").replace("/", "\\/");
     }
 
+    /**
+     * Progress for the operator: on stdout, unless a written file goes there — {@code --write-cacert -} printed
+     * the certificate listing into the PEM it was piping.
+     */
     private void status(String message) {
         if (!quiet) {
-            System.out.println(message);
+            (stdoutTaken ? System.err : System.out).println(message);
         }
+    }
+
+    /** Why the existing policy file's markers cannot be merged into, or {@code null} when they can. */
+    private String brokenPolicyMarkers() {
+        if (writePolicy == null || Io.isStdout(writePolicy) || !writePolicy.isFile()) {
+            return null;
+        }
+        try {
+            String existing = Files.readString(writePolicy.toPath(), StandardCharsets.UTF_8);
+            return (mergeSuggestions(existing, "") == null) ? brokenMarkersMessage() : null;
+        } catch (IOException e) {
+            return "cannot read " + writePolicy + ": " + e.getMessage();
+        }
+    }
+
+    private String brokenMarkersMessage() {
+        return writePolicy + " has a '" + BLOCK_BEGIN.substring(0, 30) + "…' marker with no matching end marker; "
+                + "refusing to guess where the generated section stops. Repair or remove the markers and re-run.";
     }
 
     /**

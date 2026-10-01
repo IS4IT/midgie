@@ -27,7 +27,8 @@ import org.slf4j.LoggerFactory;
  * off — when the tree is not in a repository, when git is not usable, or when the clone is <b>shallow</b>:
  * there {@code rev-list --max-parents=0} reports the grafted boundary rather than the true root, so a
  * {@code --depth 1} CI checkout would silently derive a different key than a full clone. {@code --app}
- * overrides all of this for setups that need a fixed name.
+ * replaces only the key, for setups that need a fixed name: last-applied is still read from git, so it needs
+ * the same history.
  */
 final class DeploymentIdentity {
 

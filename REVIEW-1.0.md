@@ -138,9 +138,9 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **C25 — Retrying a partly failed rollback needs `--force`, which disables staleness protection for all objects.** `RollbackCommand.java:257-276`. — rollback group
 - [x] **C26 — Unfinished rollback run gives `--plan`/`--apply-plan` wording.** `PlanStore.java:173, 176`. — rollback group
 - [x] **C27 — OID characters not validated when writing plan files.** `PlanStore.java:139-146` vs `:256`. *Plausible.* — `bf0dcda` (with S1)
-- [ ] **C28 — `init` writes some files, then refuses.** `InitCommand.java:200-202, 231-250, 261-265, 529-535`.
-- [ ] **C29 — `init --write-cacert -` mixes status text into the PEM on stdout.** `InitCommand.java:331-339`.
-- [ ] **C30 — `init` ignores `app` when reporting identity; `--app` Javadoc contradicts code.** `InitCommand.java:382, 562`; `DeploymentIdentity.java:29-30` vs `:69-75`.
+- [x] **C28 — `init` writes some files, then refuses.** `InitCommand.java:200-202, 231-250, 261-265, 529-535`. — init group
+- [x] **C29 — `init --write-cacert -` mixes status text into the PEM on stdout.** `InitCommand.java:331-339`. — init group
+- [x] **C30 — `init` ignores `app` when reporting identity; `--app` Javadoc contradicts code.** `InitCommand.java:382, 562`; `DeploymentIdentity.java:29-30` vs `:69-75`. — init group (init --app; Javadoc now says --app replaces only the key)
 - [x] **C31 — Git blobs decoded as UTF-8 and stripped; inherited `GIT_DIR`/`GIT_WORK_TREE` override the tree.** `GitRevision.java:373, 396`. *Plausible.* — input group
 - [ ] **C32 — Offline `diff` silently accepts `--no-prune`, `--no-match-by-name` and connection options.** `DiffCommand.java:94-107, 151-155`.
 - [ ] **C33 — OidComments round trip breaks when the root element shares a line with `<?xml?>`.** `OidComments.java:315-319, 428, 487`. *Plausible;* hand-written plan files only.
