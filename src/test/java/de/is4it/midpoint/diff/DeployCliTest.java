@@ -38,6 +38,56 @@ class DeployCliTest {
     // --- happy path against the committed tree ---
 
     @Test
+    void twoSchemasOfOneNamespaceAreRefused(@TempDir Path dir) throws Exception {
+        // Ordering kept the first for every import and midPoint holds one schema per namespace; which one won
+        // depended on the file names.
+        Files.writeString(dir.resolve("a.xml"), schemaObject("44444444-0000-0000-0c00-0000000000a1", "a",
+                "http://example.com/same"), StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("b.xml"), schemaObject("44444444-0000-0000-0c00-0000000000a2", "b",
+                "http://example.com/same"), StandardCharsets.UTF_8);
+
+        Result r = run("deploy", dir.toString());
+
+        assertEquals(2, r.exit, r.out + r.err);
+        assertTrue(r.err.contains("two extension schemas declare the namespace http://example.com/same"), r.err);
+    }
+
+    @Test
+    void aSchemaAndAnObjectWithOneOidAreRefused(@TempDir Path dir) throws Exception {
+        String oid = "44444444-0000-0000-0c00-0000000000a3";
+        Files.writeString(dir.resolve("ext.xml"), schemaObject(oid, "ext", "http://example.com/shared-oid"),
+                StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("role.xml"), "<role xmlns=\"http://midpoint.evolveum.com/xml/ns/public/"
+                + "common/common-3\" oid=\"" + oid + "\"><name>r</name></role>", StandardCharsets.UTF_8);
+
+        Result r = run("deploy", dir.toString());
+
+        assertEquals(2, r.exit, r.out + r.err);
+        assertTrue(r.err.contains("have one OID (" + oid + ")"), r.err);
+    }
+
+    @Test
+    void oidAppliesToARunOfOneExtensionSchema(@TempDir Path dir) throws Exception {
+        // The one unit was the schema, and --oid only ever reached object units: it was dropped without a word.
+        Path schema = dir.resolve("ext.xml");
+        Files.writeString(schema, schemaObject("44444444-0000-0000-0c00-00000000000a", "ext", "http://example.com/oid-ext"),
+                StandardCharsets.UTF_8);
+        String oid = "44444444-0000-0000-0c00-00000000000b";
+
+        Result r;
+        try {
+            r = run("deploy", schema.toString(), "--oid", oid, "-v"); // -v: the plan then shows each OID
+        } finally {
+            // -v raises this package's loggers for the whole JVM; the tests after this one expect them quiet.
+            ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(Logging.class.getPackageName()))
+                    .setLevel(null);
+        }
+
+        assertEquals(0, r.exit, r.out + r.err);
+        assertTrue(r.out.contains(oid), r.out);
+    }
+
+    @Test
     void printsTwoTierApplyOrder() {
         Result r = run("deploy", TREE);
         assertEquals(0, r.exit, r.err);
@@ -436,6 +486,15 @@ class DeployCliTest {
         int j = output.indexOf(after);
         assertTrue(i >= 0 && j >= 0 && i < j,
                 "expected '" + before + "' before '" + after + "' in:\n" + output);
+    }
+
+    private static String schemaObject(String oid, String name, String namespace) {
+        return "<schema xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\" oid=\"" + oid + "\">"
+                + "<name>" + name + "</name><definition>"
+                + "<xsd:schema xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" elementFormDefault=\"qualified\""
+                + " targetNamespace=\"" + namespace + "\"><xsd:complexType name=\"ExtType\"><xsd:sequence>"
+                + "<xsd:element name=\"label\" type=\"xsd:string\"/></xsd:sequence></xsd:complexType></xsd:schema>"
+                + "</definition></schema>";
     }
 
     private static Result run(String... args) {

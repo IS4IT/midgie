@@ -115,12 +115,12 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **C2 — Different deployment keys can share a rollback directory.** `RollbackPlan.java:387` (`root/a/b_c` vs `root/a_b/c`). — rollback group (rotation and lookup per deployment, no renaming)
 - [ ] **C3 — `diff --trace` hides key-pairing notes.** `DiffCommand.java:213` gates on `debug && !quiet`; live path uses `debug || trace`.
 - [x] **C4 — All-in-sync interactive run records no tracking state.** `DeployCommand.java:1012-1017, 512`. `--yes` does record. — tracking group
-- [ ] **C5 — `--oid` ignored on a schema-only run.** `DeployCommand.java:441-443`.
-- [ ] **C6 — `--dry-run`/`--plan` disagree with a real run on unprunable removals.** `DeployCommand.java:501`.
-- [ ] **C7 — Non-interactive detection breaks on JDK 22+.** `DeployCommand.java:1407-1435`. `System.console()` is non-null when redirected; EOF → ABORTED → exit 0. *Plausible* (image ships JRE 17).
-- [ ] **C8 — Applied plan can differ from the confirmed preview.** `DeployCommand.java:1013-1023`. *Plausible.* Compare `changed()` between passes or document.
-- [ ] **C9 — OID-less fragment silently joins the first of two same-named objects.** `DeployObject.java:81-91`. *Plausible.*
-- [ ] **C10 — Duplicate schema `targetNamespace` and cross-tier shared OIDs go unreported.** `DeployCommand.java:939-942`. *Plausible.*
+- [x] **C5 — `--oid` ignored on a schema-only run.** `DeployCommand.java:441-443`. — deploy group
+- [x] **C6 — `--dry-run`/`--plan` disagree with a real run on unprunable removals.** `DeployCommand.java:501`. — deploy group
+- [x] **C7 — Non-interactive detection breaks on JDK 22+.** `DeployCommand.java:1407-1435`. `System.console()` is non-null when redirected; EOF → ABORTED → exit 0. *Plausible* (image ships JRE 17). — deploy group (Io.console(); not run on JDK 22 here)
+- [x] **C8 — Applied plan can differ from the confirmed preview.** `DeployCommand.java:1013-1023`. *Plausible.* Compare `changed()` between passes or document. — deploy group (changed objects are refused, checked against the rig through a pty)
+- [x] **C9 — OID-less fragment silently joins the first of two same-named objects.** `DeployObject.java:81-91`. *Plausible.* — deploy group
+- [x] **C10 — Duplicate schema `targetNamespace` and cross-tier shared OIDs go unreported.** `DeployCommand.java:939-942`. *Plausible.* — deploy group
 - [x] **C11 — History grouping depends on file order.** `RemovalDetector.java:509-526`. *Confirmed.* False orphans and missed removals when identities are split across files. — tracking group
 - [x] **C12 — Removal policy resolved against historical name/OID.** `DeployCommand.java:683`, `RemovalDetector.java:687-690`. After a rename the new-name rule misses. — tracking group
 - [x] **C13 — `claim()` pairs history with a different object sharing Type/Name.** `RemovalDetector.java:532-541`. *Plausible.* — tracking group

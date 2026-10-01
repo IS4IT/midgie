@@ -250,6 +250,12 @@ public class DeployCommand implements Callable<Integer> {
      */
     private boolean sentSomething;
 
+    /**
+     * What each object's change was in the preview the operator confirmed, or {@code null} when nothing was
+     * confirmed that way ({@code --yes}, or a prompt per object, which shows the change it asks about).
+     */
+    private Map<DeployObject, String> confirmedChanges;
+
     /** Removals that cannot be turned into a delete; they fail the run so the revision stays put. */
     private final List<RemovalDetector.Removal> unprunable = new ArrayList<>();
 
@@ -447,6 +453,11 @@ public class DeployCommand implements Callable<Integer> {
                 System.err.println("midgie: " + nothingFound(scan));
                 return EXIT_ERROR;
             }
+            String clash = clashBetween(deployableSchemas, objects);
+            if (clash != null) {
+                System.err.println("midgie: " + clash);
+                return EXIT_ERROR;
+            }
             int unitCount = deployableSchemas.size() + objects.size();
             if ((connectionOptions.oid != null || format != null) && unitCount != 1) {
                 // Both name "the" object: --oid says where it lives, --format hands over its one change.
@@ -457,6 +468,11 @@ public class DeployCommand implements Callable<Integer> {
             }
             if (connectionOptions.oid != null) {
                 objects = withOid(objects, connectionOptions.oid);
+                // The one unit may be an extension schema, which is deployed as its SchemaType object; --oid
+                // used to be dropped there without a word, and the schema went to the OID in its file.
+                for (SchemaFile schema : deployableSchemas) {
+                    schema.fragment().object().setOid(connectionOptions.oid);
+                }
             }
 
             TopoSort.Result<SchemaFile> schemaOrder = sortSchemas(deployableSchemas);
@@ -526,11 +542,13 @@ public class DeployCommand implements Callable<Integer> {
             if (planDir == null && !dryRun) {
                 appliedUnits.removeAll(unjudgedUnits);
             }
-            if (!unprunable.isEmpty() && planDir == null && !dryRun) {
+            if (!unprunable.isEmpty()) {
                 // Left unsaid, the object's rows would move past these and they would never be offered again.
                 for (RemovalDetector.Removal removal : unprunable) {
                     appliedUnits.remove(removal.unit);
                 }
+                // A preview and a plan fail as the run would: they used to exit 0 or 1 over a tree whose
+                // real deploy then failed on exactly these.
                 exit = EXIT_ERROR;
             }
             // Written after the apply: the tree's objects are on the server now, whatever the plan said.
@@ -1079,6 +1097,41 @@ public class DeployCommand implements Callable<Integer> {
         return fragments;
     }
 
+    /**
+     * Two units that would land on one thing, or {@code null}. Two schemas of one namespace: ordering kept the
+     * first for every import of it and midPoint holds one schema per namespace, so which one won depended on the
+     * file names. A schema and an object, or two schemas, with one OID: each wrote over the other in turn.
+     */
+    static String clashBetween(List<SchemaFile> schemas, List<DeployObject> objects) {
+        Map<String, SchemaFile> byNamespace = new LinkedHashMap<>();
+        Map<String, SchemaFile> byOid = new LinkedHashMap<>();
+        for (SchemaFile schema : schemas) {
+            SchemaFile earlier = byNamespace.putIfAbsent(schema.targetNamespace(), schema);
+            if (earlier != null) {
+                return "two extension schemas declare the namespace " + schema.targetNamespace() + ": "
+                        + earlier.sourceFile() + " and " + schema.sourceFile() + ". midPoint holds one schema per "
+                        + "namespace; deploy one of them.";
+            }
+            String oid = schema.fragment().oid();
+            if (oid != null && !oid.isBlank()) {
+                SchemaFile sameOid = byOid.putIfAbsent(oid, schema);
+                if (sameOid != null) {
+                    return sameOid.sourceFile() + " and " + schema.sourceFile() + " are two schemas with one OID ("
+                            + oid + "); each would overwrite the other.";
+                }
+            }
+        }
+        for (DeployObject object : objects) {
+            SchemaFile schema = (object.oid() != null) ? byOid.get(object.oid()) : null;
+            if (schema != null) {
+                return object.sourceFiles().get(0) + " (" + object.typeName() + ") and the schema in "
+                        + schema.sourceFile() + " have one OID (" + object.oid() + "); each would overwrite the "
+                        + "other.";
+            }
+        }
+        return null;
+    }
+
     private static TopoSort.Result<SchemaFile> sortSchemas(List<SchemaFile> schemas) {
         Map<String, SchemaFile> byNamespace = new LinkedHashMap<>();
         for (SchemaFile schema : schemas) {
@@ -1148,7 +1201,7 @@ public class DeployCommand implements Callable<Integer> {
             }
             return preview.changed() > 0 ? 1 : 0;
         }
-        if (confirmEachApply && System.console() == null) {
+        if (confirmEachApply && Io.console() == null) {
             System.err.println("midgie: --confirm-each-apply needs an interactive session; "
                     + "use --yes for non-interactive apply.");
             return EXIT_ERROR;
@@ -1170,6 +1223,7 @@ public class DeployCommand implements Callable<Integer> {
             if (stop != null) {
                 return stop;
             }
+            confirmedChanges = preview.changes;
         }
         Tally applied = pass(reconciler, units, false, confirmEachApply);
         sentSomething = true;
@@ -1206,6 +1260,18 @@ public class DeployCommand implements Callable<Integer> {
                 Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune());
                 Reconciler.Action action = outcome.action;
                 tally.lastOutcome = outcome;
+                if (preview) {
+                    tally.changes.put(unit, changeOf(outcome));
+                } else if (confirmedChanges != null && confirmedChanges.containsKey(unit)
+                        && !confirmedChanges.get(unit).equals(changeOf(outcome))) {
+                    // The writing pass reads the server again, and what it found had moved since the preview:
+                    // sending it would apply a change nobody confirmed.
+                    tally.failed++;
+                    tally.failedUnits.add(unit);
+                    reportUnit(unit, "failed", "changed on the server since the preview you confirmed, so "
+                            + "nothing was sent for it; run deploy again to see the change as it is now", true);
+                    continue;
+                }
                 if (!preview && perUnitPrompt
                         && (action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH)) {
                     if (!promptEach(action, outcome)) {
@@ -1241,6 +1307,11 @@ public class DeployCommand implements Callable<Integer> {
             }
         }
         return tally;
+    }
+
+    /** What an outcome would send, for telling whether two passes would do the same. */
+    private static String changeOf(Reconciler.Outcome outcome) {
+        return outcome.action + "\n" + outcome.oid + "\n" + Objects.toString(outcome.modificationXml, "");
     }
 
     private void record(Tally tally, DeployObject unit, Reconciler.Action action, Reconciler.Outcome outcome,
@@ -1531,7 +1602,7 @@ public class DeployCommand implements Callable<Integer> {
             status("Plan: " + entries.size() + " change(s) would be applied from " + applyPlanDir + ".");
             return 1;
         }
-        if (confirmEachApply && System.console() == null) {
+        if (confirmEachApply && Io.console() == null) {
             System.err.println("midgie: --confirm-each-apply needs an interactive session; use --yes.");
             return EXIT_ERROR;
         }
@@ -1740,7 +1811,7 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     private boolean promptYes(String prompt) {
-        Console console = System.console();
+        Console console = Io.console();
         if (console == null) {
             return false;
         }
@@ -1750,7 +1821,7 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     private Integer confirmOnce(int changeCount) {
-        Console console = System.console();
+        Console console = Io.console();
         boolean interactive = console != null;
         String answer = interactive
                 ? console.readLine("Apply %d change(s) to %s? [y/N] ", changeCount, connectionOptions.url())
@@ -2017,6 +2088,7 @@ public class DeployCommand implements Callable<Integer> {
         int removed;   // values dropped from the tree that a PATCH deleted
         final List<DeployObject> failedUnits = new ArrayList<>();
         final List<DeployObject> landedUnits = new ArrayList<>();   // on the server as the tree has them
+        final Map<DeployObject, String> changes = new IdentityHashMap<>(); // a preview's change per object
         Reconciler.Outcome lastOutcome;   // what --format renders, when the run holds one object
 
         int changed() {

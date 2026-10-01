@@ -5,9 +5,7 @@
  */
 package de.is4it.midpoint.diff;
 
-import java.io.Console;
 import java.io.File;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -221,25 +219,9 @@ final class OutputLayout {
         return cached;
     }
 
-    /**
-     * Whether standard output is a terminal. On JDK 17 {@link System#console()} is present only when it is (and
-     * standard input too); from JDK 22 it is present whenever the JVM runs interactively, and
-     * {@code Console.isTerminal()} tells the two apart.
-     */
+    /** Whether standard output (and input) is a terminal; see {@link Io#console()}. */
     static boolean stdoutIsTerminal() {
-        Console console = System.console();
-        if (console == null) {
-            return false;
-        }
-        try {
-            Method isTerminal = Console.class.getMethod("isTerminal");
-            return (Boolean) isTerminal.invoke(console);
-        } catch (NoSuchMethodException e) {
-            return true; // JDK 17-21: a console at all means a terminal
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            LOG.debug("could not ask the console whether it is a terminal", e);
-            return false;
-        }
+        return Io.console() != null;
     }
 
     /** {@code stty size} against the controlling terminal: "rows columns". {@code 0} when that fails. */

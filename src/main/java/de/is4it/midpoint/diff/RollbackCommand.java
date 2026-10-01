@@ -435,12 +435,12 @@ public class RollbackCommand implements Callable<Integer> {
         if (assumeYes) {
             return null;
         }
-        if (System.console() == null) {
+        java.io.Console console = Io.console();
+        if (console == null) {
             System.err.println("midgie: refusing to write in a non-interactive session; pass --yes.");
             return EXIT_ERROR;
         }
-        System.err.print("Restore " + count + " object(s)? [y/N] ");
-        String answer = System.console().readLine();
+        String answer = console.readLine("Restore %d object(s)? [y/N] ", count);
         if (answer == null || !answer.trim().equalsIgnoreCase("y")) {
             status("Nothing was changed.");
             return 0;

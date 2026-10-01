@@ -59,6 +59,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **References midPoint maintains no longer order the deploy.** `roleMembershipRef`, `archetypeRef` and references under `metadata` in an exported object counted as dependencies, ordering objects after roles they had merely been given and reporting cycles that were not there.
 
+- **What you confirm is what is sent.** The writing pass reads the server again after the prompt, and an object whose change had moved in between — someone edited it while the prompt waited — was written as it now diffed. It is now not sent, and fails the run.
+
+- **A confirmation prompt is never answered from a pipe.** From JDK 22 the console exists even when input is redirected, so a deploy without `--yes` read end-of-file as "no" and exited 0 having applied nothing. All prompts now ask only on a terminal; elsewhere a run without `--yes` refuses as documented.
+
+- **`--dry-run` and `--plan` fail like the real run on removals that cannot be sent.** A value dropped from an item without a definition failed a real deploy but not its preview.
+
+- **`--oid` applies to a run of one extension schema.** It was dropped without a word, and the schema went to the OID in its file.
+
+- **A file without an OID naming two objects of the tree is refused.** When two objects share a type and name, it joined whichever was read first.
+
+- **Two schemas of one namespace, and two units with one OID, are refused.** Which schema won depended on file names, and units sharing an OID overwrote each other.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

@@ -132,6 +132,20 @@ class DeployObjectTest {
         assertTrue(message.contains("  Line two, also shared."), "shared context kept: " + message);
     }
 
+    @Test
+    void aFileWithoutAnOidNamingTwoObjectsIsRefused() throws Exception {
+        // Two roles of one name with different OIDs; a third file names the role without an OID. It joined the
+        // first of the two read, so the result depended on file order.
+        String other = "77777777-0000-0000-0000-00000000ffff";
+        SchemaException failure = assertThrows(SchemaException.class, () -> DeployObject.group(List.of(
+                fragment("a.xml", role("one")),
+                fragment("b.xml", role("two").replace(OID, other)),
+                fragment("c.xml", "<role xmlns=\"" + NS + "\"><name>Grouped</name><subtype>x</subtype></role>"))));
+
+        assertTrue(failure.getMessage().contains("c.xml") && failure.getMessage().contains(OID)
+                && failure.getMessage().contains(other), failure.getMessage());
+    }
+
     private static String role(String description) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n  <name>Grouped</name>\n"
                 + "  <description>" + description + "</description>\n</role>";

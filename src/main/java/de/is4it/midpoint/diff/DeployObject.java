@@ -79,14 +79,30 @@ final class DeployObject {
         // references the object orders itself before the OID-less half, and at apply time that half is
         // skipped as "no oid". So resolve type/name to a known OID first.
         Map<String, String> oidByTypeAndName = new LinkedHashMap<>();
+        Map<String, Fragment> firstWithName = new LinkedHashMap<>();
+        Map<String, Fragment> ambiguous = new LinkedHashMap<>(); // type/name -> a fragment with another OID
         for (Fragment fragment : fragments) {
             if (isSet(fragment.oid()) && isSet(fragment.name())) {
-                oidByTypeAndName.putIfAbsent(fragment.typeName() + "/" + fragment.name(), fragment.oid());
+                String typeAndName = fragment.typeName() + "/" + fragment.name();
+                String known = oidByTypeAndName.putIfAbsent(typeAndName, fragment.oid());
+                firstWithName.putIfAbsent(typeAndName, fragment);
+                if (known != null && !known.equals(fragment.oid())) {
+                    ambiguous.putIfAbsent(typeAndName, fragment);
+                }
             }
         }
         Map<String, List<Fragment>> byIdentity = new LinkedHashMap<>();
         for (Fragment fragment : fragments) {
             String key = fragment.identityKey();
+            if (!isSet(fragment.oid()) && ambiguous.containsKey(key)) {
+                // Two objects of the tree share this type and name; joined to the first one found, the file
+                // went into whichever object happened to be read first.
+                Fragment one = firstWithName.get(key);
+                Fragment other = ambiguous.get(key);
+                throw new SchemaException(fragment.sourceFile() + " names " + key + " without an OID, and two "
+                        + "objects of the tree have that name: " + one.oid() + " in " + one.sourceFile() + " and "
+                        + other.oid() + " in " + other.sourceFile() + ". Give it the OID of the one it belongs to.");
+            }
             byIdentity.computeIfAbsent(oidByTypeAndName.getOrDefault(key, key), ignored -> new ArrayList<>())
                     .add(fragment);
         }

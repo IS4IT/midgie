@@ -339,7 +339,7 @@ public class InitCommand implements Callable<Integer> {
                 + ". Check the sha256 above against what the CA's owner publishes: anything that answered "
                 + "this connection could have presented these.");
 
-        Console console = System.console();
+        Console console = Io.console();
         boolean interactive = console != null;
         String answer = interactive
                 ? console.readLine("Write %s and trust it for later runs? [y/N] ", writeCacert)

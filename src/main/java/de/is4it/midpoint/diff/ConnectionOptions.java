@@ -332,7 +332,7 @@ public final class ConnectionOptions {
             LOG.debug("proxy password source: the proxy URL from the environment");
             return proxy.password();
         }
-        Console console = System.console();
+        Console console = Io.console();
         if (console != null) {
             char[] entered = console.readPassword("Proxy password for %s at %s: ", proxyUser, proxy.address());
             if (entered != null && entered.length > 0) {
@@ -422,7 +422,7 @@ public final class ConnectionOptions {
             LOG.debug("password source: MIDPOINT_PASSWORD env var");
             return envPassword;
         }
-        Console console = System.console();
+        Console console = Io.console();
         if (console != null) {
             char[] entered = console.readPassword("Password for %s at %s: ", user(), url());
             if (entered != null && entered.length > 0) {
