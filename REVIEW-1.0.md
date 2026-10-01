@@ -103,9 +103,9 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **E3 — A failed inverse drops the object from the rollback manifest.** — `373271b` `RollbackPlan.java:187, 197-206`. Logged at DEBUG; the Javadoc at `:171-172` claims the manifest shows it. Deploy reports "N object(s) undoable" with no warning.
 - [ ] **E4 — Failed state write is hidden by `-q`.** `DeployCommand.java:891-894`. Use `warn()`.
 - [x] **E5 — Unreadable `--schema-dir` is treated as empty.** `SchemaOptions.java:641-647`. — `87c3be7`
-- [ ] **E6 — Xerces prints raw `[Fatal Error] …` to stderr, ignoring `-q`.** `Io.java:91`, `SchemaOptions.java:659`, discovery. Install a silent error handler.
-- [ ] **E7 — Generic `IOException` from `send` is neither retried for safe reads nor wrapped; `SSLException` is not a `TransportException`.** `MidpointRestClient.java:467, 473-485`.
-- [ ] **E8 — `isProxyAuthFailure` matches any message containing `exchImpl`.** `MidpointRestClient.java:614-624`. *Plausible.*
+- [x] **E6 — Xerces prints raw `[Fatal Error] …` to stderr, ignoring `-q`.** `Io.java:91`, `SchemaOptions.java:659`, discovery. Install a silent error handler. — input group (Io.parseXmlFile/parseXml)
+- [x] **E7 — Generic `IOException` from `send` is neither retried for safe reads nor wrapped; `SSLException` is not a `TransportException`.** `MidpointRestClient.java:467, 473-485`. — input group
+- [x] **E8 — `isProxyAuthFailure` matches any message containing `exchImpl`.** `MidpointRestClient.java:614-624`. *Plausible.* — input group
 - [x] **E9 — Object with no recorded version is replayed without `--force`; `-q` hides the warning.** `RollbackCommand.java:231-234`. Contradicts Javadoc at `:222`. — rollback group
 - [x] **E10 — Rollback provenance check silently skipped when local identity can't be derived.** `RollbackCommand.java:205-212`. — rollback group
 
@@ -131,17 +131,17 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **C18 — Verify cache keyed on `SearchFilterType.toString()` (identity hash).** `SmartReferences.java:55`. — diff group (one search per query)
 - [x] **C19 — Undefined items treated as multi-valued in fragment union.** `FragmentUnion.java:230, 250`. *Plausible.* Contradictions become two values. — diff group
 - [x] **C20 — `ReferenceCollector` collects operational refs (`linkRef`, `roleMembershipRef`, metadata).** `ReferenceCollector.java:31-35`. *Plausible.* Spurious ordering edges/cycle warnings. — diff group
-- [ ] **C21 — Config files read as ISO-8859-1.** `ConfigDefaults.java:342-345`. Load via a UTF-8 `Reader`.
-- [ ] **C22 — Stdin: BOM breaks parsing, empty stdin gives "String index out of range: 0", encoding declaration ignored.** `Io.java:48`.
-- [ ] **C23 — Connect timeout fixed at 10 s; huge `--timeout` overflows `int`.** `MidpointRestClient.java:151`, `ServerCertificates.java:82, 84, 223-224`.
-- [ ] **C24 — Lone non-self-signed leaf becomes the trust anchor without saying so.** `ServerCertificates.java:112-117`. `--cacert` then breaks at renewal.
+- [x] **C21 — Config files read as ISO-8859-1.** `ConfigDefaults.java:342-345`. Load via a UTF-8 `Reader`. — input group
+- [x] **C22 — Stdin: BOM breaks parsing, empty stdin gives "String index out of range: 0", encoding declaration ignored.** `Io.java:48`. — input group
+- [x] **C23 — Connect timeout fixed at 10 s; huge `--timeout` overflows `int`.** `MidpointRestClient.java:151`, `ServerCertificates.java:82, 84, 223-224`. — input group
+- [x] **C24 — Lone non-self-signed leaf becomes the trust anchor without saying so.** `ServerCertificates.java:112-117`. `--cacert` then breaks at renewal. — input group (written with a warning)
 - [x] **C25 — Retrying a partly failed rollback needs `--force`, which disables staleness protection for all objects.** `RollbackCommand.java:257-276`. — rollback group
 - [x] **C26 — Unfinished rollback run gives `--plan`/`--apply-plan` wording.** `PlanStore.java:173, 176`. — rollback group
 - [x] **C27 — OID characters not validated when writing plan files.** `PlanStore.java:139-146` vs `:256`. *Plausible.* — `bf0dcda` (with S1)
 - [ ] **C28 — `init` writes some files, then refuses.** `InitCommand.java:200-202, 231-250, 261-265, 529-535`.
 - [ ] **C29 — `init --write-cacert -` mixes status text into the PEM on stdout.** `InitCommand.java:331-339`.
 - [ ] **C30 — `init` ignores `app` when reporting identity; `--app` Javadoc contradicts code.** `InitCommand.java:382, 562`; `DeploymentIdentity.java:29-30` vs `:69-75`.
-- [ ] **C31 — Git blobs decoded as UTF-8 and stripped; inherited `GIT_DIR`/`GIT_WORK_TREE` override the tree.** `GitRevision.java:373, 396`. *Plausible.*
+- [x] **C31 — Git blobs decoded as UTF-8 and stripped; inherited `GIT_DIR`/`GIT_WORK_TREE` override the tree.** `GitRevision.java:373, 396`. *Plausible.* — input group
 - [ ] **C32 — Offline `diff` silently accepts `--no-prune`, `--no-match-by-name` and connection options.** `DiffCommand.java:94-107, 151-155`.
 - [ ] **C33 — OidComments round trip breaks when the root element shares a line with `<?xml?>`.** `OidComments.java:315-319, 428, 487`. *Plausible;* hand-written plan files only.
 - [ ] **C34 — `midgie-state` documentation has a long run of spaces.** `SyncState.java:80` (missing `\` in the text block).
@@ -168,7 +168,7 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] T7 — `RemovalDetector` exception paths; history grouping with split identities. — tracking group (grouping; the exception paths were covered with S/M fixes)
 - [x] T8 — `SyncState.apply` delta construction (add / replace-by-id / delete, duplicate keys). — tracking group (SyncStateTest)
 - [x] T9 — Symlinks in discovery; malformed XML files. — rollback group (DeployCliTest)
-- [ ] T10 — `--insecure` path, hostname mismatch with `--cacert`, no secrets in debug/trace output.
+- [x] T10 — `--insecure` path, hostname mismatch with `--cacert`, no secrets in debug/trace output. — input group (TlsClientTest; masking in MidpointRestClientTest; the name-check switch stays Main's)
 - [x] T11 — Password precedence with `password` in the file; OID escaping. — rollback group (ConfigDefaultsTest, MidpointRestClientTest)
-- [ ] T12 — stdout encoding and write failure, `Error` exit code, `--opt=value` redaction, BOM/empty stdin.
+- [x] T12 — stdout encoding and write failure, `Error` exit code, `--opt=value` redaction, BOM/empty stdin. — input group (IoTest for BOM/empty stdin)
 - [ ] T13 — `GlobPath` and `ReferenceCollector` directly; `VersionSupport`/`LiveLookup` without the docker rig.

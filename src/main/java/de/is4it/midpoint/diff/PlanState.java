@@ -15,7 +15,6 @@ import java.util.List;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
-import com.evolveum.midpoint.util.DOMUtil;
 
 /**
  * The {@code midgie-state} rows a {@code deploy --plan} would have written, kept in the plan directory as
@@ -91,7 +90,7 @@ final class PlanState {
         }
         Element root;
         try {
-            root = DOMUtil.parseFile(file).getDocumentElement();
+            root = Io.parseXmlFile(file).getDocumentElement();
         } catch (Exception e) {
             throw new IOException("cannot read " + file + ": " + e.getMessage(), e);
         }

@@ -21,7 +21,6 @@ import org.slf4j.LoggerFactory;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
-import com.evolveum.midpoint.util.DOMUtil;
 
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -295,7 +294,7 @@ public class RollbackCommand implements Callable<Integer> {
 
     private String readVersion(MidpointRestClient client, String restType, String oid) {
         try {
-            String version = DOMUtil.parseDocument(client.getObject(restType, oid))
+            String version = Io.parseXml(client.getObject(restType, oid))
                     .getDocumentElement().getAttribute("version");
             return version.isBlank() ? null : version;
         } catch (Exception e) {

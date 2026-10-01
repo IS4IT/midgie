@@ -473,7 +473,7 @@ public final class MidpointRestClient {
                 // The commonest TLS misconfiguration is a private CA with no --cacert. The raw JDK message
                 // ("PKIX path building failed ...") names neither the server nor the flags that fix it.
                 LOG.debug("{}  TLS error: {}", what, e.toString());
-                throw new IOException(what + " — TLS handshake with " + restBase + " failed ("
+                throw new TransportException(what + " — TLS handshake with " + restBase + " failed ("
                         + e.getMessage() + "). Pass --cacert <FILE> for a private CA, or --insecure for a "
                         + "self-signed development server.", e);
             } catch (InterruptedException e) {
@@ -486,12 +486,22 @@ public final class MidpointRestClient {
                 // Credentials a proxy rejects never come back as a status. The JDK re-sends the CONNECT until
                 // it gives up, and what surfaces is "too many authentication attempts" (JDK 17) or an internal
                 // exchange failure (JDK 26) — neither of which mentions the proxy at all.
-                if (proxy != null && proxy.hasCredentials() && isProxyAuthFailure(e)) {
+                if (proxy != null && proxy.hasCredentials()
+                        && isProxyAuthFailure(e, "https".equalsIgnoreCase(request.uri().getScheme()))) {
                     LOG.debug("{}  proxy authentication failed: {}", what, e.toString());
                     throw new TransportException(what + " — the proxy at " + proxy.address()
                             + " rejected the credentials for user '" + proxy.user() + "'.", e);
                 }
-                throw e;
+                // A connection dropped part way ("Connection reset", "received no bytes") is as passing as a
+                // refused one for a read, and was never retried; nor did it say which request it ended.
+                LOG.debug("{}  transport error: {}", what, e.toString());
+                if (retryable && attempt < maxRetries) {
+                    LOG.debug("{}  retry {} of {} after transport error", what, attempt + 1, maxRetries);
+                    backoff(attempt++);
+                    continue;
+                }
+                throw new TransportException(what + " — the connection to " + restBase + " failed ("
+                        + ((e.getMessage() != null) ? e.getMessage() : e.toString()) + ")", e);
             }
         }
     }
@@ -618,14 +628,20 @@ public final class MidpointRestClient {
      *
      * <p>Matched on the message because the JDK offers nothing else: no dedicated exception type, no status.
      * The two texts differ between JDK versions, so both are recognised, and a miss only costs the nicer
-     * message — the original exception is rethrown either way.
+     * message — the original exception is rethrown either way. The JDK 26 one is a null {@code exchImpl}
+     * inside the client, which other internal failures can produce too, so it counts only for a tunnelled
+     * (https) request and only as the null-pointer failure it is; any message mentioning it used to.
      */
-    private static boolean isProxyAuthFailure(IOException e) {
+    static boolean isProxyAuthFailure(IOException e, boolean tunnelled) {
         for (Throwable cause = e; cause != null; cause = cause.getCause()) {
             String message = cause.getMessage();
-            if (message != null && (message.contains("too many authentication attempts")
-                    || message.contains("Proxy-Authorization")
-                    || message.contains("exchImpl"))) {
+            if (message == null) {
+                continue;
+            }
+            if (message.contains("too many authentication attempts") || message.contains("Proxy-Authorization")) {
+                return true;
+            }
+            if (tunnelled && cause instanceof NullPointerException && message.contains("exchImpl")) {
                 return true;
             }
         }

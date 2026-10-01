@@ -221,7 +221,7 @@ final class PlanStore {
         }
         try {
             org.w3c.dom.NodeList filters =
-                    com.evolveum.midpoint.util.DOMUtil.parseDocument(entry.body).getElementsByTagName("*");
+                    Io.parseXml(entry.body).getElementsByTagName("*");
             for (int i = 0; i < filters.getLength(); i++) {
                 org.w3c.dom.Node node = filters.item(i);
                 if (!"filter".equals(node.getLocalName())

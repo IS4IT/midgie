@@ -79,9 +79,9 @@ final class ServerCertificates {
                 ? factory.overTunnel(ProxyTunnel.open(proxy, host, port, timeout), host, port)
                 : factory.create()) {
             if (!tunnelled) {
-                socket.connect(new InetSocketAddress(host, port), (int) timeout.toMillis());
+                socket.connect(new InetSocketAddress(host, port), millis(timeout));
             }
-            socket.setSoTimeout((int) timeout.toMillis());
+            socket.setSoTimeout(millis(timeout));
             SSLParameters parameters = socket.getSSLParameters();
             // Without SNI a virtual host answers with the wrong certificate — the one thing that would make
             // this write a PEM for a server the operator never asked about. An address literal is the
@@ -114,6 +114,27 @@ final class ServerCertificates {
             return chain;
         }
         return List.copyOf(chain.subList(1, chain.size()));
+    }
+
+    /**
+     * Whether {@code anchors} is a lone server certificate that is not its own issuer: a server sending no
+     * chain leaves nothing else to take, and trusting the leaf pins it until its renewal.
+     */
+    static boolean isPinnedLeaf(List<X509Certificate> anchors) {
+        return anchors.size() == 1 && !isSelfSigned(anchors.get(0));
+    }
+
+    /** Issued by itself, and signed with its own key. */
+    static boolean isSelfSigned(X509Certificate certificate) {
+        if (!certificate.getSubjectX500Principal().equals(certificate.getIssuerX500Principal())) {
+            return false;
+        }
+        try {
+            certificate.verify(certificate.getPublicKey());
+            return true;
+        } catch (java.security.GeneralSecurityException e) {
+            return false;
+        }
     }
 
     /** PEM, the form {@code --cacert} reads. */
@@ -220,8 +241,8 @@ final class ServerCertificates {
             Socket socket = new Socket();
             try {
                 socket.connect(new InetSocketAddress(proxy.address().getHostString(),
-                        proxy.address().getPort()), (int) timeout.toMillis());
-                socket.setSoTimeout((int) timeout.toMillis());
+                        proxy.address().getPort()), millis(timeout));
+                socket.setSoTimeout(millis(timeout));
 
                 StringBuilder request = new StringBuilder()
                         .append("CONNECT ").append(target).append(" HTTP/1.1\r\n")
@@ -313,5 +334,10 @@ final class ServerCertificates {
             }
             return line.length() > 0 ? line.toString() : null;
         }
+    }
+
+    /** A socket timeout: milliseconds as an {@code int}, which a cast of a long timeout turned negative. */
+    static int millis(Duration timeout) {
+        return (int) Math.max(1, Math.min(Integer.MAX_VALUE, timeout.toMillis()));
     }
 }

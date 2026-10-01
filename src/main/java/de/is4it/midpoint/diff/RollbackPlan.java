@@ -33,7 +33,6 @@ import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.schema.DeltaConvertor;
 import com.evolveum.midpoint.schema.constants.ObjectTypes;
-import com.evolveum.midpoint.util.DOMUtil;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType;
 
 import org.w3c.dom.Element;
@@ -142,7 +141,7 @@ final class RollbackPlan {
             }
             Element root;
             try {
-                root = DOMUtil.parseFile(file).getDocumentElement();
+                root = Io.parseXmlFile(file).getDocumentElement();
             } catch (Exception e) {
                 throw new IOException("cannot read " + file + ": " + e.getMessage(), e);
             }
@@ -311,7 +310,7 @@ final class RollbackPlan {
             return null;
         }
         try {
-            String version = DOMUtil.parseDocument(client.getObject(restType, oid))
+            String version = Io.parseXml(client.getObject(restType, oid))
                     .getDocumentElement().getAttribute("version");
             return version.isBlank() ? null : version;
         } catch (Exception e) {

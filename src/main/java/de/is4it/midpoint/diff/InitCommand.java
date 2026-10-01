@@ -338,6 +338,13 @@ public class InitCommand implements Callable<Integer> {
         status("About to trust " + anchors.size() + " of them" + (chain.size() > 1 ? " (the issuers)" : "")
                 + ". Check the sha256 above against what the CA's owner publishes: anything that answered "
                 + "this connection could have presented these.");
+        if (ServerCertificates.isPinnedLeaf(anchors)) {
+            // Said whatever --quiet asks: the file written works today and stops working at the renewal.
+            System.err.println("midgie: warning: the server sent only its own certificate, and it is not "
+                    + "self-signed, so its issuer is not here to trust. Trusting the certificate itself pins it: "
+                    + "--cacert stops working when it is renewed. Ask the CA's owner for the issuing CA's "
+                    + "certificate instead, or have the server send its chain.");
+        }
 
         Console console = Io.console();
         boolean interactive = console != null;

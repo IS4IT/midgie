@@ -71,6 +71,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Two schemas of one namespace, and two units with one OID, are refused.** Which schema won depended on file names, and units sharing an OID overwrote each other.
 
+- **Standard input and git history are read in the encoding the XML declares.** Both were decoded as UTF-8 whatever they said: a byte-order mark on stdin failed with "No lexical processor", and a Latin-1 file lost its accents — on stdin, and as last applied, where its values then no longer matched the server's. Empty stdin is now said as such instead of "String index out of range: 0".
+
+- **Config files are read as UTF-8.** They were read as ISO-8859-1, garbling any non-ASCII value; a file that is not valid UTF-8 is still read the old way.
+
+- **A malformed file is reported once.** The XML parser printed its own `[Fatal Error] …` line to stderr ahead of midgie's message, past `--quiet`. midgie's message now carries the line and column. A DOCTYPE is refused.
+
+- **git ignores an inherited `GIT_DIR` or `GIT_WORK_TREE`.** A deploy run from a git hook read the hook's repository instead of the tree.
+
+- **`--timeout` bounds connecting too, and a huge value no longer overflows.** Connecting was fixed at 10 seconds, and a timeout beyond about 24 days turned negative in `init --write-cacert`.
+
+- **`init --write-cacert` warns when it can only pin the server's own certificate.** A server that sends no chain leaves its leaf as the only thing to trust, which breaks `--cacert` at the renewal.
+
+- **A connection that drops part way is retried for reads and names the request.** Only refused connections and timeouts were retried, and a reset surfaced as a bare I/O error. A TLS failure is now a transport failure like the others.
+
+- **Proxy authentication failures are recognised more precisely.** Any error mentioning `exchImpl` was reported as rejected proxy credentials.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

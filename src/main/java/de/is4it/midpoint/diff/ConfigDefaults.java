@@ -6,6 +6,7 @@
 package de.is4it.midpoint.diff;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -393,10 +394,26 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
         return (variable != null && !variable.isBlank()) ? new File(variable.trim()) : null;
     }
 
+    /**
+     * The file's settings, read as UTF-8 — what every editor writes today — and as ISO-8859-1 only when it is
+     * not valid UTF-8, as Java's own resource bundles do. {@code Properties.load} of a stream reads ISO-8859-1
+     * outright, so a password or proxy user with a character beyond ASCII arrived garbled.
+     */
     private static Properties read(File file) throws IOException {
         Properties properties = new Properties();
-        try (var in = java.nio.file.Files.newInputStream(file.toPath())) {
-            properties.load(in);
+        byte[] bytes = java.nio.file.Files.readAllBytes(file.toPath());
+        String text;
+        try {
+            text = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            LOG.debug("config: {} is not UTF-8; reading it as ISO-8859-1", file);
+            text = new String(bytes, StandardCharsets.ISO_8859_1);
+        }
+        try {
+            properties.load(new java.io.StringReader(text));
         } catch (IllegalArgumentException e) {
             // A malformed unicode escape in a value throws this, and the message alone does not name the file.
             throw new IOException("cannot read " + file + ": " + e.getMessage(), e);

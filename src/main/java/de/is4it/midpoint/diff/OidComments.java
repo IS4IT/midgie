@@ -20,7 +20,6 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.evolveum.midpoint.util.DOMUtil;
 
 /**
  * Names the objects an XML payload refers to by OID, in comments, for the person reading it.
@@ -125,7 +124,7 @@ final class OidComments {
             if (annotated.equals(xml)) {
                 return xml;
             }
-            DOMUtil.parseDocument(annotated); // fail safe: a payload is never made unreadable by a comment
+            Io.parseXml(annotated); // fail safe: a payload is never made unreadable by a comment
             return annotated;
         } catch (Exception | Error e) {
             LOG.trace("could not annotate a payload with object names; leaving it as it was", e);

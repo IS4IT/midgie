@@ -126,6 +126,19 @@ class GitRevisionTest {
     }
 
     @Test
+    void aFileIsReadBackInTheEncodingItDeclares(@TempDir Path dir) throws Exception {
+        // Decoded as UTF-8 whatever it declared, a Latin-1 file's accents came back as replacement characters,
+        // and its last-applied values no longer equalled the ones the server held.
+        Files.write(dir.resolve("latin.xml"), "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><x>Grüße</x>"
+                .getBytes(StandardCharsets.ISO_8859_1));
+        Assumptions.assumeTrue(initRepository(dir), "git is not usable here");
+        GitRevision git = GitRevision.of(dir.toFile());
+
+        assertTrue(git.fileAt(git.head(), "latin.xml").contains("<x>Grüße</x>"), git.fileAt(git.head(), "latin.xml"));
+        assertTrue(git.blob(git.blobAtHead("latin.xml")).contains("<x>Grüße</x>"));
+    }
+
+    @Test
     void aRecordedRevisionIsVerifiedAndCanNeverActAsAGitOption(@TempDir Path dir) throws Exception {
         // The revision is read back from the midgie-state object on the server, so it is not trusted input.
         // git treats a leading '-' as an option, and options like --output=<file> write files as the

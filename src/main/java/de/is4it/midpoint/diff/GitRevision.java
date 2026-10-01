@@ -208,7 +208,8 @@ final class GitRevision {
 
     /** The content of the blob {@code id}, or {@code null} when the repository does not hold it. */
     String blob(String id) {
-        return isBlobId(id) ? run(true, "cat-file", "blob", id) : null;
+        byte[] content = isBlobId(id) ? runBytes(true, "cat-file", "blob", id) : null;
+        return (content != null) ? Io.xmlText(content) : null;
     }
 
     /**
@@ -266,7 +267,8 @@ final class GitRevision {
             LOG.trace("refusing to read a file at '{}': not a commit sha", revision);
             return null;
         }
-        return run(true, "show", revision + ":" + repoRelativePath);
+        byte[] content = runBytes(true, "show", revision + ":" + repoRelativePath);
+        return (content != null) ? Io.xmlText(content) : null;
     }
 
     /**
@@ -355,22 +357,41 @@ final class GitRevision {
      *     debugging one still gets it at {@code --trace}.
      */
     private String run(boolean expectedToFail, String... args) {
+        byte[] out = runBytes(expectedToFail, args);
+        return (out != null) ? new String(out, StandardCharsets.UTF_8).strip() : null;
+    }
+
+    /**
+     * Variables with which git finds a repository somewhere other than the directory it runs in. A deploy
+     * started from a git hook inherits them, and every command here then read the hook's repository instead of
+     * the tree. The list is git's own ({@code git rev-parse --local-env-vars}), less the configuration ones.
+     */
+    private static final List<String> REPOSITORY_ENV = List.of("GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE",
+            "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE",
+            "GIT_COMMON_DIR");
+
+    /**
+     * As {@link #run(boolean, String...)}, but stdout as git wrote it: file content is bytes in whatever
+     * encoding the file uses, which only its reader can decode.
+     */
+    private byte[] runBytes(boolean expectedToFail, String... args) {
         List<String> command = new ArrayList<>();
         command.add("git");
         command.addAll(Arrays.asList(args));
         Process started = null;
         try {
-            final Process process = new ProcessBuilder(command)
+            ProcessBuilder builder = new ProcessBuilder(command)
                     .directory(tree)
-                    .redirectErrorStream(false)
-                    .start();
+                    .redirectErrorStream(false);
+            builder.environment().keySet().removeAll(REPOSITORY_ENV);
+            final Process process = builder.start();
             started = process;
             process.getOutputStream().close();
             // Drain both pipes on separate threads. Reading stdout inline would block before waitFor ever
             // ran — making the timeout unreachable — and would deadlock whenever git filled the stderr pipe
             // (rename or filter warnings) while waiting for us to read it.
-            Future<String> stdout = DRAIN.submit(() ->
-                    new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+            Future<byte[]> stdout = DRAIN.submit(() -> process.getInputStream().readAllBytes());
             Future<String> stderr = DRAIN.submit(() ->
                     new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8));
             if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
@@ -380,7 +401,7 @@ final class GitRevision {
                 LOG.debug("git {} timed out after {}s", String.join(" ", args), TIMEOUT_SECONDS);
                 return null;
             }
-            String out = stdout.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            byte[] out = stdout.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             if (process.exitValue() != 0) {
                 // Several callers degrade to "detection off" on a null result, so without git's own reason
                 // an unreachable revision or a misconfigured identity cannot be diagnosed at any log level.
@@ -393,7 +414,7 @@ final class GitRevision {
                 return null;
             }
             stderr.cancel(true);
-            return out.strip();
+            return out;
         } catch (IOException | java.util.concurrent.ExecutionException
                 | java.util.concurrent.TimeoutException e) {
             LOG.debug("git {} could not run ({})", String.join(" ", args), e.getMessage());

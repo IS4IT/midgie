@@ -55,6 +55,115 @@ final class Io {
         }
     }
 
+    /** Everything on standard input; an input with nothing but white space in it is refused, by name. */
+    static byte[] readStdin() throws IOException {
+        byte[] bytes = System.in.readAllBytes();
+        if (new String(bytes, StandardCharsets.ISO_8859_1).isBlank()) {
+            throw new IOException("standard input is empty; pipe an object into it, or name a file instead of -");
+        }
+        return bytes;
+    }
+
+    /**
+     * XML bytes as text, decoded the way an XML parser reads a file: by its byte-order mark, else by the
+     * encoding its declaration names, else as UTF-8. Decoded as UTF-8 regardless, a file declaring ISO-8859-1
+     * lost every accented character, and a UTF-8 byte-order mark ended up in front of the declaration, where
+     * prism could not tell what the input was at all.
+     */
+    static String xmlText(byte[] bytes) {
+        if (bytes.length >= 3 && (bytes[0] & 0xFF) == 0xEF && (bytes[1] & 0xFF) == 0xBB && (bytes[2] & 0xFF) == 0xBF) {
+            return new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8);
+        }
+        if (bytes.length >= 2 && (((bytes[0] & 0xFF) == 0xFE && (bytes[1] & 0xFF) == 0xFF)
+                || ((bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xFF) == 0xFE))) {
+            return new String(bytes, StandardCharsets.UTF_16); // the mark says which byte order
+        }
+        // The declaration is ASCII in every encoding an XML file without a byte-order mark may use.
+        String head = new String(bytes, 0, Math.min(bytes.length, 200), StandardCharsets.ISO_8859_1);
+        java.util.regex.Matcher declared = DECLARED_ENCODING.matcher(head);
+        if (declared.find()) {
+            try {
+                String text = new String(bytes, java.nio.charset.Charset.forName(declared.group(1)));
+                // Decoded now, so the declaration no longer describes it: prism parses text by turning it back
+                // into UTF-8 bytes, and a declaration still naming ISO-8859-1 then decoded every accent twice.
+                return text.replaceFirst("(<\\?xml[^>]*?)\\s+encoding\\s*=\\s*[\"'][A-Za-z0-9._-]+[\"']", "$1");
+            } catch (IllegalArgumentException e) {
+                LOG.debug("unknown encoding '{}' declared; reading as UTF-8", declared.group(1));
+            }
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static final java.util.regex.Pattern DECLARED_ENCODING =
+            java.util.regex.Pattern.compile("^\\s*<\\?xml[^>]*?encoding\\s*=\\s*[\"']([A-Za-z0-9._-]+)[\"']");
+
+    /**
+     * Parse an XML file into a DOM, as {@code DOMUtil.parseFile} does but without its parser's habit of printing
+     * {@code [Fatal Error] file:1:33: …} straight to stderr before the exception — a line {@code --quiet} could
+     * not silence, ahead of midgie's own message saying the same. The error is in the exception instead.
+     *
+     * @throws IllegalStateException when the file cannot be read or is not well-formed
+     */
+    static org.w3c.dom.Document parseXmlFile(File file) {
+        try {
+            return documentBuilder().parse(file);
+        } catch (org.xml.sax.SAXParseException e) {
+            throw new IllegalStateException(located(e), e);
+        } catch (org.xml.sax.SAXException | IOException e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        }
+    }
+
+    /** As {@link #parseXmlFile}, for XML held as text: a response body, a plan file's content. */
+    static org.w3c.dom.Document parseXml(String xml) {
+        try {
+            return documentBuilder().parse(new org.xml.sax.InputSource(new java.io.StringReader(xml)));
+        } catch (org.xml.sax.SAXParseException e) {
+            throw new IllegalStateException(located(e), e);
+        } catch (org.xml.sax.SAXException | IOException e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        }
+    }
+
+    private static String located(org.xml.sax.SAXParseException e) {
+        return "line " + e.getLineNumber() + ", column " + e.getColumnNumber() + ": " + e.getMessage();
+    }
+
+    /**
+     * Namespace-aware, with no DOCTYPE allowed — midPoint XML never has one, and refusing it rules out external
+     * entities — and an error handler that throws rather than prints.
+     */
+    private static javax.xml.parsers.DocumentBuilder documentBuilder() {
+        try {
+            javax.xml.parsers.DocumentBuilderFactory factory = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
+            javax.xml.parsers.DocumentBuilder builder = factory.newDocumentBuilder();
+            builder.setErrorHandler(new org.xml.sax.ErrorHandler() {
+                @Override
+                public void warning(org.xml.sax.SAXParseException e) {
+                    LOG.debug("XML warning: {}", e.getMessage());
+                }
+
+                @Override
+                public void error(org.xml.sax.SAXParseException e) throws org.xml.sax.SAXParseException {
+                    throw e;
+                }
+
+                @Override
+                public void fatalError(org.xml.sax.SAXParseException e) throws org.xml.sax.SAXParseException {
+                    throw e;
+                }
+            });
+            return builder;
+        } catch (javax.xml.parsers.ParserConfigurationException e) {
+            throw new IllegalStateException("cannot set up an XML parser: " + e.getMessage(), e);
+        }
+    }
+
     static boolean isStdin(File file) {
         return file != null && "-".equals(file.getPath());
     }
@@ -69,7 +178,7 @@ final class Io {
             throws SchemaException, IOException {
         LOG.debug("parse object from {}", isStdin(file) ? "stdin" : file);
         if (isStdin(file)) {
-            return prismContext.parseObject(new String(System.in.readAllBytes(), StandardCharsets.UTF_8));
+            return prismContext.parseObject(xmlText(readStdin()));
         }
         try {
             return prismContext.parseObject(file);
@@ -94,7 +203,7 @@ final class Io {
         restrictToOwner(copy);
         dir.toFile().deleteOnExit();
         copy.toFile().deleteOnExit(); // registered last, so it runs first: the directory must be empty
-        Files.write(copy, System.in.readAllBytes());
+        Files.write(copy, readStdin());
         return copy.toFile();
     }
 
@@ -130,7 +239,7 @@ final class Io {
             throw cannotRead(file, e);
         }
         try {
-            DOMUtil.parseFile(file);
+            parseXmlFile(file);
         } catch (Exception e) {
             throw new IOException("cannot read " + file + ": not well-formed XML (" + e.getMessage() + ")", e);
         }

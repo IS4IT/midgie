@@ -118,11 +118,18 @@ public final class ConnectionOptions {
                     + "(useful while the server is starting).")
     int retries;
 
-    /** The resolved base URL: {@code --url} if given, else {@code MIDPOINT_URL}. Null when neither is set. */
-    /** The per-request timeout, also used for the TLS handshake in {@code init --write-cacert}. */
+    /** The longest {@code --timeout} honoured: a day. Socket timeouts are an {@code int} of milliseconds. */
+    static final int MAX_TIMEOUT_SECONDS = 86_400;
+
+    /**
+     * The per-request timeout, which also bounds connecting — a fixed 10 s there could not be raised for a
+     * slow proxy or a server still starting — and the TLS handshake in {@code init --write-cacert}.
+     */
     java.time.Duration timeout() {
-        return java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds));
+        return java.time.Duration.ofSeconds(Math.max(1, Math.min(MAX_TIMEOUT_SECONDS, timeoutSeconds)));
     }
+
+    /** The resolved base URL: {@code --url} if given, else {@code MIDPOINT_URL}. Null when neither is set. */
 
     public URI url() {
         URI raw = rawUrl();
@@ -222,6 +229,7 @@ public final class ConnectionOptions {
                 .caCert(trustedCa)
                 .proxy(proxy)
                 .requestTimeout(timeout())
+                .connectTimeout(timeout())
                 .maxRetries(retries);
         return new MidpointRestClient(url(), user, password, config);
     }

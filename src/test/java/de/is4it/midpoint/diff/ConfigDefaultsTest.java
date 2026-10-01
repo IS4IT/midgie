@@ -106,6 +106,20 @@ class ConfigDefaultsTest {
     }
 
     @Test
+    void aFileIsReadAsUtf8AndAsLatin1OnlyWhenItIsNotUtf8(@TempDir Path dir) throws Exception {
+        // Properties.load of a stream reads ISO-8859-1, so a UTF-8 'Jürgen' arrived as 'JÃ¼rgen'.
+        Path utf8 = dir.resolve("utf8.properties");
+        java.nio.file.Files.write(utf8, "user = Jürgen\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Path latin1 = dir.resolve("latin1.properties");
+        java.nio.file.Files.write(latin1, "user = Jürgen\n".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+
+        assertEquals("Jürgen", value(ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                utf8.toFile(), null), "diff", "--user"));
+        assertEquals("Jürgen", value(ConfigDefaults.load(name -> null, dir.resolve("absent-site").toFile(),
+                latin1.toFile(), null), "diff", "--user"));
+    }
+
+    @Test
     void midpointPasswordBeatsEveryPasswordSettingInTheFile(@TempDir Path dir) throws Exception {
         // The password order tries --password-env and --password-file before MIDPOINT_PASSWORD, so a file
         // naming either would otherwise outrank the variable -- the one setting where the file won.

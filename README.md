@@ -165,7 +165,7 @@ In live mode each object is addressed by the OID in its file (or `--oid`, when t
 
 ### `diff` — the minimal delta
 
-Emits the `ObjectModificationType`. The current state is a local `CURRENT` file (offline) or, with `--url`, the object on a running server. Pass `-` for either path to read from stdin.
+Emits the `ObjectModificationType`. The current state is a local `CURRENT` file (offline) or, with `--url`, the object on a running server. Pass `-` for either path to read from stdin; the input is read as a file would be, by its byte-order mark or declared encoding.
 
 ```bash
 # Offline: desired vs a saved copy of its current state
@@ -292,7 +292,7 @@ Rows written by earlier versions recorded a whole tree at one commit. A file wit
 bin/midgie init --write-cacert corp-ca.pem --url https://mp.example/midpoint
 ```
 
-It needs no account: you cannot authenticate to a server you do not trust yet. The leaf is deliberately left out — trusting it would pin one certificate and break at its next renewal — so what lands in the file is what keeps working. **The confirmation is the security**: fetching a certificate means trusting whatever answered the connection, so check the fingerprints against what the CA's owner publishes before saying yes. A non-interactive run refuses rather than assuming (`--yes` overrides, for when the fingerprints are already known).
+It needs no account: you cannot authenticate to a server you do not trust yet. The leaf is deliberately left out — trusting it would pin one certificate and break at its next renewal — so what lands in the file is what keeps working. A server that sends only its own certificate, not self-signed, leaves nothing else to take; that is written with a warning saying so, and the better fix is the issuing CA's certificate from its owner. **The confirmation is the security**: fetching a certificate means trusting whatever answered the connection, so check the fingerprints against what the CA's owner publishes before saying yes. A non-interactive run refuses rather than assuming (`--yes` overrides, for when the fingerprints are already known).
 
 `init --write-properties FILE` writes an annotated [config file](#config-file--midgieproperties) template — every option that can carry a default, commented out, with its help text, generated from the command model so it cannot describe a version of midgie that no longer exists. It needs no server at all, since it writes the file that holds the URL:
 
@@ -488,7 +488,7 @@ These stay quiet unless they mean something: only containers with a schema-decla
 | `--no-proxy HOSTS` | Comma-separated hosts that bypass it (or `no_proxy`). See below — it *replaces* the loopback default. |
 | `--proxy-user USER` | User for a proxy that demands Basic authentication. |
 | `--proxy-password`, `--proxy-password-env VAR`, `--proxy-password-file FILE` | Its password, in the account password's order minus `MIDPOINT_PASSWORD`: a `user:pass@` in `https_proxy`/`http_proxy` takes that place, and only when `--proxy-user` is not given. |
-| `--timeout SECONDS` | Per-request timeout (default 30). |
+| `--timeout SECONDS` | Per-request timeout, which also bounds connecting (default 30, at most a day). |
 | `--retries N` | Retry idempotent reads on `502`/`503`/`504`/connection-refused/timeout, `N` times with backoff (writes are never auto-retried). |
 
 #### Behind a proxy

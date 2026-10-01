@@ -30,7 +30,6 @@ import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
 import com.evolveum.midpoint.prism.path.ItemName;
 import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.schema.SchemaConstantsGenerated;
-import com.evolveum.midpoint.util.DOMUtil;
 import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectType;
 
@@ -886,7 +885,7 @@ final class RemovalDetector {
     /** Whether {@code content} is XML whose root element is in midPoint's common namespace. */
     private static boolean isMidpointObject(String content) {
         try {
-            String namespace = DOMUtil.parseDocument(content).getDocumentElement()
+            String namespace = Io.parseXml(content).getDocumentElement()
                     .getNamespaceURI();
             return SchemaConstantsGenerated.NS_COMMON.equals(namespace);
         } catch (Exception e) {

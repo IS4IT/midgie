@@ -18,7 +18,6 @@ import org.xml.sax.SAXException;
 
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
-import com.evolveum.midpoint.util.DOMUtil;
 import com.evolveum.midpoint.util.exception.SchemaException;
 import com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectListType;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectType;
@@ -159,7 +158,7 @@ public final class SchemaOptions {
         String problem;
         try {
             if (lower.endsWith(".xsd")) {
-                Element root = DOMUtil.parseFile(file).getDocumentElement();
+                Element root = Io.parseXmlFile(file).getDocumentElement();
                 if (SchemaSupport.isXsdSchema(root)) {
                     schemas.put(description, root);
                     return;

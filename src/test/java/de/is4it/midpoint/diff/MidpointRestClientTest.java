@@ -51,12 +51,24 @@ class MidpointRestClientTest {
     // stub behaviour for the retry/timeout tests
     private final AtomicInteger failuresRemaining = new AtomicInteger(0); // /users/flaky returns 503 this many times
     private final AtomicInteger flakyRequests = new AtomicInteger(0);     // total hits on /users/flaky
+    private final AtomicInteger dropsRemaining = new AtomicInteger(0);    // /orgs drops the connection this often
 
     @BeforeEach
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/midpoint/ws/rest/users", this::handle);
         server.createContext("/midpoint/ws/rest/roles", this::handle);
+        server.createContext("/midpoint/ws/rest/orgs", exchange -> {
+            // Closed without a response while drops remain: the client sees a connection that ended part way.
+            if (dropsRemaining.getAndDecrement() > 0) {
+                exchange.close();
+                return;
+            }
+            byte[] body = "<org><name>back</name></org>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
         server.start();
         host = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/midpoint");
         client = new MidpointRestClient(host, "administrator", "s3cret", false);
@@ -226,6 +238,34 @@ class MidpointRestClientTest {
 
         assertTrue(body.contains("recovered"), body);
         assertEquals(3, flakyRequests.get(), "one initial GET + two retries");
+    }
+
+    @Test
+    void aReadWhoseConnectionDropsIsRetriedAndOtherwiseNamed() throws Exception {
+        // Only a refused connection or a timeout was retried; a connection that ended part way failed the read at
+        // once, as a bare IOException that did not say which request it ended.
+        dropsRemaining.set(2);
+        MidpointRestClient retrying = clientWith(
+                new MidpointRestClient.Config().maxRetries(5).retryBaseDelay(Duration.ofMillis(2)));
+        assertTrue(retrying.getObject("orgs", oid("o")).contains("back"));
+
+        dropsRemaining.set(100);
+        MidpointRestClient.TransportException e = assertThrows(MidpointRestClient.TransportException.class,
+                () -> client.getObject("orgs", oid("o")));
+        assertTrue(e.getMessage().startsWith("GET orgs/") && e.getMessage().contains("connection"), e.getMessage());
+    }
+
+    @Test
+    void onlyTheJdksOwnProxyAuthenticationFailuresReadAsOne() {
+        IOException jdk17 = new IOException("too many authentication attempts. Limit: 3");
+        IOException jdk26 = new IOException("x", new NullPointerException(
+                "Cannot invoke \"ExchangeImpl.cancel()\" because \"this.exchImpl\" is null"));
+        IOException unrelated = new IOException("exchImpl mentioned in passing");
+
+        assertTrue(MidpointRestClient.isProxyAuthFailure(jdk17, false));
+        assertTrue(MidpointRestClient.isProxyAuthFailure(jdk26, true));
+        assertFalse(MidpointRestClient.isProxyAuthFailure(jdk26, false), "no tunnel, no CONNECT to authenticate");
+        assertFalse(MidpointRestClient.isProxyAuthFailure(unrelated, true));
     }
 
     @Test

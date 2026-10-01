@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -83,6 +84,15 @@ class ServerCertificatesTest {
         // Trusting the leaf pins one certificate and breaks at its next renewal, so anchors() normally drops
         // it in favour of the issuers — but when the server sends nothing else there is nothing else to take.
         assertEquals(chain, ServerCertificates.anchors(chain));
+    }
+
+    @Test
+    void aLoneCertificateIssuedByACaIsSaidToBePinned() throws Exception {
+        // The rig's server sends no chain. Its certificate is all there is to take, and trusting it pins it until
+        // the renewal — which used to go unsaid.
+        assertFalse(ServerCertificates.isPinnedLeaf(List.of(certificate(TEST_CA))), "a CA is its own issuer");
+        assumeTrue(Files.exists(SERVER_CERT), "no rig certificates at docker/tls");
+        assertTrue(ServerCertificates.isPinnedLeaf(List.of(certificate(SERVER_CERT))));
     }
 
     @Test

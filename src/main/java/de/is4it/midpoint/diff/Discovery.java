@@ -32,7 +32,6 @@ import org.w3c.dom.NodeList;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
-import com.evolveum.midpoint.util.DOMUtil;
 
 /**
  * Walks the {@code deploy} paths and classifies each XML/XSD file by its root element, <em>without</em>
@@ -141,7 +140,7 @@ final class Discovery {
      */
     static boolean declaresMidpointObject(File file) {
         try {
-            return COMMON_3_NAMESPACE.equals(DOMUtil.parseFile(file).getDocumentElement().getNamespaceURI());
+            return COMMON_3_NAMESPACE.equals(Io.parseXmlFile(file).getDocumentElement().getNamespaceURI());
         } catch (Exception e) {
             LOG.trace("could not re-read the root element of {}", file, e);
             return false;
@@ -152,7 +151,7 @@ final class Discovery {
             List<File> objectFiles, List<String> unreadable, List<File> generated) {
         Document document;
         try {
-            document = DOMUtil.parseFile(file);
+            document = Io.parseXmlFile(file);
         } catch (Exception e) {
             unreadable.add("cannot read " + file + ": not well-formed XML (" + e.getMessage() + ")");
             LOG.trace("classify {} → not well-formed XML", file, e);
