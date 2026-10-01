@@ -114,18 +114,18 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **C1 — Rollback run directories named to the second can collide.** `RollbackPlan.java:259`; `PlanStore.write` overwrites only same-named files, so two runs mix. — rollback group
 - [x] **C2 — Different deployment keys can share a rollback directory.** `RollbackPlan.java:387` (`root/a/b_c` vs `root/a_b/c`). — rollback group (rotation and lookup per deployment, no renaming)
 - [ ] **C3 — `diff --trace` hides key-pairing notes.** `DiffCommand.java:213` gates on `debug && !quiet`; live path uses `debug || trace`.
-- [ ] **C4 — All-in-sync interactive run records no tracking state.** `DeployCommand.java:1012-1017, 512`. `--yes` does record.
+- [x] **C4 — All-in-sync interactive run records no tracking state.** `DeployCommand.java:1012-1017, 512`. `--yes` does record. — tracking group
 - [ ] **C5 — `--oid` ignored on a schema-only run.** `DeployCommand.java:441-443`.
 - [ ] **C6 — `--dry-run`/`--plan` disagree with a real run on unprunable removals.** `DeployCommand.java:501`.
 - [ ] **C7 — Non-interactive detection breaks on JDK 22+.** `DeployCommand.java:1407-1435`. `System.console()` is non-null when redirected; EOF → ABORTED → exit 0. *Plausible* (image ships JRE 17).
 - [ ] **C8 — Applied plan can differ from the confirmed preview.** `DeployCommand.java:1013-1023`. *Plausible.* Compare `changed()` between passes or document.
 - [ ] **C9 — OID-less fragment silently joins the first of two same-named objects.** `DeployObject.java:81-91`. *Plausible.*
 - [ ] **C10 — Duplicate schema `targetNamespace` and cross-tier shared OIDs go unreported.** `DeployCommand.java:939-942`. *Plausible.*
-- [ ] **C11 — History grouping depends on file order.** `RemovalDetector.java:509-526`. *Confirmed.* False orphans and missed removals when identities are split across files.
-- [ ] **C12 — Removal policy resolved against historical name/OID.** `DeployCommand.java:683`, `RemovalDetector.java:687-690`. After a rename the new-name rule misses.
-- [ ] **C13 — `claim()` pairs history with a different object sharing Type/Name.** `RemovalDetector.java:532-541`. *Plausible.*
-- [ ] **C14 — FileTracking reads the last row per key, SyncState updates the first.** `FileTracking.java:97` vs `SyncState.java:209`. *Plausible.*
-- [ ] **C15 — State write built from the run-start table snapshot; one stale row fails the whole PATCH.** `SyncState.java:202-254`. *Plausible.*
+- [x] **C11 — History grouping depends on file order.** `RemovalDetector.java:509-526`. *Confirmed.* False orphans and missed removals when identities are split across files. — tracking group
+- [x] **C12 — Removal policy resolved against historical name/OID.** `DeployCommand.java:683`, `RemovalDetector.java:687-690`. After a rename the new-name rule misses. — tracking group
+- [x] **C13 — `claim()` pairs history with a different object sharing Type/Name.** `RemovalDetector.java:532-541`. *Plausible.* — tracking group
+- [x] **C14 — FileTracking reads the last row per key, SyncState updates the first.** `FileTracking.java:97` vs `SyncState.java:209`. *Plausible.* — tracking group
+- [x] **C15 — State write built from the run-start table snapshot; one stale row fails the whole PATCH.** `SyncState.java:202-254`. *Plausible.* — tracking group (fresh read, one retry)
 - [ ] **C16 — Policy selectors collapse whitespace in unquoted names.** `Policy.java:128, 146`.
 - [ ] **C17 — Accept mode can keep the wrong live value of a multi-valued reference.** `DiffEngine.java:721-742`. *Plausible.*
 - [ ] **C18 — Verify cache keyed on `SearchFilterType.toString()` (identity hash).** `SmartReferences.java:55`.
@@ -147,7 +147,7 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [ ] **C34 — `midgie-state` documentation has a long run of spaces.** `SyncState.java:80` (missing `\` in the text block).
 - [ ] **C35 — DESIGN claims `--rollback-plan` dir is excluded from discovery by path.** `DeployCommand.java:1192-1201` vs DESIGN:425. Harmless in practice (marker skips it); fix code or doc.
 - [ ] **C36 — TopoSort cycle breaking is O(V²·(V+E)).** `TopoSort.java:368-375`. Performance only.
-- [ ] **C37 — `RemovalDetector.livePath` pairs history values with live ones through `NaturalKeys.match`'s id step.** `RemovalDetector.java:144`. Found while fixing B3. With ids from another server a nested removal can address the wrong live entry; `heldValue`'s real-value check limits it to values equal to what the tree deployed. Run the history object through `ContainerIds.trustedOnly` against live before pairing.
+- [x] **C37 — `RemovalDetector.livePath` pairs history values with live ones through `NaturalKeys.match`'s id step.** `RemovalDetector.java:144`. Found while fixing B3. With ids from another server a nested removal can address the wrong live entry; `heldValue`'s real-value check limits it to values equal to what the tree deployed. Run the history object through `ContainerIds.trustedOnly` against live before pairing. — tracking group (pairs by key or content when the ids contradict, rather than through trustedOnly)
 - [x] **C38 — Merge sent an empty `<delete>` item delta beside an add.** `DiffEngine.applyMerge`. Found while fixing B3; every merge that kept all values a delete side would have removed emitted it, and the summary read `add+delete`. — `d5b9643`
 
 ### Code hygiene and packaging
@@ -165,8 +165,8 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] T4 — Untyped/raw protected values. — rollback group (DiffCommandTest)
 - [x] T5 — Desired ids from another environment under merge and replace. — rollback group (ForeignContainerIdTest)
 - [x] T6 — `ApplyRules` with add/delete of a parent container value. — rollback group (ApplyRulesTest)
-- [ ] T7 — `RemovalDetector` exception paths; history grouping with split identities.
-- [ ] T8 — `SyncState.apply` delta construction (add / replace-by-id / delete, duplicate keys).
+- [x] T7 — `RemovalDetector` exception paths; history grouping with split identities. — tracking group (grouping; the exception paths were covered with S/M fixes)
+- [x] T8 — `SyncState.apply` delta construction (add / replace-by-id / delete, duplicate keys). — tracking group (SyncStateTest)
 - [x] T9 — Symlinks in discovery; malformed XML files. — rollback group (DeployCliTest)
 - [ ] T10 — `--insecure` path, hostname mismatch with `--cacert`, no secrets in debug/trace output.
 - [x] T11 — Password precedence with `password` in the file; OID escaping. — rollback group (ConfigDefaultsTest, MidpointRestClientTest)

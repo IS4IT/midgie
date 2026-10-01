@@ -35,6 +35,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **An unfinished rollback plan is refused in rollback's own words**, rather than with `--apply-plan`'s advice to re-run `--plan`.
 
+- **A deploy without `--yes` over a tree already in sync records what it deployed.** It returned before writing the tracking rows, which a `--yes` run over the same tree did, so the next run judged its removals against an older revision.
+
+- **An object's last-applied files are one object whatever order they come in.** A file naming the object by OID, one by name and one by both could leave two groups behind, and what one of them dropped went unseen or read as an object that left the tree.
+
+- **A new object with an old object's name is not paired with the old one's history.** The old one's values were offered for removal from the new one, and the old one's leaving went unreported.
+
+- **Removal rules apply to the object's current name.** A policy rule naming an object by the name a commit gave it missed the removals in that same commit.
+
+- **A removal inside an entry finds that entry when the history's container ids came from another server.** Paired by id, it could address the server's other entry that happened to hold the same value.
+
+- **Writing the tracking rows survives a row another deploy moved meanwhile.** The rows were addressed by the ids read at the start of the run, and one that had moved failed the whole write. They are now built from a fresh read, retried once, and a key two runs added twice is cleaned up when next written.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

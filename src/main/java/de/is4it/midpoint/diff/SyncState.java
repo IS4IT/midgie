@@ -204,9 +204,39 @@ final class SyncState {
         if (changes.isEmpty()) {
             return;
         }
+        // The rows as they are now, not as the run found them at its start: a row another deploy removed or
+        // added since would otherwise be addressed by an id it no longer has, and that one row failed the whole
+        // PATCH. A writer between this read and the PATCH can still do it, so a failure is tried once more on
+        // a fresh read.
+        try {
+            patch(prismContext, client, reread(prismContext, client, table), changes);
+        } catch (IOException first) {
+            LOG.debug("writing {} failed; trying once more on a fresh read", TABLE_NAME, first);
+            try {
+                patch(prismContext, client, reread(prismContext, client, table), changes);
+            } catch (IOException second) {
+                second.addSuppressed(first);
+                throw second;
+            }
+        }
+    }
+
+    private static PrismObject<? extends Objectable> reread(PrismContext prismContext, MidpointRestClient client,
+            PrismObject<? extends Objectable> table) throws SchemaException, IOException {
+        return prismContext.parseObject(client.getObject(REST_TYPE, table.getOid(), "row"));
+    }
+
+    private static void patch(PrismContext prismContext, MidpointRestClient client,
+            PrismObject<? extends Objectable> table, Changes changes) throws SchemaException, IOException {
+        // Two first deploys of one file at the same time can each add its row. The first is the one read and the
+        // one written; the others are removed as soon as a run writes that key, so a later run cannot go on
+        // reading one row while writing another.
         Map<String, Row> byKey = new LinkedHashMap<>();
+        List<Row> duplicates = new ArrayList<>();
         for (Row row : rows(table)) {
-            byKey.putIfAbsent(row.key(), row);
+            if (byKey.putIfAbsent(row.key(), row) != null) {
+                duplicates.add(row);
+            }
         }
         S_ItemEntry delta = prismContext.deltaFor(LookupTableType.class);
         int written = 0;
@@ -241,6 +271,15 @@ final class SyncState {
             if (existing != null && existing.id() != null) {
                 LookupTableRowType row = new LookupTableRowType();
                 row.setId(existing.id());
+                delta = delta.item(LookupTableType.F_ROW).delete(row.asPrismContainerValue());
+                written++;
+            }
+        }
+        for (Row duplicate : duplicates) {
+            if (duplicate.id() != null
+                    && (changes.set.containsKey(duplicate.key()) || changes.delete.contains(duplicate.key()))) {
+                LookupTableRowType row = new LookupTableRowType();
+                row.setId(duplicate.id());
                 delta = delta.item(LookupTableType.F_ROW).delete(row.asPrismContainerValue());
                 written++;
             }

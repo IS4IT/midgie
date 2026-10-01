@@ -15,11 +15,14 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.prism.delta.ItemDelta;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.schema.MidPointPrismContextFactory;
+import com.evolveum.midpoint.xml.ns._public.common.common_3.AssignmentType;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.RoleType;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -147,6 +150,95 @@ class RemovalDetectorTest {
                 "the name is still declared by the surviving fragment: " + removals);
         assertFalse(removals.stream().anyMatch(r -> r.path.contains("subtype")),
                 "and so is the subtype: " + removals);
+    }
+
+    @Test
+    void historySplitByOidAndByNameIsOneObjectWhateverOrderItsFilesComeIn(@TempDir Path dir) throws Exception {
+        // a.xml names the role by OID only, b.xml by name only, c.xml by both. Read in that order, a and b made
+        // two groups and c joined only the first: b's history was nobody's, and what it dropped went unseen.
+        Path a = dir.resolve("a.xml");
+        Path b = dir.resolve("b.xml");
+        Path c = dir.resolve("c.xml");
+        Files.writeString(a, "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
+                + "  <description>by oid</description>\n</role>", StandardCharsets.UTF_8);
+        Files.writeString(b, "<role xmlns=\"" + NS + "\">\n  <name>Removal Probe</name>\n"
+                + "  <subtype>alpha</subtype>\n  <subtype>beta</subtype>\n</role>", StandardCharsets.UTF_8);
+        Files.writeString(c, role("<riskLevel>low</riskLevel>"), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(b, "<role xmlns=\"" + NS + "\">\n  <name>Removal Probe</name>\n"
+                + "  <subtype>alpha</subtype>\n</role>", StandardCharsets.UTF_8);
+
+        RemovalDetector detector = new RemovalDetector(prismContext, GitRevision.of(dir.toFile()), first);
+        List<RemovalDetector.Removal> removals = detector.detect(unitsOf(a, b, c));
+
+        assertEquals(List.of("subtype"), removals.stream().map(r -> r.path).toList(), removals.toString());
+        assertEquals("beta", removals.get(0).value);
+        assertTrue(detector.orphaned().isEmpty(), "nothing left the tree: " + detector.orphaned().size());
+    }
+
+    @Test
+    void aNewObjectWithAnOldOnesNameIsNotPairedWithItsHistory(@TempDir Path dir) throws Exception {
+        // The old role's file was deleted and a new role of the same name added. Paired by name, the old one's
+        // values were offered for removal from the new one, and the old one's leaving went unreported.
+        Path old = dir.resolve("old.xml");
+        Files.writeString(old, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.delete(old);
+        Path replacement = dir.resolve("new.xml");
+        Files.writeString(replacement, "<role xmlns=\"" + NS + "\" oid=\"55555555-0000-0000-0000-00000000dddd\">\n"
+                + "  <name>Removal Probe</name>\n</role>", StandardCharsets.UTF_8);
+
+        RemovalDetector detector = new RemovalDetector(prismContext, GitRevision.of(dir.toFile()), first);
+        List<RemovalDetector.Removal> removals = detector.detect(unitsOf(replacement));
+
+        assertTrue(removals.isEmpty(), "the new role never held the old one's values: " + removals);
+        assertEquals(1, detector.orphaned().size(), "the old role left the tree and is reported");
+        assertTrue(detector.orphaned().get(0).sourceFile.contains("old.xml"));
+    }
+
+    @Test
+    void aRemovalIsJudgedByTheRulesOfTheObjectsNewName(@TempDir Path dir) throws Exception {
+        // The commit renamed the role and dropped a value under a rule written for the new name. Resolved against
+        // the history's name, the rule missed and the value was removed.
+        Path file = dir.resolve("role.xml");
+        Files.writeString(file, role("<subtype>alpha</subtype>"), StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, role("").replace("Removal Probe", "Renamed Probe"), StandardCharsets.UTF_8);
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+        assertEquals(1, removals.size(), removals.toString());
+
+        List<RemovalDetector.Removal> kept = DeployCommand.withoutRestricted(
+                policy(dir, "RoleType/Renamed Probe/subtype apply=if-absent"), baseline(), removals);
+
+        assertTrue(kept.isEmpty(), "the rule for the role's current name applies: " + kept);
+    }
+
+    @Test
+    void aNestedRemovalUnderIdsFromAnotherServerReachesTheEntryItWasIn(@TempDir Path dir) throws Exception {
+        // The file was exported from DEV, ids and all; on this server id 1 is the other inducement. Paired by id,
+        // the description dropped from the inducement of A was deleted from the inducement of B, which holds
+        // the same text.
+        String a = "11111111-0000-0000-0000-00000000000a";
+        String b = "11111111-0000-0000-0000-00000000000b";
+        Path file = dir.resolve("role.xml");
+        Files.writeString(file, role(inducement(1, a, "<description>note</description>") + inducement(2, b, "")),
+                StandardCharsets.UTF_8);
+        String first = commit(dir);
+        Assumptions.assumeTrue(first != null, "git is not usable here");
+        Files.writeString(file, role(inducement(1, a, "") + inducement(2, b, "")), StandardCharsets.UTF_8);
+        List<RemovalDetector.Removal> removals = detect(dir, first, file);
+        assertEquals(1, removals.size(), removals.toString());
+        PrismObject<? extends Objectable> live = prismContext.parseObject(role(
+                inducement(1, b, "<description>note</description>") + inducement(2, a, "<description>note</description>")));
+
+        ObjectDelta<? extends Objectable> delta = RemovalDetector.pruneDelta(prismContext, OID, removals, live);
+
+        assertEquals(1, delta.getModifications().size(), delta.toString());
+        assertEquals(ItemPath.create(RoleType.F_INDUCEMENT, 2L, AssignmentType.F_DESCRIPTION),
+                delta.getModifications().iterator().next().getPath(), "the inducement of A, which is 2 here");
     }
 
     @Test
@@ -749,6 +841,11 @@ class RemovalDetectorTest {
     private static String role(String body) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n"
                 + "  <name>Removal Probe</name>\n  " + body + "\n</role>";
+    }
+
+    private static String inducement(long id, String target, String extra) {
+        return "<inducement id=\"" + id + "\"><targetRef oid=\"" + target + "\" type=\"RoleType\"/>" + extra
+                + "</inducement>";
     }
 
     private static String template(String body) {

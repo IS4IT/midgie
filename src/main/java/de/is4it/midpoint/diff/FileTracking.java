@@ -94,10 +94,10 @@ final class FileTracking {
             if (value.startsWith("{")) {
                 FileRow file = parseFileRow(path, key, value, row.label());
                 if (file != null) {
-                    files.put(path, file);
+                    files.putIfAbsent(path, file); // the row SyncState.apply updates; see there for duplicates
                 }
             } else if (value.matches("[0-9a-fA-F]{7,40}(-dirty)?")) {
-                trees.put(path, new TreeRow(path, key, value));
+                trees.putIfAbsent(path, new TreeRow(path, key, value));
             }
         }
         LOG.debug("tracking {}: {} file row(s), {} tree row(s) from earlier versions, scope {}", namespace,

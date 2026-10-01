@@ -244,7 +244,10 @@ public class DeployCommand implements Callable<Integer> {
     /** What the writing passes did, for the deploy: row; failed is settled once retries are over. */
     private final Tally sent = new Tally();
 
-    /** Whether a writing pass ran at all — a run declined or refused at the prompt sent nothing. */
+    /**
+     * Whether the run got as far as writing — a writing pass ran, or the preview found nothing to write. A run
+     * declined or refused at the prompt did not, and records nothing.
+     */
     private boolean sentSomething;
 
     /** Removals that cannot be turned into a delete; they fail the run so the revision stays put. */
@@ -739,8 +742,7 @@ public class DeployCommand implements Callable<Integer> {
         }
         List<RemovalDetector.Removal> kept = new ArrayList<>();
         for (RemovalDetector.Removal removal : removals) {
-            String type = (removal.objectClass != null) ? removal.objectClass.getSimpleName() : "?";
-            ApplyRules apply = policy.resolveFor(type, removal.objectName, removal.oid, baseline).apply;
+            ApplyRules apply = policy.resolveFor(typeOf(removal), nameOf(removal), oidOf(removal), baseline).apply;
             ApplyRules.Mode mode = (removal.itemPath != null) ? apply.modeOf(removal.itemPath)
                     : apply.modeOf(removal.path);
             if (mode != ApplyRules.Mode.ALWAYS) {
@@ -750,6 +752,27 @@ public class DeployCommand implements Callable<Integer> {
             }
         }
         return kept;
+    }
+
+    /*
+     * The object a removal's rules are looked up for: the one in the tree, as the change itself is, and the
+     * history's only when the removal has none. Resolved against the history, a rule naming an object by its new
+     * name missed every removal made in the commit that renamed it.
+     */
+
+    private static String typeOf(RemovalDetector.Removal removal) {
+        if (removal.unit != null && removal.unit.typeName() != null) {
+            return removal.unit.typeName();
+        }
+        return (removal.objectClass != null) ? removal.objectClass.getSimpleName() : "?";
+    }
+
+    private static String nameOf(RemovalDetector.Removal removal) {
+        return (removal.unit != null && removal.unit.name() != null) ? removal.unit.name() : removal.objectName;
+    }
+
+    private static String oidOf(RemovalDetector.Removal removal) {
+        return (removal.unit != null && removal.unit.oid() != null) ? removal.unit.oid() : removal.oid;
     }
 
     /**
@@ -1134,6 +1157,13 @@ public class DeployCommand implements Callable<Integer> {
             Tally preview = pass(reconciler, units, true, false);
             emitSummary(preview, true);
             if (preview.changed() == 0) {
+                // Nothing to confirm, and nothing a writing pass would do differently: the objects are deployed
+                // as they are. Without this an interactive run over an in-sync tree never moved the rows, which
+                // --yes over the same tree did, so the removals of later commits were judged against old history.
+                appliedUnits.addAll(preview.landedUnits);
+                sent.addCounts(preview);
+                sent.failed = preview.failed;
+                sentSomething = true;
                 return preview.failed > 0 ? EXIT_ERROR : 0;
             }
             Integer stop = confirmOnce(preview.changed());
@@ -1194,8 +1224,11 @@ public class DeployCommand implements Callable<Integer> {
                 record(tally, unit, action, outcome, preview);
                 boolean landed = action == Reconciler.Action.CREATE || action == Reconciler.Action.PATCH
                         || action == Reconciler.Action.IN_SYNC;
-                if (!preview && landed && !outcome.removalsDeferred) {
-                    appliedUnits.add(unit);
+                if (landed && !outcome.removalsDeferred) {
+                    tally.landedUnits.add(unit);
+                    if (!preview) {
+                        appliedUnits.add(unit);
+                    }
                 }
             } catch (Exception e) {
                 if (isFatal(e)) {
@@ -1983,6 +2016,7 @@ public class DeployCommand implements Callable<Integer> {
         int failed;
         int removed;   // values dropped from the tree that a PATCH deleted
         final List<DeployObject> failedUnits = new ArrayList<>();
+        final List<DeployObject> landedUnits = new ArrayList<>();   // on the server as the tree has them
         Reconciler.Outcome lastOutcome;   // what --format renders, when the run holds one object
 
         int changed() {

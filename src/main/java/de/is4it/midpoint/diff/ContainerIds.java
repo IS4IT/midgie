@@ -108,7 +108,7 @@ final class ContainerIds {
     }
 
     /** The first sign that {@code desired}'s ids were numbered on another server, or {@code null}. */
-    private static String contradiction(PrismContainer<?> desired, PrismContainer<?> live) {
+    static String contradiction(PrismContainer<?> desired, PrismContainer<?> live) {
         NaturalKeyDefinition key = NaturalKeys.of(desired);
         for (PrismContainerValue<?> value : desired.getValues()) {
             Long id = value.getId();

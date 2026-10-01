@@ -904,6 +904,34 @@ class LiveIntegrationTest {
     }
 
     @Test
+    void aRunWithNothingToConfirmRecordsItsRevisionLikeOneWithYes(@TempDir Path dir) throws Exception {
+        // Without --yes, a tree already in sync returned before the rows were written, and the revision the
+        // next run judges removals against stayed where it was.
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Path file = Files.createDirectories(tree.resolve("roles")).resolve("role.xml");
+        Files.writeString(file, trackedRole(List.of("alpha"), SUPERUSER_ROLE_OID), StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        CliResult first = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(0, first.exit, first.out + first.err);
+
+        Files.writeString(tree.resolve("NOTES.txt"), "not an object\n", StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult second = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--no-rollback-plan");
+
+        assertEquals(0, second.exit, second.out + second.err);
+        assertTrue(second.out.contains("Recorded 1 applied object(s)"), second.out);
+        String ns = namespaceOf(tree);
+        SyncState.Row deployRow = stateRows().stream().filter(r -> r.key().equals("deploy:" + ns)).findFirst()
+                .orElseThrow();
+        assertTrue(deployRow.value().contains("\"commit\":\"" + gitOut(tree, "rev-parse", "HEAD") + "\"")
+                && deployRow.value().contains("\"in-sync\":1"), deployRow.value());
+    }
+
+    @Test
     void anObjectThatWasNotAppliedKeepsItsRecordWhileTheRestMovesOn(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteDeployObjects();

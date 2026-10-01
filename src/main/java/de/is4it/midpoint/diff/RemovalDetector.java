@@ -143,7 +143,7 @@ final class RemovalDetector {
                 if (!(item instanceof PrismContainer<?> container)) {
                     return null;
                 }
-                PrismContainerValue<?> match = NaturalKeys.match(container, step.value(), step.value().getId());
+                PrismContainerValue<?> match = pair(container, step.value());
                 if (match == null || match.getId() == null) {
                     return null; // a value without an id cannot be addressed by a delete path
                 }
@@ -153,6 +153,35 @@ final class RemovalDetector {
             }
             segments.addAll(relativePath().getSegments());
             return ItemPath.create(segments.toArray());
+        }
+
+        /**
+         * The value of {@code live} that is {@code applied}'s entry: by container id and natural key, the diff's
+         * pairing — unless the two lists show the history's ids were numbered on another server (see
+         * {@link ContainerIds}), when an id names some other entry; then by key alone, and failing that by being
+         * the one live value equal to it.
+         */
+        private static PrismContainerValue<?> pair(PrismContainer<?> live, PrismContainerValue<?> applied) {
+            Long id = applied.getId();
+            boolean foreignIds = id != null && applied.getParent() instanceof PrismContainer<?> history
+                    && ContainerIds.contradiction(history, live) != null;
+            if (!foreignIds) {
+                return NaturalKeys.match(live, applied, id);
+            }
+            PrismContainerValue<?> byKey = NaturalKeys.match(live, applied, null);
+            if (byKey != null) {
+                return byKey;
+            }
+            PrismContainerValue<?> equal = null;
+            for (PrismContainerValue<?> value : live.getValues()) {
+                if (EquivalenceStrategy.REAL_VALUE.equals(applied, value)) {
+                    if (equal != null) {
+                        return null; // two candidates: not this pass's to choose
+                    }
+                    equal = value;
+                }
+            }
+            return equal;
         }
 
         /** The item's path below the innermost step (the whole path when there is none). */
@@ -357,7 +386,7 @@ final class RemovalDetector {
         List<LastApplied> lastApplied = lastAppliedObjects(units);
 
         for (DeployObject unit : units) {
-            LastApplied previous = claim(lastApplied, identityKeysOf(unit.object()));
+            LastApplied previous = claim(lastApplied, unit.object());
             if (previous == null) {
                 continue; // an object that did not exist at the recorded revision
             }
@@ -403,6 +432,7 @@ final class RemovalDetector {
         private final List<PrismObject<? extends Objectable>> objects = new ArrayList<>();
         private final List<String> paths = new ArrayList<>();
         private final Set<String> keys = new LinkedHashSet<>();
+        private final Set<String> oids = new LinkedHashSet<>();
         private boolean claimed;
         private boolean inScope;
         private boolean united;
@@ -413,7 +443,32 @@ final class RemovalDetector {
             objects.add(object);
             paths.add(path);
             keys.addAll(identityKeysOf(object));
+            if (object.getOid() != null && !object.getOid().isBlank()) {
+                oids.add(object.getOid());
+            }
             inScope |= pathInScope;
+        }
+
+        /** Take in another group found to describe the same object. */
+        void absorb(LastApplied other) {
+            objects.addAll(other.objects);
+            paths.addAll(other.paths);
+            keys.addAll(other.keys);
+            oids.addAll(other.oids);
+            inScope |= other.inScope;
+        }
+
+        /** Whether {@code other} can be the same object: they do not name two different OIDs. */
+        boolean agreesWith(LastApplied other) {
+            return oids.isEmpty() || other.oids.isEmpty() || oids.equals(other.oids);
+        }
+
+        /**
+         * Whether an object with {@code oid} can be this group's: always when either side has no OID, else only
+         * when the OIDs agree. Two objects sharing a type and a name are still two objects.
+         */
+        boolean admits(String oid) {
+            return oid == null || oid.isBlank() || oids.isEmpty() || oids.contains(oid);
         }
 
         /** The combined object, or {@code null} when its files contradict each other past combining. */
@@ -529,17 +584,28 @@ final class RemovalDetector {
             if (object == null) {
                 continue; // cannot be read as an object
             }
-            List<String> keys = identityKeysOf(object);
-            LastApplied group = null;
-            for (String key : keys) {
-                group = byKey.get(key);
-                if (group != null) {
-                    break;
+            // Every group this file shares a form of identity with is the same object, and they become one:
+            // a file naming it by OID, one by name and one by both used to leave two groups behind, depending on
+            // the order the files came in, and one of them read as an object that left the tree.
+            List<LastApplied> matching = new ArrayList<>();
+            for (String key : identityKeysOf(object)) {
+                LastApplied found = byKey.get(key);
+                if (found != null && found.admits(object.getOid()) && !matching.contains(found)) {
+                    matching.add(found);
                 }
             }
-            if (group == null) {
+            LastApplied group;
+            if (matching.isEmpty()) {
                 group = new LastApplied();
                 groups.add(group);
+            } else {
+                group = matching.get(0);
+                for (LastApplied other : matching.subList(1, matching.size())) {
+                    if (group.agreesWith(other)) {
+                        group.absorb(other);
+                        groups.remove(other);
+                    }
+                }
             }
             group.add(object, path, snapshot.inScope());
             // Under every form it identifies itself by, since two files of one object need not agree on
@@ -551,9 +617,17 @@ final class RemovalDetector {
         return groups;
     }
 
-    /** The last-applied object sharing any identity form with {@code keys}, marked as claimed. */
-    private static LastApplied claim(List<LastApplied> lastApplied, List<String> keys) {
+    /**
+     * The last-applied object sharing any identity form with {@code unit}, marked as claimed — never one with
+     * another OID: a role deleted from the tree and a new one of the same name are two objects, and pairing them
+     * offered the old one's values for removal from the new one and hid that the old one had left the tree.
+     */
+    private static LastApplied claim(List<LastApplied> lastApplied, PrismObject<? extends Objectable> unit) {
+        List<String> keys = identityKeysOf(unit);
         for (LastApplied candidate : lastApplied) {
+            if (!candidate.admits(unit.getOid())) {
+                continue;
+            }
             for (String key : keys) {
                 if (candidate.keys.contains(key)) {
                     candidate.claimed = true;
