@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.Collection;
 import java.util.Set;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -284,7 +285,9 @@ public final class DiffEngine {
         // First, before anything else reads the delta: drop the differences that are not differences at all,
         // only midPoint having resolved a smart reference. Ahead of applyMerge because merge would otherwise
         // strip the delete side of a merge-designated reference path and leave nothing to pair the add with.
-        List<String> smartReferences = stripResolvedSmartReferences(delta, smartRefs);
+        List<String> smartReferenceWarnings = new ArrayList<>();
+        List<String> smartReferences = stripResolvedSmartReferences(delta, smartRefs, multiValue, desired,
+                smartReferenceWarnings);
         smartReferences.addAll(nested.paths());
 
         // Before merge and scope, so that it sees every delete of a nested item and can report what it keeps:
@@ -331,7 +334,8 @@ public final class DiffEngine {
 
         // Static input checks: a fragment that omits a natural key, or only partially declares a keyed
         // container on replace, silently destroys live state. Reported before anything is written.
-        List<String> inputWarnings = findInputWarnings(desired, live, multiValue);
+        List<String> inputWarnings = new ArrayList<>(findInputWarnings(desired, live, multiValue));
+        inputWarnings.addAll(smartReferenceWarnings);
 
         LOG.debug("diff {} (scope={}, {}) → {} modification(s), removes {} value(s); mergeFallback={}, "
                 + "protectedSkipped={}, accruedInPlace={}, inputWarnings={}, smartRefs={}, equivalence={}",
@@ -774,27 +778,54 @@ public final class DiffEngine {
      * fields in the schema — an object collection's filter, a GUI view's, a policy constraint's — are
      * property values and cannot reach this pass.
      */
-    private static List<String> stripResolvedSmartReferences(ObjectDelta<?> delta, SmartReferenceCheck check) {
+    @SuppressWarnings({"unchecked", "rawtypes"}) // a replace of the item's own values, typed by construction
+    private static List<String> stripResolvedSmartReferences(ObjectDelta<?> delta, SmartReferenceCheck check,
+            MultiValueStrategy multiValue, PrismObject<?> desired, List<String> warnings) {
         List<String> paths = new ArrayList<>();
         List<ItemDelta<?, ?>> emptied = new ArrayList<>();
+        Map<ItemDelta<?, ?>, ItemDelta<?, ?>> replaced = new LinkedHashMap<>();
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
             List<PrismReferenceValue> desiredValues = referenceValues(mod.getValuesToAdd());
             List<PrismReferenceValue> liveValues = referenceValues(mod.getValuesToDelete());
             if (desiredValues.isEmpty() || liveValues.isEmpty()) {
                 continue;
             }
-            // Identity, not equality: two reference values can be equal by content and must still be
-            // consumed separately.
-            Set<PrismReferenceValue> takenLive = Collections.newSetFromMap(new IdentityHashMap<>());
-            List<PrismReferenceValue> resolvedDesired = new ArrayList<>();
-            for (PrismReferenceValue desiredValue : desiredValues) {
-                PrismReferenceValue match = matchingResolution(desiredValue, liveValues, takenLive, check);
-                if (match != null) {
-                    takenLive.add(match);
-                    resolvedDesired.add(desiredValue);
+            Resolutions resolutions = pairResolutions(desiredValues, liveValues, check);
+            List<PrismReferenceValue> resolvedDesired = new ArrayList<>(resolutions.pairs().keySet());
+            List<PrismReferenceValue> takenLive = new ArrayList<>(resolutions.pairs().values());
+            if (resolutions.isAmbiguous()) {
+                // Which live value is which filter's resolution cannot be told offline. Pairing them one by one
+                // decided it arbitrarily: with more values than filters, which value was left to delete; with
+                // fewer, which filter was sent again — and midPoint refuses a filter whose resolution the object
+                // already holds (a duplicate row), failing the whole PATCH.
+                List<PrismReferenceValue> open = resolutions.openDesired();
+                List<PrismReferenceValue> openLive = resolutions.openLive();
+                if (multiValue.isMerge(mod.getPath())) {
+                    // Merge deletes none of the values anyway; nothing is sent for the filters either.
+                    resolvedDesired.addAll(open);
+                    takenLive.addAll(openLive);
+                    if (openLive.size() < open.size()) {
+                        warnings.add("'" + mod.getPath() + "' holds " + openLive.size() + " value(s) for "
+                                + open.size() + " filter(s), and which filter's resolution is missing cannot be "
+                                + "told offline, so none of them is sent; --smart-refs verify asks the server");
+                    }
+                } else {
+                    // Replace: the item becomes the tree's values, and midPoint resolves the filters into
+                    // exactly their resolutions.
+                    Item<?, ?> declared = desired.findItem(mod.getPath());
+                    if (declared != null && mod.getDefinition() != null) {
+                        ItemDelta replace = mod.getDefinition().createEmptyDelta(mod.getPath());
+                        List<PrismValue> values = new ArrayList<>();
+                        declared.getValues().forEach(value -> values.add(value.clone()));
+                        replace.setValuesToReplace(values);
+                        replaced.put(mod, replace);
+                        LOG.debug("{}: which live values the filters resolved to cannot be told offline; "
+                                + "replacing the item for midPoint to resolve", mod.getPath());
+                        continue;
+                    }
                 }
             }
-            if (resolvedDesired.isEmpty()) {
+            if (resolvedDesired.isEmpty() && takenLive.isEmpty()) {
                 continue;
             }
             resolvedDesired.forEach(mod::removeValueToAdd);
@@ -805,32 +836,142 @@ public final class DiffEngine {
             }
         }
         emptied.forEach(delta::removeModification);
+        for (Map.Entry<ItemDelta<?, ?>, ItemDelta<?, ?>> entry : replaced.entrySet()) {
+            delta.removeModification(entry.getKey());
+            delta.addModification((ItemDelta) entry.getValue());
+        }
         return paths;
     }
 
-    /** The live value that is {@code desired}'s resolution, or {@code null} when none of them is. */
-    static PrismReferenceValue matchingResolution(PrismReferenceValue desired,
-            List<PrismReferenceValue> liveValues, Set<PrismReferenceValue> taken, SmartReferenceCheck check) {
-        if (desired.getOid() != null || desired.getFilter() == null) {
-            return null; // not a smart reference: it names its target outright, or names nothing
+    /**
+     * How a list of desired smart references pairs with the live values their filters may have resolved to.
+     *
+     * @param pairs       each desired value whose resolution is told, to that live value
+     * @param openDesired desired values that could be the resolution of more than one live value, or share one
+     * @param openLive    the live values those could be
+     */
+    record Resolutions(Map<PrismReferenceValue, PrismReferenceValue> pairs, List<PrismReferenceValue> openDesired,
+            List<PrismReferenceValue> openLive) {
+
+        boolean isAmbiguous() {
+            return !openDesired.isEmpty() && !openLive.isEmpty();
         }
-        for (PrismReferenceValue live : liveValues) {
-            if (taken.contains(live) || live.getOid() == null) {
-                continue;
+    }
+
+    /**
+     * Pair desired smart references with live values, only as far as the pairing can be told. Under
+     * {@code accept} any OID of the right type can be a filter's resolution, so with two filters and two live
+     * values either pairing is possible, and taking the first match that passes decided arbitrarily which live
+     * value was left over — and so deleted, or which filter was sent again while another's resolution stayed
+     * missing.
+     *
+     * <p>A desired value is paired when it has one candidate left that no other desired value could take. When
+     * what remains has as many live values as filters, every value is taken whichever way they pair, so they are
+     * paired in order. Anything else is left open, for the caller to settle by what the item's strategy makes
+     * of it. {@code verify} names one OID per filter, so it is never open.
+     */
+    static Resolutions pairResolutions(List<PrismReferenceValue> desiredValues, List<PrismReferenceValue> liveValues,
+            SmartReferenceCheck check) {
+        Map<PrismReferenceValue, List<PrismReferenceValue>> candidates = new IdentityHashMap<>();
+        List<PrismReferenceValue> open = new ArrayList<>();
+        for (PrismReferenceValue desired : desiredValues) {
+            if (desired.getOid() != null || desired.getFilter() == null) {
+                continue; // not a smart reference: it names its target outright, or names nothing
             }
-            // A relation or target type spelled out in desired and contradicted by live is a real change,
-            // whatever the filter says; desired leaving them out is the normal shape.
-            if (desired.getRelation() != null && !desired.getRelation().equals(live.getRelation())) {
-                continue;
+            List<PrismReferenceValue> could = new ArrayList<>();
+            for (PrismReferenceValue live : liveValues) {
+                if (couldBeResolution(desired, live, check)) {
+                    could.add(live);
+                }
             }
-            if (desired.getTargetType() != null && !desired.getTargetType().equals(live.getTargetType())) {
-                continue;
-            }
-            if (check.isResolutionOf(live, desired)) {
-                return live;
+            if (!could.isEmpty()) {
+                candidates.put(desired, could);
+                open.add(desired);
             }
         }
-        return null;
+        Map<PrismReferenceValue, PrismReferenceValue> pairs = new IdentityHashMap<>();
+        Set<PrismReferenceValue> taken = Collections.newSetFromMap(new IdentityHashMap<>());
+        boolean progress = true;
+        while (progress) {
+            progress = false;
+            for (Iterator<PrismReferenceValue> it = open.iterator(); it.hasNext(); ) {
+                PrismReferenceValue desired = it.next();
+                List<PrismReferenceValue> left = untaken(candidates.get(desired), taken);
+                if (left.isEmpty()) {
+                    it.remove(); // its resolution is not among the live values: a real add
+                    progress = true;
+                } else if (left.size() == 1 && !wantedByAnother(left.get(0), desired, open, candidates, taken)) {
+                    pairs.put(desired, left.get(0));
+                    taken.add(left.get(0));
+                    it.remove();
+                    progress = true;
+                }
+            }
+        }
+        List<PrismReferenceValue> openLive = new ArrayList<>();
+        Set<PrismReferenceValue> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (PrismReferenceValue desired : open) {
+            for (PrismReferenceValue live : untaken(candidates.get(desired), taken)) {
+                if (seen.add(live)) {
+                    openLive.add(live);
+                }
+            }
+        }
+        if (!open.isEmpty() && openLive.size() == open.size()) {
+            Map<PrismReferenceValue, PrismReferenceValue> inOrder = new IdentityHashMap<>();
+            Set<PrismReferenceValue> used = Collections.newSetFromMap(new IdentityHashMap<>());
+            for (PrismReferenceValue desired : open) {
+                for (PrismReferenceValue live : untaken(candidates.get(desired), taken)) {
+                    if (used.add(live)) {
+                        inOrder.put(desired, live);
+                        break;
+                    }
+                }
+            }
+            if (inOrder.size() == open.size()) {
+                pairs.putAll(inOrder);
+                return new Resolutions(pairs, List.of(), List.of());
+            }
+        }
+        return new Resolutions(pairs, List.copyOf(open), List.copyOf(openLive));
+    }
+
+    private static List<PrismReferenceValue> untaken(List<PrismReferenceValue> values, Set<PrismReferenceValue> taken) {
+        List<PrismReferenceValue> left = new ArrayList<>();
+        for (PrismReferenceValue value : values) {
+            if (!taken.contains(value)) {
+                left.add(value);
+            }
+        }
+        return left;
+    }
+
+    private static boolean wantedByAnother(PrismReferenceValue live, PrismReferenceValue desired,
+            List<PrismReferenceValue> open, Map<PrismReferenceValue, List<PrismReferenceValue>> candidates,
+            Set<PrismReferenceValue> taken) {
+        for (PrismReferenceValue other : open) {
+            if (other != desired && untaken(candidates.get(other), taken).contains(live)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether {@code live} can be what {@code desired}'s filter resolved to. */
+    private static boolean couldBeResolution(PrismReferenceValue desired, PrismReferenceValue live,
+            SmartReferenceCheck check) {
+        if (live.getOid() == null) {
+            return false;
+        }
+        // A relation or target type spelled out in desired and contradicted by live is a real change,
+        // whatever the filter says; desired leaving them out is the normal shape.
+        if (desired.getRelation() != null && !desired.getRelation().equals(live.getRelation())) {
+            return false;
+        }
+        if (desired.getTargetType() != null && !desired.getTargetType().equals(live.getTargetType())) {
+            return false;
+        }
+        return check.isResolutionOf(live, desired);
     }
 
     private static List<PrismReferenceValue> referenceValues(Collection<?> values) {

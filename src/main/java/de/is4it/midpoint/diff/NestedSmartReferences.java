@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import javax.xml.namespace.QName;
@@ -182,14 +183,15 @@ final class NestedSmartReferences {
 
     private static boolean substituteValues(PrismReference desired, PrismReference live,
             DiffEngine.SmartReferenceCheck check) {
-        List<PrismReferenceValue> liveValues = new ArrayList<>(live.getValues());
-        Set<PrismReferenceValue> takenLive = Collections.newSetFromMap(new IdentityHashMap<>());
+        // Only the pairings that can be told: a filter that could be either of two live values stays a filter,
+        // the entry then differs, and midPoint resolves it when the entry is sent.
+        Map<PrismReferenceValue, PrismReferenceValue> pairs = DiffEngine.pairResolutions(
+                new ArrayList<>(desired.getValues()), new ArrayList<>(live.getValues()), check).pairs();
         List<PrismReferenceValue> result = new ArrayList<>();
         boolean replaced = false;
         for (PrismReferenceValue value : desired.getValues()) {
-            PrismReferenceValue match = DiffEngine.matchingResolution(value, liveValues, takenLive, check);
+            PrismReferenceValue match = pairs.get(value);
             if (match != null) {
-                takenLive.add(match);
                 result.add(match.clone());
                 replaced = true;
             } else {

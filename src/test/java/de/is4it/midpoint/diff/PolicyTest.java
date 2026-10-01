@@ -56,6 +56,15 @@ class PolicyTest {
     }
 
     @Test
+    void anUnquotedNameKeepsTheSpacesItWasWrittenWith(@TempDir Path dir) throws IOException {
+        // The words used to be rejoined with one space, so the rule named 'Help Desk' instead of 'Help  Desk'.
+        Policy policy = load(dir, "RoleType/Help  Desk scope=full");
+
+        assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("RoleType", "Help  Desk", OID, baseline()).scope);
+        assertEquals(DiffEngine.Scope.PRESENT, policy.resolveFor("RoleType", "Help Desk", OID, baseline()).scope);
+    }
+
+    @Test
     void objectSelectorSetsScopeForTheMatchingObjectOnly(@TempDir Path dir) throws Exception {
         Policy policy = load(dir, "RoleType/Manager scope=full");
         assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("RoleType", "Manager", OID, baseline()).scope);

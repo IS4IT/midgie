@@ -138,9 +138,16 @@ final class FragmentUnion {
     private static void mergeValues(Item<?, ?> target, Item<?, ?> source, ItemPath path, Merge origin)
             throws SchemaException {
         ItemDefinition<?> definition = target.getDefinition();
-        boolean singleValue = definition != null && definition.isSingleValue();
+        boolean known = definition != null && !definition.isDynamic();
+        boolean singleValue = known && definition.isSingleValue();
         for (PrismValue sourceValue : source.getValues()) {
             if (!singleValue) {
+                if (!known && !target.getValues().isEmpty() && !holdsEqual(target, sourceValue)) {
+                    // Without a definition the union cannot tell one value from several, and taking both made a
+                    // contradiction between two files into two values of what may be a single-valued item.
+                    throw new SchemaException(unknownCardinality(path, target.getValues().get(0), sourceValue,
+                            origin));
+                }
                 addValue(target, sourceValue, path);
                 continue;
             }
@@ -158,6 +165,22 @@ final class FragmentUnion {
                 throw new SchemaException(contradiction(path, held, sourceValue, origin));
             }
         }
+    }
+
+    private static boolean holdsEqual(Item<?, ?> item, PrismValue value) {
+        for (PrismValue held : item.getValues()) {
+            if (held.equals(value, EquivalenceStrategy.REAL_VALUE)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The message for two fragments giving different values to an item whose schema is not loaded. */
+    private static String unknownCardinality(ItemPath path, PrismValue held, PrismValue incoming, Merge origin) {
+        return contradiction(path, held, incoming, origin) + "\n'" + path + "' has no definition here, so "
+                + "whether it holds one value or several cannot be told. Load the schema that defines it "
+                + "(--schema-dir), or declare the item in one file.";
     }
 
     private static PrismContainerValue<?> soleValue(PrismContainer<?> container) {

@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -109,6 +108,9 @@ final class Policy {
         return new Policy(rules, file);
     }
 
+    /** A run of non-blank characters: a word of a policy line. */
+    private static final java.util.regex.Pattern TOKEN = java.util.regex.Pattern.compile("\\S+");
+
     private static Rule parseLine(String line, int lineNumber, int order) throws IOException {
         String selectorText;
         String settingsText;
@@ -125,26 +127,28 @@ final class Policy {
             selectorText = line.substring(1, close).strip();
             settingsText = line.substring(close + 1).strip();
         } else {
-            String[] tokens = line.split("\\s+");
-            int firstSetting = -1;
-            for (int i = 0; i < tokens.length; i++) {
+            java.util.regex.Matcher token = TOKEN.matcher(line);
+            int settingsStart = -1;
+            while (token.find()) {
                 // Only a known knob starts the settings: an object name may contain '=' too, and treating
                 // any '=' token as a setting made 'OrgType/ou=people scope=full' fail with a message about
                 // the line's shape rather than about the name.
-                int eq = tokens[i].indexOf('=');
-                if (eq > 0 && KNOWN_KNOBS.contains(tokens[i].substring(0, eq).toLowerCase())) {
-                    firstSetting = i;
+                String text = token.group();
+                int eq = text.indexOf('=');
+                if (eq > 0 && KNOWN_KNOBS.contains(text.substring(0, eq).toLowerCase())) {
+                    settingsStart = token.start();
                     break;
                 }
             }
-            if (firstSetting <= 0) {
+            if (settingsStart <= 0) {
                 throw new IOException("policy line " + lineNumber + " must be '<selector> <key=value>…' with "
                         + "a known knob (" + String.join(", ", KNOB_NAMES) + "); quote the "
                         + "selector if the object name contains '=' or '/': " + line);
             }
-            // The selector is everything before the first setting, so an object name may contain spaces.
-            selectorText = String.join(" ", Arrays.copyOfRange(tokens, 0, firstSetting)).strip();
-            settingsText = String.join(" ", Arrays.copyOfRange(tokens, firstSetting, tokens.length)).strip();
+            // The selector is everything before the first setting, as written: an object name may contain
+            // spaces, two of them in a row included, and rejoining the words with one space named another object.
+            selectorText = line.substring(0, settingsStart).strip();
+            settingsText = line.substring(settingsStart).strip();
         }
         // A trailing ':' (a readability separator) is dropped.
         if (selectorText.endsWith(":")) {

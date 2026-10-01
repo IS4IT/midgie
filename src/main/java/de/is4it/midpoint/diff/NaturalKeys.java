@@ -10,8 +10,13 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.xml.namespace.QName;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.ItemDefinition;
@@ -31,6 +36,8 @@ import com.evolveum.midpoint.prism.path.ItemPath;
  */
 final class NaturalKeys {
 
+    private static final Logger LOG = LoggerFactory.getLogger(NaturalKeys.class);
+
     private NaturalKeys() {
     }
 
@@ -42,9 +49,29 @@ final class NaturalKeys {
         }
         try {
             return definition.getNaturalKeyInstance();
-        } catch (RuntimeException e) {
+        } catch (UnsupportedOperationException e) {
             return null; // a definition that does not support natural keys
+        } catch (RuntimeException e) {
+            failed(definition.getItemName(), e);
+            return null;
         }
+    }
+
+    /** Items whose key could not be evaluated and have been reported, so each is said once per run. */
+    private static final Set<String> REPORTED = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Say that an item's natural key could not be evaluated. Its entries are then paired by id or by content
+     * only — an edited entry reads as a removed one and an added one — which used to happen without a word.
+     */
+    private static void failed(QName item, RuntimeException e) {
+        String name = (item != null) ? item.getLocalPart() : "?";
+        if (REPORTED.add(name)) {
+            System.err.println("midgie: warning: the natural key of '" + name + "' could not be evaluated ("
+                    + ((e.getMessage() != null) ? e.getMessage() : e.toString()) + "); its entries are paired by "
+                    + "container id or content only.");
+        }
+        LOG.debug("natural key of {} failed", name, e);
     }
 
     /**
@@ -75,7 +102,10 @@ final class NaturalKeys {
                 }
             }
             return true;
+        } catch (UnsupportedOperationException e) {
+            return false;
         } catch (RuntimeException e) {
+            failed((value.getParent() != null) ? value.getParent().getElementName() : null, e);
             return false;
         }
     }

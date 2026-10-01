@@ -47,6 +47,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Writing the tracking rows survives a row another deploy moved meanwhile.** The rows were addressed by the ids read at the start of the run, and one that had moved failed the whole write. They are now built from a fresh read, retried once, and a key two runs added twice is cleaned up when next written.
 
+- **`--smart-refs verify` says when it cannot verify.** A search the server refused (no search rights, a 403) or that failed in transit was logged at TRACE only, and every smart reference quietly counted as a change. Each filter is now also searched once per object, not once per reference and live value.
+
+- **Several smart references in one item are no longer paired by guesswork.** Under `accept` the first live OID was taken for each filter, so with more live values than filters the one left to delete was arbitrary, and with fewer, a filter whose resolution was already there could be sent again — which midPoint 4.10 refuses, failing the whole PATCH. Under `replace` such an item is now sent as a replace for midPoint to resolve; under `merge` nothing is sent for it, with a warning.
+
+- **A natural key that cannot be evaluated is said.** Its entries silently fell back to pairing by id or content.
+
+- **A policy selector keeps the spaces of an unquoted name.** `RoleType/Help  Desk` was read as `Help Desk`.
+
+- **Two files giving different values to an item without a loaded schema are a contradiction.** The union took both, turning a disagreement into two values of what may be a single-valued item. Load the schema that defines it, or declare the item in one file.
+
+- **References midPoint maintains no longer order the deploy.** `roleMembershipRef`, `archetypeRef` and references under `metadata` in an exported object counted as dependencies, ordering objects after roles they had merely been given and reporting cycles that were not there.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

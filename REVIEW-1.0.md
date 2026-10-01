@@ -98,8 +98,8 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 ### Swallowed or under-reported errors
 
-- [ ] **E1 — `--smart-refs verify` treats any failure (401/403, transport) as "changed".** `SmartReferences.java:98-103`. Logged only at TRACE. No tests for verify.
-- [ ] **E2 — `NaturalKeys.of()`/`carries()` catch `RuntimeException` silently.** `NaturalKeys.java:43-47, 62-80`.
+- [x] **E1 — `--smart-refs verify` treats any failure (401/403, transport) as "changed".** `SmartReferences.java:98-103`. Logged only at TRACE. No tests for verify. — diff group
+- [x] **E2 — `NaturalKeys.of()`/`carries()` catch `RuntimeException` silently.** `NaturalKeys.java:43-47, 62-80`. — diff group (unsupported stays quiet, anything else warns once per item)
 - [x] **E3 — A failed inverse drops the object from the rollback manifest.** — `373271b` `RollbackPlan.java:187, 197-206`. Logged at DEBUG; the Javadoc at `:171-172` claims the manifest shows it. Deploy reports "N object(s) undoable" with no warning.
 - [ ] **E4 — Failed state write is hidden by `-q`.** `DeployCommand.java:891-894`. Use `warn()`.
 - [x] **E5 — Unreadable `--schema-dir` is treated as empty.** `SchemaOptions.java:641-647`. — `87c3be7`
@@ -126,11 +126,11 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **C13 — `claim()` pairs history with a different object sharing Type/Name.** `RemovalDetector.java:532-541`. *Plausible.* — tracking group
 - [x] **C14 — FileTracking reads the last row per key, SyncState updates the first.** `FileTracking.java:97` vs `SyncState.java:209`. *Plausible.* — tracking group
 - [x] **C15 — State write built from the run-start table snapshot; one stale row fails the whole PATCH.** `SyncState.java:202-254`. *Plausible.* — tracking group (fresh read, one retry)
-- [ ] **C16 — Policy selectors collapse whitespace in unquoted names.** `Policy.java:128, 146`.
-- [ ] **C17 — Accept mode can keep the wrong live value of a multi-valued reference.** `DiffEngine.java:721-742`. *Plausible.*
-- [ ] **C18 — Verify cache keyed on `SearchFilterType.toString()` (identity hash).** `SmartReferences.java:55`.
-- [ ] **C19 — Undefined items treated as multi-valued in fragment union.** `FragmentUnion.java:230, 250`. *Plausible.* Contradictions become two values.
-- [ ] **C20 — `ReferenceCollector` collects operational refs (`linkRef`, `roleMembershipRef`, metadata).** `ReferenceCollector.java:31-35`. *Plausible.* Spurious ordering edges/cycle warnings.
+- [x] **C16 — Policy selectors collapse whitespace in unquoted names.** `Policy.java:128, 146`. — diff group
+- [x] **C17 — Accept mode can keep the wrong live value of a multi-valued reference.** `DiffEngine.java:721-742`. *Plausible.* — diff group (pairs only what can be told; replace path sends a replace, merge path sends nothing and warns; probed on 4.10.5)
+- [x] **C18 — Verify cache keyed on `SearchFilterType.toString()` (identity hash).** `SmartReferences.java:55`. — diff group (one search per query)
+- [x] **C19 — Undefined items treated as multi-valued in fragment union.** `FragmentUnion.java:230, 250`. *Plausible.* Contradictions become two values. — diff group
+- [x] **C20 — `ReferenceCollector` collects operational refs (`linkRef`, `roleMembershipRef`, metadata).** `ReferenceCollector.java:31-35`. *Plausible.* Spurious ordering edges/cycle warnings. — diff group
 - [ ] **C21 — Config files read as ISO-8859-1.** `ConfigDefaults.java:342-345`. Load via a UTF-8 `Reader`.
 - [ ] **C22 — Stdin: BOM breaks parsing, empty stdin gives "String index out of range: 0", encoding declaration ignored.** `Io.java:48`.
 - [ ] **C23 — Connect timeout fixed at 10 s; huge `--timeout` overflows `int`.** `MidpointRestClient.java:151`, `ServerCertificates.java:82, 84, 223-224`.
@@ -161,7 +161,7 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 - [x] T1 — Rollback replay offline (stub server): staleness refusal, `--force`, `--dry-run` exit, partial failure, missing version. — rollback group (RollbackReplayTest)
 - [x] T2 — `rotate` with non-run directories, `.`/`..` keys, symlinks. — rollback group (RollbackPlanTest)
-- [ ] T3 — Nested smart references; `--smart-refs verify`.
+- [x] T3 — Nested smart references; `--smart-refs verify`. — diff group (SmartReferencesVerifyTest, SmartReferencePairingTest)
 - [x] T4 — Untyped/raw protected values. — rollback group (DiffCommandTest)
 - [x] T5 — Desired ids from another environment under merge and replace. — rollback group (ForeignContainerIdTest)
 - [x] T6 — `ApplyRules` with add/delete of a parent container value. — rollback group (ApplyRulesTest)

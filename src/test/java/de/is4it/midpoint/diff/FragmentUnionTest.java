@@ -68,6 +68,26 @@ class FragmentUnionTest {
     }
 
     @Test
+    void anItemWithoutADefinitionGivenTwoValuesIsAContradiction() throws Exception {
+        // No schema loaded for the extension item: the union cannot tell whether it holds one value, and taking
+        // both turned two files that disagree into two values.
+        SchemaException e = assertThrows(SchemaException.class, () -> FragmentUnion.of(List.of(
+                fragment("a.xml", role(extension("one"))), fragment("b.xml", role(extension("two"))))));
+
+        assertTrue(e.getMessage().contains("has no definition") && e.getMessage().contains("b.xml"),
+                e.getMessage());
+    }
+
+    @Test
+    void anItemWithoutADefinitionGivenTheSameValueTwiceIsOneValue() throws Exception {
+        PrismObject<? extends Objectable> union = FragmentUnion.of(List.of(
+                fragment("a.xml", role(extension("one") + "<subtype>a</subtype>")),
+                fragment("b.xml", role(extension("one") + "<subtype>b</subtype>"))));
+
+        assertEquals(List.of("a", "b"), realValuesAt(union, "subtype"));
+    }
+
+    @Test
     void theSameValueWrittenTwiceIsOneValue() throws Exception {
         // Copy-paste across two files is the common way this happens, and it must not double the entry.
         PrismObject<? extends Objectable> union = FragmentUnion.of(List.of(
@@ -220,6 +240,11 @@ class FragmentUnionTest {
     private static String role(String body) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + OID + "\">\n  <name>United</name>\n  "
                 + body + "\n</role>";
+    }
+
+    private static String extension(String value) {
+        return "<extension><x:costCenter xmlns:x=\"http://example.com/undeclared\">" + value
+                + "</x:costCenter></extension>";
     }
 
     private static String sysconfig(String body) {
