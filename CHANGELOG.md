@@ -93,6 +93,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`init` takes `--app`.** It reported the identity derived from git even for a tree deploy tracks under a fixed name.
 
+- **A failed write of the tracking state is said whatever `--quiet` asks.** The next run judges its removals against the record this one failed to write.
+
+- **`diff --trace` shows the key-pairing notes `--debug` does.**
+
+- **An offline `diff` names the options it ignores.** `--no-prune`, `--no-match-by-name` and the connection options were accepted and did nothing, so a mistaken one looked as if it had applied.
+
+- **OID comments come out exactly when a root element shares the XML declaration's line.** Stripping them left a line break behind.
+
+- **The `midgie-state` object's documentation no longer has a run of spaces in it.**
+
+- **The `--rollback-plan` directory is kept out of discovery by path too**, as DESIGN describes; the marker in its files did that already.
+
+- **Breaking dependency cycles no longer slows down with the size of the tree.** Each forced break asked every waiting object whether it lay on a cycle; a tree with many cycles and long chains of dependents took minutes to order.
+
+- **The shaded jar is marked `Multi-Release`,** so the JVM uses the classes its libraries ship for newer JDKs.
+
+- **A value diff treats CRLF and LF line endings as the same.**
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

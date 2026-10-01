@@ -77,7 +77,8 @@ final class SyncState {
               key   - a stable identity for that file (its repository's root commit plus the path within it)
               value - which version of the file was most recently applied to this server, and when
               label - the object the file describes
-            Rows whose key starts with 'deploy:' record the last deployment from a path: when, from which             commit, by which account, and how many objects it created, patched or left in sync.
+            Rows whose key starts with 'deploy:' record the last deployment from a path: when, from which \
+            commit, by which account, and how many objects it created, patched or left in sync.
 
             midgie reads this to work out which configuration values it deployed previously, so that a value \
             you removed from the source tree can be told apart from one that accrued on the server. \

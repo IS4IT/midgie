@@ -6,6 +6,7 @@
 package de.is4it.midpoint.diff;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 
@@ -20,6 +21,7 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
+import picocli.CommandLine.Spec;
 
 /**
  * The {@code diff} subcommand: compute the minimal itemDelta between two states of the <b>same</b>
@@ -63,6 +65,18 @@ public class DiffCommand implements Callable<Integer> {
 
     @Mixin
     SchemaOptions schemaOptions;
+
+    @Spec
+    picocli.CommandLine.Model.CommandSpec spec;
+
+    /**
+     * Options that only mean something against a server. An offline diff accepted them on the command line
+     * and did nothing with them, so a mistaken --no-prune or --cacert looked as if it had applied.
+     */
+    private static final List<String> LIVE_ONLY = List.of("--no-prune", "--no-match-by-name", "--user",
+            "--password", "--password-env", "--password-file", "--oid", "--insecure", "--cacert", "--proxy",
+            "--no-proxy", "--proxy-user", "--proxy-password", "--proxy-password-env", "--proxy-password-file",
+            "--timeout", "--retries", "--no-live-schema");
 
     // --- Output ---
 
@@ -155,6 +169,17 @@ public class DiffCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
         LOG.debug("diff mode: offline (CURRENT file)");
+        List<String> inert = new ArrayList<>();
+        picocli.CommandLine.ParseResult parsed = spec.commandLine().getParseResult();
+        for (String option : LIVE_ONLY) {
+            if (parsed != null && parsed.hasMatchedOption(option)) {
+                inert.add(option);
+            }
+        }
+        if (!inert.isEmpty() && !quiet) {
+            System.err.println("midgie: note: " + String.join(", ", inert) + (inert.size() == 1 ? " has" : " have")
+                    + " no effect on an offline diff, which compares the two files as they are.");
+        }
         return diffOffline(strategy);
     }
 
@@ -217,7 +242,7 @@ public class DiffCommand implements Callable<Integer> {
                     .diff(desired, current, strategy.equivalence, strategy.scope, strategy.multiValue,
                             SmartReferences.checkFor(strategy, prismContext, null));
 
-            if (debug && !quiet) {
+            if ((debug || trace) && !quiet) {
                 for (String declined : result.keyPairingDeclined()) {
                     System.err.println("midgie: note: " + declined + ".");
                 }

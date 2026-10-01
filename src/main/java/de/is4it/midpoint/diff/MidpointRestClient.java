@@ -265,7 +265,6 @@ public final class MidpointRestClient {
                 (config.proxy != null) ? config.proxy.describe() : "none");
     }
 
-    /** {@code GET {type}/{oid}} → the object XML. Throws {@link RestException} (404-aware) on failure. */
     /**
      * The REST base this client talks to, with any credentials stripped. Recorded in a rollback plan so a
      * replay can refuse to run against a different server than the one the plan was written from.
@@ -274,6 +273,7 @@ public final class MidpointRestClient {
         return withoutUserInfo(restBase);
     }
 
+    /** {@code GET {type}/{oid}} → the object XML. Throws {@link RestException} (404-aware) on failure. */
     public String getObject(String restType, String oid) throws IOException {
         return getObject(restType, oid, new String[0]);
     }
@@ -561,7 +561,6 @@ public final class MidpointRestClient {
         return message.find() ? message.group(1).strip() : "";
     }
 
-    /** Server-unavailable statuses worth retrying: 503, plus 502/504 from a proxy (e.g. midPoint starting). */
     /**
      * Whether a failure is really "that name does not resolve". The JDK's HTTP client reports it as a
      * {@link java.net.ConnectException} carrying no message of its own, with the real cause — an
@@ -587,6 +586,7 @@ public final class MidpointRestClient {
         return (message == null || message.isBlank()) ? "" : " " + message;
     }
 
+    /** Server-unavailable statuses worth retrying: 503, plus 502/504 from a proxy (e.g. midPoint starting). */
     private static boolean isTransient(int status) {
         return status == 502 || status == 503 || status == 504;
     }

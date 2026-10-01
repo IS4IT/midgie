@@ -276,9 +276,16 @@ final class OidComments {
         for (Map.Entry<Integer, List<String>> line : byLine.entrySet()) {
             int start = line.getKey();
             out.append(xml, copied, start);
-            String indent = leadingWhitespace(xml, start);
-            out.append(indent).append("<!-- ").append(safe(String.join("; ", line.getValue()))).append(" -->")
-                    .append(newline);
+            String comment = "<!-- " + safe(String.join("; ", line.getValue())) + " -->";
+            if (start == 0 || xml.charAt(start - 1) == '\n') {
+                out.append(leadingWhitespace(xml, start)).append(comment).append(newline);
+            } else {
+                // The root element shares the XML declaration's line. A comment line of its own there would
+                // split that line, and strip() — which takes a comment's line only when it is alone on it —
+                // would leave the new line break behind, so a plan file edited this way changed on the round
+                // trip. Inline, it comes out exactly.
+                out.append(comment);
+            }
             copied = start;
         }
         out.append(xml, copied, xml.length());

@@ -971,8 +971,9 @@ public class DeployCommand implements Callable<Integer> {
                                 + "they dropped stays detectable." : ""));
             }
         } catch (Exception e) {
-            // Bookkeeping must never fail a deploy that already succeeded.
-            note("warning: could not record what was deployed: " + safe(e.getMessage()));
+            // Bookkeeping must never fail a deploy that already succeeded — but it is said whatever --quiet
+            // asks: the next run judges its removals against the record this one failed to write.
+            warn("could not record what was deployed: " + safe(e.getMessage()));
             LOG.trace("recording the deployment failed", e);
         }
     }
@@ -1449,6 +1450,11 @@ public class DeployCommand implements Callable<Integer> {
         }
         if (applyPlanDir != null) {
             dirs.add(applyPlanDir);
+        }
+        // A rollback net placed inside the tree: its patch files carry the generated-file marker anyway, which
+        // is what keeps them out, and this is the path-based guard DESIGN promises beside it.
+        if (rollbackPlanDir != null) {
+            dirs.add(rollbackPlanDir);
         }
         return dirs;
     }

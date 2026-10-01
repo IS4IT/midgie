@@ -434,15 +434,6 @@ public class InitCommand implements Callable<Integer> {
     }
 
     /**
-     * Turn a target that names a <em>directory</em> into the file to write inside it, and leave a named file
-     * (or {@code -}) alone.
-     *
-     * <p>{@code defaultName} is {@code null} for the properties template, whose name is not ours to choose:
-     * {@link ConfigDefaults#propertiesNameFor} answers with the name midgie would actually read from that
-     * directory, so {@code --write-properties .} in a config tree cannot produce a file that is silently
-     * never loaded.
-     */
-    /**
      * Put {@code block} into {@code existing}: replacing the marked section if there is one, otherwise
      * appending it at the end so hand-written rules above keep winning ties.
      *
@@ -460,6 +451,15 @@ public class InitCommand implements Callable<Integer> {
         return existing.substring(0, begin) + block + existing.substring(end + BLOCK_END.length());
     }
 
+    /**
+     * Turn a target that names a <em>directory</em> into the file to write inside it, and leave a named file
+     * (or {@code -}) alone.
+     *
+     * <p>{@code defaultName} is {@code null} for the properties template, whose name is not ours to choose:
+     * {@link ConfigDefaults#propertiesNameFor} answers with the name midgie would actually read from that
+     * directory, so {@code --write-properties .} in a config tree cannot produce a file that is silently
+     * never loaded.
+     */
     private static File resolveTarget(File target, String defaultName) {
         if (target == null || Io.isStdout(target) || !target.isDirectory()) {
             return target;

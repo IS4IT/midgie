@@ -101,7 +101,7 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **E1 — `--smart-refs verify` treats any failure (401/403, transport) as "changed".** `SmartReferences.java:98-103`. Logged only at TRACE. No tests for verify. — diff group
 - [x] **E2 — `NaturalKeys.of()`/`carries()` catch `RuntimeException` silently.** `NaturalKeys.java:43-47, 62-80`. — diff group (unsupported stays quiet, anything else warns once per item)
 - [x] **E3 — A failed inverse drops the object from the rollback manifest.** — `373271b` `RollbackPlan.java:187, 197-206`. Logged at DEBUG; the Javadoc at `:171-172` claims the manifest shows it. Deploy reports "N object(s) undoable" with no warning.
-- [ ] **E4 — Failed state write is hidden by `-q`.** `DeployCommand.java:891-894`. Use `warn()`.
+- [x] **E4 — Failed state write is hidden by `-q`.** `DeployCommand.java:891-894`. Use `warn()`. — small-items group
 - [x] **E5 — Unreadable `--schema-dir` is treated as empty.** `SchemaOptions.java:641-647`. — `87c3be7`
 - [x] **E6 — Xerces prints raw `[Fatal Error] …` to stderr, ignoring `-q`.** `Io.java:91`, `SchemaOptions.java:659`, discovery. Install a silent error handler. — input group (Io.parseXmlFile/parseXml)
 - [x] **E7 — Generic `IOException` from `send` is neither retried for safe reads nor wrapped; `SSLException` is not a `TransportException`.** `MidpointRestClient.java:467, 473-485`. — input group
@@ -113,7 +113,7 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 - [x] **C1 — Rollback run directories named to the second can collide.** `RollbackPlan.java:259`; `PlanStore.write` overwrites only same-named files, so two runs mix. — rollback group
 - [x] **C2 — Different deployment keys can share a rollback directory.** `RollbackPlan.java:387` (`root/a/b_c` vs `root/a_b/c`). — rollback group (rotation and lookup per deployment, no renaming)
-- [ ] **C3 — `diff --trace` hides key-pairing notes.** `DiffCommand.java:213` gates on `debug && !quiet`; live path uses `debug || trace`.
+- [x] **C3 — `diff --trace` hides key-pairing notes.** `DiffCommand.java:213` gates on `debug && !quiet`; live path uses `debug || trace`. — small-items group
 - [x] **C4 — All-in-sync interactive run records no tracking state.** `DeployCommand.java:1012-1017, 512`. `--yes` does record. — tracking group
 - [x] **C5 — `--oid` ignored on a schema-only run.** `DeployCommand.java:441-443`. — deploy group
 - [x] **C6 — `--dry-run`/`--plan` disagree with a real run on unprunable removals.** `DeployCommand.java:501`. — deploy group
@@ -142,20 +142,20 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] **C29 — `init --write-cacert -` mixes status text into the PEM on stdout.** `InitCommand.java:331-339`. — init group
 - [x] **C30 — `init` ignores `app` when reporting identity; `--app` Javadoc contradicts code.** `InitCommand.java:382, 562`; `DeploymentIdentity.java:29-30` vs `:69-75`. — init group (init --app; Javadoc now says --app replaces only the key)
 - [x] **C31 — Git blobs decoded as UTF-8 and stripped; inherited `GIT_DIR`/`GIT_WORK_TREE` override the tree.** `GitRevision.java:373, 396`. *Plausible.* — input group
-- [ ] **C32 — Offline `diff` silently accepts `--no-prune`, `--no-match-by-name` and connection options.** `DiffCommand.java:94-107, 151-155`.
-- [ ] **C33 — OidComments round trip breaks when the root element shares a line with `<?xml?>`.** `OidComments.java:315-319, 428, 487`. *Plausible;* hand-written plan files only.
-- [ ] **C34 — `midgie-state` documentation has a long run of spaces.** `SyncState.java:80` (missing `\` in the text block).
-- [ ] **C35 — DESIGN claims `--rollback-plan` dir is excluded from discovery by path.** `DeployCommand.java:1192-1201` vs DESIGN:425. Harmless in practice (marker skips it); fix code or doc.
-- [ ] **C36 — TopoSort cycle breaking is O(V²·(V+E)).** `TopoSort.java:368-375`. Performance only.
+- [x] **C32 — Offline `diff` silently accepts `--no-prune`, `--no-match-by-name` and connection options.** `DiffCommand.java:94-107, 151-155`. — small-items group (a note, not a refusal: the options are often in wrappers)
+- [x] **C33 — OidComments round trip breaks when the root element shares a line with `<?xml?>`.** `OidComments.java:315-319, 428, 487`. *Plausible;* hand-written plan files only. — small-items group
+- [x] **C34 — `midgie-state` documentation has a long run of spaces.** `SyncState.java:80` (missing `\` in the text block). — small-items group
+- [x] **C35 — DESIGN claims `--rollback-plan` dir is excluded from discovery by path.** `DeployCommand.java:1192-1201` vs DESIGN:425. Harmless in practice (marker skips it); fix code or doc. — small-items group (code now excludes it, as DESIGN says)
+- [x] **C36 — TopoSort cycle breaking is O(V²·(V+E)).** `TopoSort.java:368-375`. Performance only. — small-items group (one SCC pass per break)
 - [x] **C37 — `RemovalDetector.livePath` pairs history values with live ones through `NaturalKeys.match`'s id step.** `RemovalDetector.java:144`. Found while fixing B3. With ids from another server a nested removal can address the wrong live entry; `heldValue`'s real-value check limits it to values equal to what the tree deployed. Run the history object through `ContainerIds.trustedOnly` against live before pairing. — tracking group (pairs by key or content when the ids contradict, rather than through trustedOnly)
 - [x] **C38 — Merge sent an empty `<delete>` item delta beside an add.** `DiffEngine.applyMerge`. Found while fixing B3; every merge that kept all values a delete side would have removed emitted it, and the summary read `add+delete`. — `d5b9643`
 
 ### Code hygiene and packaging
 
-- [ ] **H1 — Misplaced javadocs.** `StrategyOptions:66`, `ConnectionOptions:108`, `ConfigDefaults:496`, `MidpointRestClient:268, 545`, `DiffEngine:664-671, 1156-1160`, `DeltaOutput:78-82`.
-- [ ] **H2 — Shaded manifest lacks `Multi-Release: true`.** `pom.xml:113-141`. Versioned classes under `META-INF/versions` are ignored.
-- [ ] **H3 — Surefire isolation misses `MIDGIE_CONF`, `~/.midgie.properties`, `/etc/midgie/`, tree-local config above the checkout.** `pom.xml:152-170`.
-- [ ] **H4 — `TextDiff` comment about trailing empties is wrong; CRLF values keep `\r`.** `TextDiff.java:661-664`.
+- [x] **H1 — Misplaced javadocs.** `StrategyOptions:66`, `ConnectionOptions:108`, `ConfigDefaults:496`, `MidpointRestClient:268, 545`, `DiffEngine:664-671, 1156-1160`, `DeltaOutput:78-82`. — small-items group
+- [x] **H2 — Shaded manifest lacks `Multi-Release: true`.** `pom.xml:113-141`. Versioned classes under `META-INF/versions` are ignored. — small-items group
+- [x] **H3 — Surefire isolation misses `MIDGIE_CONF`, `~/.midgie.properties`, `/etc/midgie/`, tree-local config above the checkout.** `pom.xml:152-170`. — small-items group (MIDGIE_CONF blanked, user.home and midgie.site.conf redirected; tree files above the checkout were already out of reach)
+- [x] **H4 — `TextDiff` comment about trailing empties is wrong; CRLF values keep `\r`.** `TextDiff.java:661-664`. — small-items group (trailing empties kept on purpose; comment fixed)
 
 ## Test coverage to add
 
@@ -171,4 +171,4 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [x] T10 — `--insecure` path, hostname mismatch with `--cacert`, no secrets in debug/trace output. — input group (TlsClientTest; masking in MidpointRestClientTest; the name-check switch stays Main's)
 - [x] T11 — Password precedence with `password` in the file; OID escaping. — rollback group (ConfigDefaultsTest, MidpointRestClientTest)
 - [x] T12 — stdout encoding and write failure, `Error` exit code, `--opt=value` redaction, BOM/empty stdin. — input group (IoTest for BOM/empty stdin)
-- [ ] T13 — `GlobPath` and `ReferenceCollector` directly; `VersionSupport`/`LiveLookup` without the docker rig.
+- [x] T13 — `GlobPath` and `ReferenceCollector` directly; `VersionSupport`/`LiveLookup` without the docker rig. — small-items group (GlobPathTest, ReferenceCollectorTest, LiveReadTest)

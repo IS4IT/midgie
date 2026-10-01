@@ -10,6 +10,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -93,12 +96,7 @@ final class TopoSort {
                 // letting that leak to acyclic nodes is not.
                 Set<T> remaining = new LinkedHashSet<>(nodeSet);
                 remaining.removeAll(emitted);
-                Set<T> onCycle = new LinkedHashSet<>();
-                for (T candidate : remaining) {
-                    if (reachesItself(candidate, successors, remaining)) {
-                        onCycle.add(candidate);
-                    }
-                }
+                Set<T> onCycle = onCycle(remaining, successors);
                 Set<T> candidates = onCycle.isEmpty() ? remaining : onCycle;
                 next = candidates.stream()
                         .min(Comparator.<T>comparingInt(inDegree::get).thenComparing(readyOrder))
@@ -121,20 +119,73 @@ final class TopoSort {
         return new Result<>(ordered, brokenAt);
     }
 
-    /** Whether {@code start} is reachable from itself through {@code scope} — i.e. it lies on a cycle. */
-    private static <T> boolean reachesItself(T start, Map<T, List<T>> successors, Set<T> scope) {
-        Set<T> seen = new LinkedHashSet<>();
-        Deque<T> queue = new ArrayDeque<>(successors.getOrDefault(start, List.of()));
-        while (!queue.isEmpty()) {
-            T node = queue.poll();
-            if (!scope.contains(node) || !seen.add(node)) {
+    /**
+     * The nodes of {@code scope} that lie on a cycle: those in a strongly connected component of more than one
+     * node (self-references are not edges here). One pass of Kosaraju's algorithm, O(V+E); asking each node
+     * whether it reaches itself made every forced break O(V·(V+E)). Iterative, since a long dependency chain
+     * would otherwise be a deep recursion.
+     */
+    private static <T> Set<T> onCycle(Set<T> scope, Map<T, List<T>> successors) {
+        List<T> finished = new ArrayList<>(scope.size());
+        Set<T> visited = new HashSet<>();
+        for (T root : scope) {
+            if (!visited.add(root)) {
                 continue;
             }
-            if (node.equals(start)) {
-                return true;
+            Deque<T> path = new ArrayDeque<>();
+            Deque<Iterator<T>> pending = new ArrayDeque<>();
+            path.push(root);
+            pending.push(successors.getOrDefault(root, List.of()).iterator());
+            while (!pending.isEmpty()) {
+                Iterator<T> next = pending.peek();
+                T child = null;
+                while (next.hasNext()) {
+                    T candidate = next.next();
+                    if (scope.contains(candidate) && visited.add(candidate)) {
+                        child = candidate;
+                        break;
+                    }
+                }
+                if (child != null) {
+                    path.push(child);
+                    pending.push(successors.getOrDefault(child, List.of()).iterator());
+                } else {
+                    pending.pop();
+                    finished.add(path.pop());
+                }
             }
-            queue.addAll(successors.getOrDefault(node, List.of()));
         }
-        return false;
+        Map<T, List<T>> predecessors = new HashMap<>();
+        for (T node : scope) {
+            for (T successor : successors.getOrDefault(node, List.of())) {
+                if (scope.contains(successor)) {
+                    predecessors.computeIfAbsent(successor, ignored -> new ArrayList<>()).add(node);
+                }
+            }
+        }
+        Set<T> cyclic = new LinkedHashSet<>();
+        Set<T> assigned = new HashSet<>();
+        for (int i = finished.size() - 1; i >= 0; i--) {
+            T root = finished.get(i);
+            if (!assigned.add(root)) {
+                continue;
+            }
+            List<T> component = new ArrayList<>();
+            Deque<T> todo = new ArrayDeque<>();
+            todo.push(root);
+            while (!todo.isEmpty()) {
+                T node = todo.pop();
+                component.add(node);
+                for (T predecessor : predecessors.getOrDefault(node, List.of())) {
+                    if (assigned.add(predecessor)) {
+                        todo.push(predecessor);
+                    }
+                }
+            }
+            if (component.size() > 1) {
+                cyclic.addAll(component);
+            }
+        }
+        return cyclic;
     }
 }

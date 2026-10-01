@@ -57,6 +57,36 @@ class TopoSortTest {
     }
 
     @Test
+    void manyCyclesAreBrokenInLinearTimePerBreak() {
+        // 300 two-node cycles, each depending on the one before, and a chain of 3000 objects hanging off the
+        // last: every one of the 300 forced breaks has the whole chain still waiting. Asking each waiting node
+        // whether it reached itself walked the rest of the chain from every link of it, at every break.
+        int cycles = 300;
+        int tail = 3000;
+        Map<String, List<String>> prerequisites = new java.util.HashMap<>();
+        List<String> nodes = new java.util.ArrayList<>();
+        for (int i = 0; i < cycles; i++) {
+            nodes.add("a" + i);
+            nodes.add("b" + i);
+            prerequisites.put("a" + i, i > 0 ? List.of("b" + i, "a" + (i - 1)) : List.of("b" + i));
+            prerequisites.put("b" + i, List.of("a" + i));
+        }
+        for (int i = 0; i < tail; i++) {
+            nodes.add("t" + i);
+            prerequisites.put("t" + i, List.of(i > 0 ? "t" + (i - 1) : "a" + (cycles - 1)));
+        }
+
+        TopoSort.Result<String> result = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+                java.time.Duration.ofSeconds(10),
+                () -> TopoSort.sort(nodes, prerequisites::get, Comparator.naturalOrder()));
+
+        assertEquals(nodes.size(), result.ordered().size());
+        assertEquals(cycles, result.brokenAt().size());
+        assertTrue(result.brokenAt().stream().noneMatch(node -> node.startsWith("t")), "the chain is on no cycle");
+        assertTrue(result.ordered().indexOf("t0") < result.ordered().indexOf("t1"), "and still orders");
+    }
+
+    @Test
     void breakingACycleDoesNotDisturbNodesOutsideIt() {
         // Once no node is ready every remaining node has in-degree >= 1, so a plain dependent of a cycle
         // member tied with the members themselves and could be forced first — applied before the object it

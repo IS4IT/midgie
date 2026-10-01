@@ -149,8 +149,12 @@ final class TextDiff {
         return script;
     }
 
-    /** Split on newlines, keeping trailing empties out of the way (a value's final newline is not a line). */
+    /**
+     * Split into lines at {@code \n} or {@code \r\n}. A trailing empty line is kept, not dropped: two values that
+     * differ only in a final line break must still show a difference. Split on {@code \n} alone, a CRLF value's
+     * lines all ended in {@code \r} and never equalled the same lines from an LF file.
+     */
     private static List<String> lines(String text) {
-        return List.of(text.split("\n", -1));
+        return List.of(text.split("\r?\n", -1));
     }
 }

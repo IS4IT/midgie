@@ -109,6 +109,22 @@ class OidCommentsTest {
     }
 
     @Test
+    void aRootOnTheDeclarationsLineComesBackByteForByteToo() {
+        // A hand-written file with '<?xml …?><role oid=…>' on one line got a line break inserted there, which
+        // stripping did not take out again.
+        OidComments names = new OidComments((type, oids) -> Map.of(SUPERUSER, "Superuser"));
+        names.know(SELF, "RoleType", "Manager");
+        String oneLine = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><role xmlns=\"http://midpoint.evolveum.com/"
+                + "xml/ns/public/common/common-3\" oid=\"" + SELF + "\">\n  <name>Manager</name>\n  <inducement>\n"
+                + "    <targetRef oid=\"" + SUPERUSER + "\" type=\"RoleType\"/>\n  </inducement>\n</role>\n";
+
+        String annotated = names.annotate(oneLine, SELF, "RoleType");
+
+        assertFalse(annotated.equals(oneLine), "something was annotated");
+        assertEquals(oneLine, OidComments.strip(annotated));
+    }
+
+    @Test
     void theServerIsAskedOnlyOncePerObjectForTheWholeRun() {
         List<String> asked = new ArrayList<>();
         OidComments names = new OidComments((type, oids) -> {

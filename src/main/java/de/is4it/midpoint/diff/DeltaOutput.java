@@ -77,11 +77,6 @@ final class DeltaOutput {
     }
 
     /**
-     * How many values this delta removes outright ({@code valuesToDelete} across every modification). A
-     * removed <em>container</em> value takes everything nested inside it, so this is the number that matters
-     * when judging whether a change is destructive.
-     */
-    /**
      * Whether {@code delta} sets any reference by search filter rather than by OID — a <b>smart
      * reference</b>. Such a PATCH must carry {@code ?options=reevaluateSearchFilters}, or midPoint stores
      * the reference unresolved and the object is left pointing at nothing.
@@ -113,6 +108,11 @@ final class DeltaOutput {
         return (values != null) ? values : List.of();
     }
 
+    /**
+     * How many values this delta removes outright ({@code valuesToDelete} across every modification). A
+     * removed <em>container</em> value takes everything nested inside it, so this is the number that matters
+     * when judging whether a change is destructive.
+     */
     static int removedValueCount(ObjectDelta<? extends Objectable> delta) {
         int removed = 0;
         for (ItemDelta<?, ?> mod : delta.getModifications()) {

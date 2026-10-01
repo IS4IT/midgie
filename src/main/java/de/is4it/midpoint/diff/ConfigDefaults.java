@@ -77,6 +77,12 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     static final String USER_FILE = ".midgie.properties";
     static final String SYSTEM_FILE = "/etc/midgie/midgie.properties";
 
+    /**
+     * A system property naming another site-wide file than {@link #SYSTEM_FILE}. The build's tests set it, so
+     * a machine's own {@code /etc/midgie} cannot change what they test.
+     */
+    static final String SITE_PROPERTY = "midgie.site.conf";
+
     /** The tree-local file, searched for upward from the working directory. */
     static final String TREE_FILE = ".midgie.properties";
 
@@ -205,7 +211,8 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     }
 
     static ConfigDefaults load(UnaryOperator<String> env) throws IOException {
-        return load(env, new File(SYSTEM_FILE), new File(System.getProperty("user.home", ""), USER_FILE),
+        return load(env, new File(System.getProperty(SITE_PROPERTY, SYSTEM_FILE)),
+                new File(System.getProperty("user.home", ""), USER_FILE),
                 locateTreeFile(new File(System.getProperty("user.dir", "."))).file());
     }
 

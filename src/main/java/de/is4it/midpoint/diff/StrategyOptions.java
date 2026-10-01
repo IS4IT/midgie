@@ -63,10 +63,10 @@ public final class StrategyOptions {
                     + "run is refused so accrued state is not silently overwritten.")
     boolean allowInplaceMerge;
 
-    /** Parsed, validated strategy set consumed by {@link DiffEngine}. */
     /** How a filter-written reference is judged against the OID midPoint resolved it to. */
     public enum SmartRefs { ACCEPT, VERIFY, RESOLVE }
 
+    /** Parsed, validated strategy set consumed by {@link DiffEngine}. */
     public static final class Resolved {
         final DiffEngine.Scope scope;
         final DiffEngine.EquivalencePlan equivalence;

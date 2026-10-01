@@ -49,6 +49,15 @@ class TextDiffTest {
     }
 
     @Test
+    void lineEndingsAreNotADifference() {
+        // Split on \n alone, every line of a CRLF value kept its \r and none equalled its LF twin.
+        String diff = TextDiff.unified("one\r\ntwo\r\nthree", "one\ntwo\nTHREE", 2);
+
+        assertTrue(diff.contains("- three") && diff.contains("+ THREE"), diff);
+        assertFalse(diff.contains("- one") || diff.contains("- two"), "only the changed line: " + diff);
+    }
+
+    @Test
     void identicalTextProducesNoChangeMarkers() {
         String diff = TextDiff.unified("same\ntext", "same\ntext", 2);
 

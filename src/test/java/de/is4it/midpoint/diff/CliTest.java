@@ -35,6 +35,13 @@ class CliTest {
     // --- usage / validation errors -> exit 2 (these fail fast, before any prism context or network) ---
 
     @Test
+    void optionsThatOnlyMeanSomethingLiveAreNamedOnAnOfflineDiff() {
+        Result r = run("diff", "examples/a.xml", "examples/b.xml", "--no-prune", "-u", "admin");
+
+        assertTrue(r.err.contains("--no-prune, --user have no effect on an offline diff"), r.err);
+    }
+
+    @Test
     void missingCurrentFileIsAUsageError() {
         Result r = run("diff", A);
         assertEquals(2, r.exit);

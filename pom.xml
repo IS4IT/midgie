@@ -123,6 +123,12 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>de.is4it.midpoint.diff.Main</mainClass>
+                                    <!-- The dependencies' own jars are multi-release, and their classes for
+                                         newer JDKs under META-INF/versions are copied in; without this entry
+                                         the JVM never looks there and runs the base classes instead. -->
+                                    <manifestEntries>
+                                        <Multi-Release>true</Multi-Release>
+                                    </manifestEntries>
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                                 <!-- Without these, colliding NOTICE/LICENSE resources are last-one-wins and
@@ -167,6 +173,11 @@
                              there. Redirecting the base is enough: RollbackPlan.defaultBase honours
                              XDG_STATE_HOME, so no test has to remember to pass the flag itself. -->
                         <XDG_STATE_HOME>${project.build.directory}/state</XDG_STATE_HOME>
+                        <!-- And the developer's own config: a file named by MIDGIE_CONF, ~/.midgie.properties
+                             or /etc/midgie supplied defaults to every CLI test (an account, a cacert, a
+                             policy) and changed what they tested. user.home and midgie.site.conf below move
+                             the other two out of reach. -->
+                        <MIDGIE_CONF/>
                     </environmentVariables>
                     <systemPropertyVariables>
                         <!-- docker/.env stays the single source of truth for the rig's port. Hard-coding it
@@ -180,6 +191,10 @@
                              across test classes and the property is read once, on first use of the HTTP
                              client — long before the tunnelling test gets to run. -->
                         <jdk.http.auth.tunneling.disabledSchemes/>
+                        <!-- Where ConfigDefaults looks for ~/.midgie.properties and the site file; see
+                             MIDGIE_CONF above. -->
+                        <user.home>${project.build.directory}/home</user.home>
+                        <midgie.site.conf>${project.build.directory}/no-site/midgie.properties</midgie.site.conf>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

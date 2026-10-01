@@ -757,14 +757,6 @@ public final class DiffEngine {
     }
 
     /**
-     * Drop item deltas that touch a {@link ProtectedStringType} value and return their paths. An item is
-     * protected either by its schema definition (type is {@code ProtectedStringType}, e.g.
-     * {@code credentials/password/value}) or by carrying a protected real value directly (a fallback for
-     * when no definition is attached). Nested protected values inside a larger added/deleted container
-     * (e.g. a password buried in an added assignment) are not detected here; those are rare and would need
-     * a deep value walk — call this out in the docs rather than pretend it is handled.
-     */
-    /**
      * Drop the deltas that only say "midPoint resolved this smart reference", and report their paths.
      *
      * <p>The desired file names the target by filter and carries no OID; the live object carries the OID the
@@ -1026,6 +1018,14 @@ public final class DiffEngine {
         }
     }
 
+    /**
+     * Drop item deltas that touch a {@link ProtectedStringType} value and return their paths. An item is
+     * protected either by its schema definition (type is {@code ProtectedStringType}, e.g.
+     * {@code credentials/password/value}) or by carrying a protected real value directly (a fallback for
+     * when no definition is attached). Nested protected values inside a larger added/deleted container
+     * (e.g. a password buried in an added assignment) are not detected here; those are rare and would need
+     * a deep value walk — call this out in the docs rather than pretend it is handled.
+     */
     private static List<String> stripProtectedValues(ObjectDelta<?> delta) {
         List<String> skipped = new ArrayList<>();
         List<ItemDelta<?, ?>> toRemove = new ArrayList<>();
