@@ -215,6 +215,46 @@ class RollbackPlanTest {
     }
 
     @Test
+    void twoNetsWrittenAtOnceGetADirectoryEach(@TempDir Path dir) throws Exception {
+        // Named to the second, two deploys finishing within one shared a directory, and a rollback replayed the
+        // inverses of both.
+        RollbackPlan first = new RollbackPlan(prismContext, null);
+        first.recordPatch("roles", oid(1), "first", deltaChangingDescription(oid(1)));
+        RollbackPlan second = new RollbackPlan(prismContext, null);
+        second.recordPatch("roles", oid(2), "second", deltaChangingDescription(oid(2)));
+
+        File one = first.write(dir.toFile(), "s", "d", "r");
+        File two = second.write(dir.toFile(), "s", "d", "r");
+
+        assertNotEquals(one, two);
+        assertEquals(1, planFileNames(one).size(), planFileNames(one).toString());
+        assertEquals(1, planFileNames(two).size(), planFileNames(two).toString());
+        assertTrue(RollbackPlan.isRunDirectory(two) && two.getName().matches("\\d{8}-\\d{6}-\\d{3}"), two.getName());
+    }
+
+    @Test
+    void rotationAndTheNewestPlanKeepToTheirOwnDeployment(@TempDir Path dir) throws Exception {
+        // Two deployment keys that flatten to one directory name share it; each must keep its own nets.
+        for (String[] run : new String[][] {{"20260101-000000", "root/a/b_c"}, {"20260102-000000", "root/a_b/c"},
+                {"20260103-000000", "root/a/b_c"}, {"20260104-000000", "root/a_b/c"}}) {
+            File runDir = new File(dir.toFile(), run[0]);
+            Files.createDirectories(runDir.toPath());
+            Files.writeString(new File(runDir, RollbackPlan.MANIFEST).toPath(),
+                    "<rollbackManifest><deployment>" + run[1] + "</deployment></rollbackManifest>",
+                    StandardCharsets.UTF_8);
+        }
+
+        assertEquals(new File(dir.toFile(), "20260103-000000"), RollbackPlan.newestUnder(dir.toFile(), "root/a/b_c"),
+                "the newest of this deployment, not the newest of the directory");
+
+        RollbackPlan.rotate(dir.toFile(), 1, "root/a/b_c");
+
+        assertFalse(new File(dir.toFile(), "20260101-000000").exists(), "this deployment's older net goes");
+        assertTrue(new File(dir.toFile(), "20260102-000000").exists(), "the other deployment's stay");
+        assertTrue(new File(dir.toFile(), "20260104-000000").exists());
+    }
+
+    @Test
     void emptyPlanWritesNothingAndReportsItself() {
         RollbackPlan plan = new RollbackPlan(prismContext, null);
         assertTrue(plan.isEmpty(), "a run that wrote nothing has nothing to undo");

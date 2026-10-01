@@ -109,8 +109,15 @@ public class RollbackCommand implements Callable<Integer> {
             Logging.enableDebug();
         }
         try {
-            File run = resolveRunDirectory();
+            File treeDir = (tree != null) ? tree : new File(".");
+            DeploymentIdentity identity = DeploymentIdentity.of(treeDir, app);
+            File run = resolveRunDirectory(identity, treeDir);
             if (run == null) {
+                return EXIT_ERROR;
+            }
+            if (PlanStore.isIncomplete(run)) {
+                System.err.println("midgie: the rollback plan in " + run + " was never finished — the deploy that "
+                        + "wrote it stopped part way — so it cannot be replayed. An earlier plan may be beside it.");
                 return EXIT_ERROR;
             }
             RollbackPlan.Manifest manifest = RollbackPlan.Manifest.read(run);
@@ -119,6 +126,23 @@ public class RollbackCommand implements Callable<Integer> {
                 status("Nothing to roll back: " + run + " records no changes"
                         + (manifest.objects.isEmpty() ? "." : " that can be undone."));
                 reportCreated(manifest);
+                return 0;
+            }
+            // A rollback that failed part way left the objects it did restore marked; they are not sent again,
+            // and their versions — which that run moved — are not read as someone else's change.
+            List<PlanStore.Entry> pending = new ArrayList<>();
+            Set<String> pendingOids = new LinkedHashSet<>();
+            int earlier = 0;
+            for (PlanStore.Entry entry : entries) {
+                if (restoredMarker(run, entry).isFile()) {
+                    earlier++;
+                } else {
+                    pending.add(entry);
+                    pendingOids.add(entry.oid);
+                }
+            }
+            if (pending.isEmpty()) {
+                status("Nothing left to roll back: every change in " + run + " was restored by an earlier run.");
                 return 0;
             }
 
@@ -130,21 +154,23 @@ public class RollbackCommand implements Callable<Integer> {
             if (client == null) {
                 return EXIT_ERROR; // newClient() already explained why
             }
-            Integer refusal = checkProvenance(manifest, client, run);
+            Integer refusal = checkProvenance(manifest, client, run, identity);
             if (refusal != null) {
                 return refusal;
             }
 
-            status("Rollback plan " + run + " — " + entries.size() + " object(s) to restore.");
-            for (PlanStore.Entry entry : entries) {
+            status("Rollback plan " + run + " — " + pending.size() + " object(s) to restore"
+                    + (earlier > 0 ? ", " + earlier + " restored by an earlier run and left alone." : "."));
+            for (PlanStore.Entry entry : pending) {
                 row(dryRun ? "would-restore" : "restore", entry.restType + "/" + entry.oid);
             }
             reportCreated(manifest);
 
-            List<String> stale = findStaleObjects(manifest, client);
+            List<String> stale = findStaleObjects(manifest, client, pendingOids);
             if (!stale.isEmpty()) {
+                // Said whatever --quiet asks: these are the objects a forced rollback reverts other changes on.
                 for (String object : stale) {
-                    warn("changed since the deploy: " + object);
+                    System.err.println("midgie: warning: changed since the deploy: " + object);
                 }
                 if (!force) {
                     System.err.println("midgie: refusing to roll back — " + stale.size()
@@ -161,16 +187,16 @@ public class RollbackCommand implements Callable<Integer> {
                 if (rows > 0) {
                     status("  and the " + rows + " tracking row(s) the deploy moved, where no later run has since.");
                 }
-                return entries.isEmpty() ? 0 : 1;
+                return 1;
             }
-            Integer stop = confirm(entries.size());
+            Integer stop = confirm(pending.size());
             if (stop != null) {
                 return stop;
             }
             Set<String> restored = new LinkedHashSet<>();
-            Integer exit = replay(client, entries, restored);
-            restoreRows(client, manifest, run, restored, restored.size() == entries.size());
-            return exit;
+            int failed = replay(client, run, pending, restored);
+            restoreRows(client, manifest, run, restored, failed == 0);
+            return failed == 0 ? 0 : EXIT_ERROR;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
             System.err.println("midgie: " + message);
@@ -183,11 +209,9 @@ public class RollbackCommand implements Callable<Integer> {
      * The run directory to replay: the one named outright, else the newest complete one under the base.
      * Returns {@code null} after reporting why there is nothing to replay.
      */
-    private File resolveRunDirectory() {
+    private File resolveRunDirectory(DeploymentIdentity identity, File treeDir) {
         File base = rollbackPlanDir;
         if (base == null) {
-            File treeDir = (tree != null) ? tree : new File(".");
-            DeploymentIdentity identity = DeploymentIdentity.of(treeDir, app);
             if (!identity.isAvailable()) {
                 note("note: " + identity.unavailableReason() + ".");
             }
@@ -202,7 +226,7 @@ public class RollbackCommand implements Callable<Integer> {
         if (new File(base, RollbackPlan.MANIFEST).isFile()) {
             return base;
         }
-        File newest = RollbackPlan.newestUnder(base);
+        File newest = RollbackPlan.newestUnder(base, identity.isAvailable() ? identity.key() : null);
         if (newest == null) {
             System.err.println("midgie: no complete rollback plan under " + base + ".");
             return null;
@@ -215,7 +239,8 @@ public class RollbackCommand implements Callable<Integer> {
      * is not a risk an operator should be able to accept in passing, and the honest fix is to name the
      * right plan.
      */
-    private Integer checkProvenance(RollbackPlan.Manifest manifest, MidpointRestClient client, File run) {
+    private Integer checkProvenance(RollbackPlan.Manifest manifest, MidpointRestClient client, File run,
+            DeploymentIdentity identity) {
         String actual = String.valueOf(client.host());
         if (manifest.server != null && !manifest.server.equals(actual)) {
             System.err.println("midgie: refusing to roll back — the plan in " + run + " was written against "
@@ -223,9 +248,13 @@ public class RollbackCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
         if (manifest.deployment != null) {
-            File treeDir = (tree != null) ? tree : new File(".");
-            DeploymentIdentity identity = DeploymentIdentity.of(treeDir, app);
-            if (identity.isAvailable() && !manifest.deployment.equals(identity.key())) {
+            if (!identity.isAvailable()) {
+                // Not a refusal: a pod with the net on a volume and no checkout has to be able to roll back. But
+                // the check this skips is the one that tells one deployment's plan from another's, so say so.
+                System.err.println("midgie: warning: the plan in " + run + " belongs to deployment "
+                        + manifest.deployment + ", and which deployment this is cannot be told ("
+                        + identity.unavailableReason() + "); only the server was checked.");
+            } else if (!manifest.deployment.equals(identity.key())) {
                 System.err.println("midgie: refusing to roll back — the plan in " + run
                         + " belongs to deployment " + manifest.deployment + ", not " + identity.key() + ".");
                 return EXIT_ERROR;
@@ -239,17 +268,19 @@ public class RollbackCommand implements Callable<Integer> {
      *
      * <p>Read-then-compare, so it races with a concurrent writer — but a config pipeline is not a
      * high-contention workload, and the alternative is a rollback that silently reverts a colleague's edit.
-     * An object with no recorded version cannot be judged and is reported rather than assumed unchanged.
+     * An object with no recorded version cannot be judged, so it counts as changed — it needs {@code --force}
+     * like one that moved, rather than being replayed as if it were known not to have.
      */
-    private List<String> findStaleObjects(RollbackPlan.Manifest manifest, MidpointRestClient client) {
+    private List<String> findStaleObjects(RollbackPlan.Manifest manifest, MidpointRestClient client,
+            Set<String> pendingOids) {
         List<String> stale = new ArrayList<>();
         for (RollbackPlan.Manifest.Entry object : manifest.objects) {
-            if (object.created || object.unrecorded) {
-                continue; // not being restored anyway
+            if (object.created || object.unrecorded || !pendingOids.contains(object.oid)) {
+                continue; // not being restored by this run
             }
             String label = object.restType + "/" + object.oid;
             if (object.version == null) {
-                warn("no recorded version for " + label + " — cannot tell whether it has changed since.");
+                stale.add(label + " (no version was recorded at the deploy, so whether it changed cannot be told)");
                 continue;
             }
             String current = readVersion(client, object.restType, object.oid);
@@ -275,9 +306,10 @@ public class RollbackCommand implements Callable<Integer> {
 
     /**
      * Send each recorded inverse, in the order the files sort — reverse of how the deploy applied them. The OID
-     * of each object restored goes to {@code restored}.
+     * of each object restored goes to {@code restored}, and each entry sent is marked in {@code run}, so a run
+     * after a partial failure sends only the rest. Returns how many failed.
      */
-    private Integer replay(MidpointRestClient client, List<PlanStore.Entry> entries, Set<String> restored) {
+    private int replay(MidpointRestClient client, File run, List<PlanStore.Entry> entries, Set<String> restored) {
         int applied = 0;
         int failed = 0;
         for (PlanStore.Entry entry : entries) {
@@ -287,6 +319,7 @@ public class RollbackCommand implements Callable<Integer> {
                         PlanStore.setsReferenceByFilter(entry));
                 applied++;
                 restored.add(entry.oid);
+                markRestored(run, entry);
                 row("restored", entry.restType + "/" + entry.oid);
             } catch (Exception e) {
                 failed++;
@@ -295,8 +328,29 @@ public class RollbackCommand implements Callable<Integer> {
                 LOG.trace("restoring {}/{} failed", entry.restType, entry.oid, e);
             }
         }
-        status("Done: " + applied + " restored, " + failed + " failed.");
-        return failed == 0 ? 0 : EXIT_ERROR;
+        status("Done: " + applied + " restored, " + failed + " failed."
+                + (failed > 0 ? " Running rollback again sends only the ones that failed." : ""));
+        return failed;
+    }
+
+    /** The marker a restored entry leaves beside its plan file. */
+    private static File restoredMarker(File run, PlanStore.Entry entry) {
+        return new File(run, entry.fileName + ".restored");
+    }
+
+    /**
+     * Leave the marker. Without it, a second run would send the entry again — harmless for the data, since it
+     * puts back the same values, but its version moved, and only {@code --force} would get past that.
+     */
+    private void markRestored(File run, PlanStore.Entry entry) {
+        try {
+            java.nio.file.Files.writeString(restoredMarker(run, entry).toPath(),
+                    java.time.Instant.now() + System.lineSeparator());
+        } catch (java.io.IOException e) {
+            System.err.println("midgie: warning: could not mark " + entry.restType + "/" + entry.oid
+                    + " as restored in " + run + " (" + e.getMessage() + "); running rollback again would send it "
+                    + "again and need --force.");
+        }
     }
 
     /**

@@ -220,7 +220,9 @@ This is the answer to the ordinary disaster: a missing line in the policy file l
 `rollback` refuses rather than guesses:
 
 - **Provenance.** The plan records which server and which deployment it came from. A mismatch is an error with no override — a plan written against staging must not reach production because somebody answered yes.
-- **Staleness.** The plan records each object's repository version after the write. If an object has moved since, someone else changed it and replaying would revert their change too; `--force` proceeds anyway.
+- **Staleness.** The plan records each object's repository version after the write. If an object has moved since, someone else changed it and replaying would revert their change too; `--force` proceeds anyway. An object whose version could not be recorded counts as changed.
+
+A rollback that fails part way marks each object it did restore, so running it again sends only the rest — no `--force` needed for the ones whose versions it moved itself. When the tree's deployment cannot be told (no checkout, a shallow clone), the plan's deployment is not compared, and the run says so.
 
 Objects the deploy **created** are named in the plan but never removed: the inverse of an add is an object delete, and an object created an hour ago may already carry links and shadows. Delete those by hand.
 

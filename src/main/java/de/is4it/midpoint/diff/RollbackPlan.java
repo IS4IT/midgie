@@ -74,10 +74,13 @@ final class RollbackPlan {
     static final int DEFAULT_KEEP = 5;
 
     private static final DateTimeFormatter STAMP =
-            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS").withZone(ZoneOffset.UTC);
 
-    /** The names {@link #STAMP} produces. Nothing else under a base path is a run directory. */
-    private static final Pattern RUN_NAME = Pattern.compile("\\d{8}-\\d{6}");
+    /**
+     * The names {@link #STAMP} produces — and, without the milliseconds, those earlier versions did. Nothing
+     * else under a base path is a run directory.
+     */
+    private static final Pattern RUN_NAME = Pattern.compile("\\d{8}-\\d{6}(-\\d{3})?");
 
     /**
      * One {@code midgie-state} row a run changed: its value and label before and after. A {@code null} value
@@ -361,7 +364,7 @@ final class RollbackPlan {
      * leaves something recognisably partial rather than a plan that replays only part of the tree.
      */
     File write(File base, String server, String deployment, String revision) throws IOException {
-        File dir = new File(base, STAMP.format(Instant.now()));
+        File dir = newRunDirectory(base);
         Io.restrictDirToOwner(dir.toPath());
         PlanStore.markIncomplete(dir);
 
@@ -378,6 +381,32 @@ final class RollbackPlan {
         LOG.debug("rollback plan written to {} ({} undoable, {} created)", dir, undoable.size(),
                 items.size() - undoable.size());
         return dir;
+    }
+
+    /**
+     * A run directory of its own under {@code base}, created atomically. Named to the second, two deploys that
+     * finished within one used to share a directory: the second replaced the manifest and left the first's patch
+     * files beside its own, and a rollback replayed both — neither run's undo.
+     */
+    private static File newRunDirectory(File base) throws IOException {
+        Files.createDirectories(base.toPath());
+        for (int attempt = 0; ; attempt++) {
+            File dir = new File(base, STAMP.format(Instant.now()));
+            try {
+                Files.createDirectory(dir.toPath());
+                return dir;
+            } catch (java.nio.file.FileAlreadyExistsException e) {
+                if (attempt >= 1000) {
+                    throw new IOException("cannot create a run directory under " + base + ": " + dir + " exists", e);
+                }
+                try {
+                    Thread.sleep(1); // the next millisecond names the next directory
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("interrupted while naming a run directory", interrupted);
+                }
+            }
+        }
     }
 
     private void writeManifest(File dir, String server, String deployment, String revision) throws IOException {
@@ -462,7 +491,16 @@ final class RollbackPlan {
      * housekeeping would be the wrong trade.
      */
     static void rotate(File base, int keep) {
-        File[] dirs = base.listFiles(RollbackPlan::isRunDirectory);
+        rotate(base, keep, null);
+    }
+
+    /**
+     * As {@link #rotate(File, int)}, keeping {@code keep} runs of {@code deployment} and touching no run whose
+     * manifest names another one. Two deployments whose keys flatten to the same directory name otherwise
+     * rotated each other's nets away. {@code null} rotates every run under {@code base}.
+     */
+    static void rotate(File base, int keep, String deployment) {
+        File[] dirs = base.listFiles(dir -> isRunDirectory(dir) && belongsTo(dir, deployment));
         if (dirs == null || dirs.length <= keep) {
             return;
         }
@@ -481,6 +519,23 @@ final class RollbackPlan {
         return RUN_NAME.matcher(dir.getName()).matches()
                 && Files.isDirectory(dir.toPath(), LinkOption.NOFOLLOW_LINKS)
                 && (new File(dir, MANIFEST).isFile() || PlanStore.isIncomplete(dir));
+    }
+
+    /**
+     * Whether the run in {@code dir} is {@code deployment}'s: its manifest names it, or names none, or cannot be
+     * read yet (an unfinished run). {@code deployment == null} accepts every run.
+     */
+    private static boolean belongsTo(File dir, String deployment) {
+        if (deployment == null || !new File(dir, MANIFEST).isFile()) {
+            return true;
+        }
+        try {
+            String recorded = Manifest.read(dir).deployment;
+            return recorded == null || recorded.equals(deployment);
+        } catch (IOException e) {
+            LOG.debug("could not read the manifest of {}", dir, e);
+            return true;
+        }
     }
 
     /**
@@ -515,7 +570,16 @@ final class RollbackPlan {
      * An unfinished plan is skipped rather than reported: it cannot be replayed anyway.
      */
     static File newestUnder(File base) {
-        File[] dirs = base.listFiles(RollbackPlan::isRunDirectory);
+        return newestUnder(base, null);
+    }
+
+    /**
+     * As {@link #newestUnder(File)}, among the runs of {@code deployment} only; {@code null} for any. A net of
+     * another deployment sharing the directory would only be refused by the provenance check, hiding this
+     * deployment's own net one entry further down.
+     */
+    static File newestUnder(File base, String deployment) {
+        File[] dirs = base.listFiles(dir -> isRunDirectory(dir) && belongsTo(dir, deployment));
         if (dirs == null) {
             return null;
         }

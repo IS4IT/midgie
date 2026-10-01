@@ -106,13 +106,13 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [ ] **E6 — Xerces prints raw `[Fatal Error] …` to stderr, ignoring `-q`.** `Io.java:91`, `SchemaOptions.java:659`, discovery. Install a silent error handler.
 - [ ] **E7 — Generic `IOException` from `send` is neither retried for safe reads nor wrapped; `SSLException` is not a `TransportException`.** `MidpointRestClient.java:467, 473-485`.
 - [ ] **E8 — `isProxyAuthFailure` matches any message containing `exchImpl`.** `MidpointRestClient.java:614-624`. *Plausible.*
-- [ ] **E9 — Object with no recorded version is replayed without `--force`; `-q` hides the warning.** `RollbackCommand.java:231-234`. Contradicts Javadoc at `:222`.
-- [ ] **E10 — Rollback provenance check silently skipped when local identity can't be derived.** `RollbackCommand.java:205-212`.
+- [x] **E9 — Object with no recorded version is replayed without `--force`; `-q` hides the warning.** `RollbackCommand.java:231-234`. Contradicts Javadoc at `:222`. — rollback group
+- [x] **E10 — Rollback provenance check silently skipped when local identity can't be derived.** `RollbackCommand.java:205-212`. — rollback group
 
 ### Correctness edge cases
 
-- [ ] **C1 — Rollback run directories named to the second can collide.** `RollbackPlan.java:259`; `PlanStore.write` overwrites only same-named files, so two runs mix.
-- [ ] **C2 — Different deployment keys can share a rollback directory.** `RollbackPlan.java:387` (`root/a/b_c` vs `root/a_b/c`).
+- [x] **C1 — Rollback run directories named to the second can collide.** `RollbackPlan.java:259`; `PlanStore.write` overwrites only same-named files, so two runs mix. — rollback group
+- [x] **C2 — Different deployment keys can share a rollback directory.** `RollbackPlan.java:387` (`root/a/b_c` vs `root/a_b/c`). — rollback group (rotation and lookup per deployment, no renaming)
 - [ ] **C3 — `diff --trace` hides key-pairing notes.** `DiffCommand.java:213` gates on `debug && !quiet`; live path uses `debug || trace`.
 - [ ] **C4 — All-in-sync interactive run records no tracking state.** `DeployCommand.java:1012-1017, 512`. `--yes` does record.
 - [ ] **C5 — `--oid` ignored on a schema-only run.** `DeployCommand.java:441-443`.
@@ -135,8 +135,8 @@ Tick an item when its fix is committed; add the commit hash after it.
 - [ ] **C22 — Stdin: BOM breaks parsing, empty stdin gives "String index out of range: 0", encoding declaration ignored.** `Io.java:48`.
 - [ ] **C23 — Connect timeout fixed at 10 s; huge `--timeout` overflows `int`.** `MidpointRestClient.java:151`, `ServerCertificates.java:82, 84, 223-224`.
 - [ ] **C24 — Lone non-self-signed leaf becomes the trust anchor without saying so.** `ServerCertificates.java:112-117`. `--cacert` then breaks at renewal.
-- [ ] **C25 — Retrying a partly failed rollback needs `--force`, which disables staleness protection for all objects.** `RollbackCommand.java:257-276`.
-- [ ] **C26 — Unfinished rollback run gives `--plan`/`--apply-plan` wording.** `PlanStore.java:173, 176`.
+- [x] **C25 — Retrying a partly failed rollback needs `--force`, which disables staleness protection for all objects.** `RollbackCommand.java:257-276`. — rollback group
+- [x] **C26 — Unfinished rollback run gives `--plan`/`--apply-plan` wording.** `PlanStore.java:173, 176`. — rollback group
 - [x] **C27 — OID characters not validated when writing plan files.** `PlanStore.java:139-146` vs `:256`. *Plausible.* — `bf0dcda` (with S1)
 - [ ] **C28 — `init` writes some files, then refuses.** `InitCommand.java:200-202, 231-250, 261-265, 529-535`.
 - [ ] **C29 — `init --write-cacert -` mixes status text into the PEM on stdout.** `InitCommand.java:331-339`.
@@ -159,16 +159,16 @@ Tick an item when its fix is committed; add the commit hash after it.
 
 ## Test coverage to add
 
-- [ ] T1 — Rollback replay offline (stub server): staleness refusal, `--force`, `--dry-run` exit, partial failure, missing version.
-- [ ] T2 — `rotate` with non-run directories, `.`/`..` keys, symlinks.
+- [x] T1 — Rollback replay offline (stub server): staleness refusal, `--force`, `--dry-run` exit, partial failure, missing version. — rollback group (RollbackReplayTest)
+- [x] T2 — `rotate` with non-run directories, `.`/`..` keys, symlinks. — rollback group (RollbackPlanTest)
 - [ ] T3 — Nested smart references; `--smart-refs verify`.
-- [ ] T4 — Untyped/raw protected values.
-- [ ] T5 — Desired ids from another environment under merge and replace.
-- [ ] T6 — `ApplyRules` with add/delete of a parent container value.
+- [x] T4 — Untyped/raw protected values. — rollback group (DiffCommandTest)
+- [x] T5 — Desired ids from another environment under merge and replace. — rollback group (ForeignContainerIdTest)
+- [x] T6 — `ApplyRules` with add/delete of a parent container value. — rollback group (ApplyRulesTest)
 - [ ] T7 — `RemovalDetector` exception paths; history grouping with split identities.
 - [ ] T8 — `SyncState.apply` delta construction (add / replace-by-id / delete, duplicate keys).
-- [ ] T9 — Symlinks in discovery; malformed XML files.
+- [x] T9 — Symlinks in discovery; malformed XML files. — rollback group (DeployCliTest)
 - [ ] T10 — `--insecure` path, hostname mismatch with `--cacert`, no secrets in debug/trace output.
-- [ ] T11 — Password precedence with `password` in the file; OID escaping.
+- [x] T11 — Password precedence with `password` in the file; OID escaping. — rollback group (ConfigDefaultsTest, MidpointRestClientTest)
 - [ ] T12 — stdout encoding and write failure, `Error` exit code, `--opt=value` redaction, BOM/empty stdin.
 - [ ] T13 — `GlobPath` and `ReferenceCollector` directly; `VersionSupport`/`LiveLookup` without the docker rig.

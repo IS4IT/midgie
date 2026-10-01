@@ -25,6 +25,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A live `diff -` removes its copy of stdin when it is done.** The desired object — a `clearValue` password and all — was copied to `midgie-stdin-NNN.xml` in the shared temporary directory and only removed when the JVM exited, so a run that was killed left it there. It is now written as `stdin.xml` into an owner-only directory of its own and removed as soon as the diff finishes; only a run killed outright can still leave it behind.
 
+- **A rollback that failed part way can simply be run again.** The objects it had restored had new versions, which read as someone else's change, so the second run needed `--force` — which turned the check off for the objects still to be restored as well. Each restored object is now marked in the plan, and running `rollback` again sends only the rest.
+
+- **An object deployed without a recorded version needs `--force` to roll back.** It was replayed as if known to be unchanged, with a warning `--quiet` hid. Every object a rollback finds changed is now named whatever `--quiet` asks.
+
+- **`rollback` says when it cannot check which deployment a plan belongs to.** Outside a repository, or in a shallow clone, the deployment check was skipped without a word.
+
+- **Two deploys finishing in the same second keep separate rollback plans.** They shared a directory, so a rollback replayed the inverses of both. Plans are named to the millisecond now, and two deployments whose names flatten to the same directory no longer rotate away or pick each other's plans.
+
+- **An unfinished rollback plan is refused in rollback's own words**, rather than with `--apply-plan`'s advice to re-run `--plan`.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed

@@ -1302,7 +1302,7 @@ public class DeployCommand implements Callable<Integer> {
         try {
             String server = (client != null) ? String.valueOf(client.host()) : null;
             File dir = rollback.write(base, server, deployment, revision);
-            RollbackPlan.rotate(base, RollbackPlan.DEFAULT_KEEP);
+            RollbackPlan.rotate(base, RollbackPlan.DEFAULT_KEEP, deployment);
             status("Rollback plan: " + dir + " (" + rollback.undoableCount() + " object(s) undoable). "
                     + "Replay with: midgie rollback --url <url>"
                     + (rollbackPlanDir != null ? " --rollback-plan " + rollbackPlanDir : ""));
