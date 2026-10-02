@@ -361,7 +361,7 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 
 ## Packaging & license
 
-- Maven, Java 17, fat JAR via `maven-shade-plugin` (needs a JVM; GraalVM native is impractical given
+- Maven, Java 21, fat JAR via `maven-shade-plugin` (needs a JVM; GraalVM native is impractical given
   prism's reflection/JAXB). Dependencies: `com.evolveum.midpoint.infra:schema` (pulls prism), picocli,
   JUnit 5; the live modes use the JDK 11+ `java.net.http` client — no extra dependency.
 - **Launcher `bin/midgie`.** On JDK 23+, classgraph (a transitive prism dependency) calls the

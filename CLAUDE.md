@@ -35,6 +35,6 @@ The midPoint source is checked out at **`/Volumes/Daten/git/midpoint`**, at the 
 
 ## Conventions
 
-- Java 17, clean readable code over clever code, explicit error handling.
+- Java 21, clean readable code over clever code, explicit error handling.
 - Keep the offline `diff` core free of any REST/HTTP dependency — that layering is the point (DESIGN.md).
 - The source object XML must stay pure midPoint XML. Behaviour comes from the CLI flags and the layers behind them (`midgie.properties`, environment variables, tree-local config), never from custom annotations embedded in the object.

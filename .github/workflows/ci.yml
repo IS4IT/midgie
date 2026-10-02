@@ -26,8 +26,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 17 is the compile target (maven.compiler.release); 21 proves the LTS range runs too.
-        java: ['17', '21', '25']
+        # 21 is the compile target (maven.compiler.release); 25 proves the next LTS runs it too.
+        java: ['21', '25']
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -59,11 +59,11 @@ jobs:
           persist-credentials: false   # nothing here pushes; keep the token out of .git/config
           fetch-depth: 0   # same reason as the build job: 'git describe' needs the tags
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
           cache: maven
 
       # The build job already ran the tests; this one only needs a JAR to put in the image.

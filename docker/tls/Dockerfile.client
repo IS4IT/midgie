@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 #
 # midgie client that runs the TLS smoke tests. Build context: the repo root (needs the built jar).
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:21-jre
 WORKDIR /tls
 COPY target/midgie.jar /tls/midgie.jar
 COPY docker/tls/ca.crt /tls/ca.crt

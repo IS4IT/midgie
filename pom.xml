@@ -19,7 +19,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.release>17</maven.compiler.release>
+        <maven.compiler.release>21</maven.compiler.release>
 
         <!-- Base-schema version knob. The midpoint-schema jar carries the COMPILE-TIME base
              object model (UserType, RoleType, ...), so this MUST match the target midPoint's
@@ -100,7 +100,7 @@
             </plugin>
 
             <!-- Pinned so maven.compiler.release applies whatever Maven builds this: Maven 3.8's default
-                 compiler plugin (3.1) predates 'release' and falls back to Java 5, which JDK 17 rejects. -->
+                 compiler plugin (3.1) predates 'release' and falls back to Java 5, which current JDKs reject. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

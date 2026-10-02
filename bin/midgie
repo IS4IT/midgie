@@ -8,8 +8,10 @@
 # warnings that classgraph (a transitive prism dependency) triggers when it
 # unmaps memory-mapped schema jars during prism bootstrap. Those warnings are
 # written to the native stderr, so they cannot be filtered from inside the JVM
-# — the flag is the only suppression. It is unknown to JDK <= 22 (which does
+# — the flag is the only suppression. It is unknown to JDK 21 and 22 (which do
 # not emit the warning), so it is added only when the running JVM needs it.
+# A JVM older than 21 is refused here with a message saying so, rather than
+# left to fail on the JAR's class files.
 set -eu
 
 # Resolve this script's own directory so the JAR is found regardless of the cwd.
@@ -45,6 +47,12 @@ major=${major%%-*}   # an early-access JDK reports "24-ea"; the qualifier is not
 case $major in
     '' | *[!0-9]*) major=0 ;;
 esac
+# An unreadable version (0) is left to the JVM itself; a known older one gets a plain answer instead of
+# an UnsupportedClassVersionError naming class file versions.
+if [ "$major" -gt 0 ] && [ "$major" -lt 21 ]; then
+    echo "midgie: needs Java 21 or later, but $JAVA is Java $major. Set JAVA_HOME to a JDK 21+." >&2
+    exit 2
+fi
 
 # JDK 23+ warns on sun.misc.Unsafe memory access; opt out so stderr stays clean. JAVA_OPTS is
 # intentionally word-split so callers can pass extra JVM options.

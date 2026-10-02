@@ -17,7 +17,7 @@
 # The base is the glibc (Ubuntu) Temurin JRE rather than the Alpine one, which publishes no linux/arm64
 # manifest. It is deliberately a floating tag: an image tag is cut once per release and never rebuilt, so
 # pinning a digest here would only mean shipping a staler base than the day's build could have had.
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:21-jre
 
 # Overridden by the release workflow, which builds the JAR under its version-stamped name.
 ARG JAR=target/midgie.jar

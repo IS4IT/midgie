@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **midgie needs Java 21 or later.** Java 17 is no longer supported: the JAR is built for 21, the container image runs on the Temurin 21 JRE, and CI tests 21 and 25. `bin/midgie` refuses an older JVM with a message naming the version it found; running the JAR directly on 17 fails with `UnsupportedClassVersionError`.
+
 ### Fixed
 
 - **An OID is checked before it becomes part of a URL.** Object addresses are built by concatenation, and an OID from a tree file, `--oid`, or a plan or rollback file went in as it stood: `../roles/x?options=raw` addressed another collection and added a query option to the PATCH or DELETE, and an OID with a space failed with "Illegal character in path". Anything but a UUID — the only form midPoint's native repository stores — now fails that object with a message naming it, before any request is sent, and `--plan` refuses to write a plan file for one.

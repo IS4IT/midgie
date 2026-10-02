@@ -37,7 +37,7 @@ bin/midgie --help             # launcher (recommended)
 java -jar target/midgie.jar --help   # or run the JAR directly
 ```
 
-Requires **JDK 17+**. Dependencies (midPoint schema + prism) resolve from Evolveum's Nexus, configured in
+Requires **JDK 21+**. Dependencies (midPoint schema + prism) resolve from Evolveum's Nexus, configured in
 `pom.xml`. The first build downloads the midPoint schema and prism dependencies, so it is sizeable.
 
 The build takes its version from the git tag (`git describe`), so `--version` says what the JAR was built from: `0.11.2` on a release tag, `0.11.2-1-g4c278ae-dirty` one commit past it with a modified working tree. Building outside a git checkout — a source archive, say — falls back to the placeholder version in `pom.xml`.
@@ -672,7 +672,7 @@ A Docker Compose rig under `docker/` brings up a real midPoint for the live inte
 rig being up), and `docker/tls/` adds an nginx TLS proxy + private CA to exercise `--cacert`/`--insecure`
 end to end. See [`docker/README.md`](docker/README.md) and [`docker/tls/README.md`](docker/tls/README.md).
 
-GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `mvn verify` on JDK 17, 21 and 25
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `mvn verify` on JDK 21 and 25
 (the rig-gated live tests self-skip), builds the container image for amd64 and arm64, lints the Helm chart,
 and runs a [REUSE](https://reuse.software/) licence-compliance lint on every push to `main` and every pull
 request against it.
