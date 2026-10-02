@@ -33,7 +33,7 @@ final class Io {
     }
 
     /**
-     * The console to prompt on, or {@code null} when the session is not interactive. On JDK 17-21
+     * The console to prompt on, or {@code null} when the session is not interactive. On JDK 21
      * {@link System#console()} is present only when standard input and output are both a terminal; from JDK 22
      * it is present whenever the JVM could prompt, redirected or not, and {@code Console.isTerminal()} tells
      * the two apart. Taken as is there, a confirmation read end-of-file from a pipe, counted as "no" and exited
@@ -48,7 +48,7 @@ final class Io {
             java.lang.reflect.Method isTerminal = Console.class.getMethod("isTerminal");
             return Boolean.TRUE.equals(isTerminal.invoke(console)) ? console : null;
         } catch (NoSuchMethodException e) {
-            return console; // JDK 17-21: a console at all means a terminal
+            return console; // JDK 21: a console at all means a terminal
         } catch (ReflectiveOperationException | RuntimeException e) {
             LOG.debug("could not ask the console whether it is a terminal", e);
             return null;

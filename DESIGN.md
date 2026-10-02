@@ -366,7 +366,7 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 
 - Maven, Java 21, fat JAR via `maven-shade-plugin` (needs a JVM; GraalVM native is impractical given
   prism's reflection/JAXB). Dependencies: `com.evolveum.midpoint.infra:schema` (pulls prism), picocli,
-  JUnit 5; the live modes use the JDK 11+ `java.net.http` client — no extra dependency.
+  JUnit 5; the live modes use the JDK's own `java.net.http` client — no extra dependency.
 - **Launcher `bin/midgie`.** On JDK 23+, classgraph (a transitive prism dependency) calls the
   terminally-deprecated `sun.misc.Unsafe::invokeCleaner` to unmap memory-mapped schema jars during prism
   bootstrap, which prints JEP 498 warnings. Those go to the *native* stderr (fd 2), bypassing `System.err`,

@@ -484,8 +484,8 @@ public final class MidpointRestClient {
                     throw e;   // raised above, and already carrying its own explanation
                 }
                 // Credentials a proxy rejects never come back as a status. The JDK re-sends the CONNECT until
-                // it gives up, and what surfaces is "too many authentication attempts" (JDK 17) or an internal
-                // exchange failure (JDK 26) — neither of which mentions the proxy at all.
+                // it gives up, and what surfaces is "too many authentication attempts" (up to JDK 25) or an
+                // internal exchange failure (JDK 26) — neither of which mentions the proxy at all.
                 if (proxy != null && proxy.hasCredentials()
                         && isProxyAuthFailure(e, "https".equalsIgnoreCase(request.uri().getScheme()))) {
                     LOG.debug("{}  proxy authentication failed: {}", what, e.toString());

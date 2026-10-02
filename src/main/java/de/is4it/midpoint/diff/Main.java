@@ -176,8 +176,8 @@ public class Main implements java.util.concurrent.Callable<Integer> {
 
     public static void main(String[] args) {
         // Standard output carries the payload — a PATCH body piped into curl or a file — so it is UTF-8 whatever
-        // the locale says. On JDK 17 it followed the platform encoding, and under LANG=C every non-ASCII
-        // character of a name or a description came out as '?', corrupting the data the body then wrote.
+        // the locale says. Left to the JDK it follows the locale (stdout.encoding), and under LANG=C every
+        // non-ASCII character of a name or a description came out as '?', corrupting the data the body wrote.
         System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8));
         // Before anything can build an HttpClient: the JDK reads the hostname-verification property once,
         // on first use of java.net.http, so leaving the decision to whichever client is constructed first

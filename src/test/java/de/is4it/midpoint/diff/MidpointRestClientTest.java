@@ -257,12 +257,12 @@ class MidpointRestClientTest {
 
     @Test
     void onlyTheJdksOwnProxyAuthenticationFailuresReadAsOne() {
-        IOException jdk17 = new IOException("too many authentication attempts. Limit: 3");
+        IOException upToJdk25 = new IOException("too many authentication attempts. Limit: 3");
         IOException jdk26 = new IOException("x", new NullPointerException(
                 "Cannot invoke \"ExchangeImpl.cancel()\" because \"this.exchImpl\" is null"));
         IOException unrelated = new IOException("exchImpl mentioned in passing");
 
-        assertTrue(MidpointRestClient.isProxyAuthFailure(jdk17, false));
+        assertTrue(MidpointRestClient.isProxyAuthFailure(upToJdk25, false));
         assertTrue(MidpointRestClient.isProxyAuthFailure(jdk26, true));
         assertFalse(MidpointRestClient.isProxyAuthFailure(jdk26, false), "no tunnel, no CONNECT to authenticate");
         assertFalse(MidpointRestClient.isProxyAuthFailure(unrelated, true));
