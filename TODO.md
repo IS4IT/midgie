@@ -81,8 +81,9 @@ separates "you removed this" from "someone else added it". Full design in DESIGN
 - [x] **`--prune`** — applies the detected removals: opt-in, `--dry-run`-able, separately confirmed, run
   after the tree is applied and only when the whole tree really was applied. Its delta is built solely from
   values that were in last-applied, so it cannot reach accrued or foreign state.
-- [x] **`init --write-policy`** — seeds a starter policy from the tree, suggesting natural-keys + merge only
-  for containers that are keyed *and* carry the whole key.
+- [x] **`init --write-policy`** — seeds a starter policy from the tree: a rule for each list whose live copy
+  holds values the tree does not, worded against the default in effect, then midgie's built-in rules as
+  active lines.
 - [x] **Tests** — `RemovalDetectorTest` (dropped value, still-declared value, nested value moved between
   fragments, deleted fragment, orphaned object, `pruneDelta` shape), `GitRevisionTest` (degradation outside
   a repository, identity derivation, revision verification and the argv guard), plus the rig.

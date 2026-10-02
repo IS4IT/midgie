@@ -7,13 +7,16 @@ package de.is4it.midpoint.diff;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,10 +39,21 @@ import org.slf4j.LoggerFactory;
  * segments, then fewer {@code **}, then a longer literal prefix; ties fall to the earlier line). The CLI flags
  * are the baseline every matching knob is layered onto. The object XML stays pure midPoint XML — strategy
  * lives here, never embedded in the objects.
+ *
+ * <p>Beneath the file sit midgie's built-in rules ({@value #BUILT_IN_RESOURCE}, in the same grammar): the
+ * {@code apply=on-create} items midPoint or its operators own once an object exists, such as a task's
+ * {@code executionState}. They apply with or without a file, after its lines, so a file line naming the same
+ * item wins the tie and overrides one; there is no switch to turn them off as a whole.
  */
 final class Policy {
 
     private static final Logger LOG = LoggerFactory.getLogger(Policy.class);
+
+    /** The built-in rules, next to this class on the classpath. */
+    static final String BUILT_IN_RESOURCE = "builtin.policy";
+
+    /** Where a built-in rule says it comes from, in the log and the held-back notes. */
+    private static final String BUILT_IN = "built-in";
 
     /** In the order the messages list them. */
     private static final List<String> KNOB_NAMES =
@@ -51,67 +65,123 @@ final class Policy {
 
     private static final class Rule {
         final GlobPath selector;
+        final String selectorText;  // as written, unquoted — what tells a restated built-in apart
         final boolean itemLevel;
         final Map<String, String> settings;
         final int order;
         final int lineNumber;   // so a message can say where to change it, not just what it says
         final String source;    // the line as written, for the "matched nothing" report
+        final Origin origin;
         boolean matched;
 
-        Rule(GlobPath selector, boolean itemLevel, Map<String, String> settings, int order, int lineNumber,
-                String source) {
+        Rule(GlobPath selector, String selectorText, boolean itemLevel, Map<String, String> settings, int order,
+                int lineNumber, String source, Origin origin) {
             this.selector = selector;
+            this.selectorText = selectorText;
             this.itemLevel = itemLevel;
             this.settings = settings;
             this.order = order;
             this.lineNumber = lineNumber;
             this.source = source;
+            this.origin = origin;
+        }
+
+        boolean builtIn() {
+            return origin.builtIn();
+        }
+
+        /** What the rule says, independent of how it is spaced or where it is written. */
+        String meaning() {
+            return selectorText + " " + new TreeMap<>(settings);
         }
     }
 
+    /** Where a rule was read from: the policy file's path, or midgie's built-in rules. */
+    private record Origin(String path, boolean builtIn) {
+        static final Origin BUILT_IN_RULES = new Origin(BUILT_IN, true);
+    }
+
     private final List<Rule> rules;
-    private final File file;
 
-    private Policy(List<Rule> rules, File file) {
+    private Policy(List<Rule> rules) {
         this.rules = rules;
-        this.file = file;
     }
 
-    /** How many rules the file holds; zero for a file of comments only, as {@code init --write-policy} writes. */
+    /** How many rules the file holds, built-ins not counted; zero for a file of comments only. */
     int ruleCount() {
-        return rules.size();
+        return (int) rules.stream().filter(rule -> !rule.builtIn()).count();
     }
 
-    /** Parse and validate the policy file. Throws with the line number on a malformed rule. */
+    /** How many built-in rules apply beneath the file's. */
+    int builtInCount() {
+        return (int) rules.stream().filter(Rule::builtIn).count();
+    }
+
+    /** Parse and validate the policy file, without the built-ins. Throws with the line number on a malformed rule. */
     static Policy load(File file) throws IOException {
         if (!file.isFile() || !file.canRead()) {
             // NoSuchFileException carries only the path as its message, so the run failed with a bare
             // 'midgie: midgie.policy' — which reads like the file was the problem rather than its absence.
             throw new IOException("--policy file does not exist or is not readable: " + file);
         }
+        List<Rule> rules = parse(Files.readAllLines(file.toPath(), StandardCharsets.UTF_8),
+                new Origin(file.getPath(), false), 0);
+        if (rules.isEmpty()) {
+            // A comment-only file is legitimate — one whose every rule was commented out to try a deploy
+            // without them, say — and rejecting it would fail a run over a file that asks for nothing.
+            LOG.debug("policy file {} has no rules; every object keeps the CLI strategy", file);
+        }
+        return new Policy(rules);
+    }
+
+    /**
+     * The policy a deploy runs on: the file's rules ({@code null}: none), then the built-in ones. Placed after
+     * the file's lines, a built-in loses every tie to them — the same reason {@code init --write-policy} puts its
+     * block at the end of a file.
+     */
+    static Policy effective(File file) throws IOException {
+        List<Rule> rules = new ArrayList<>((file != null) ? load(file).rules : List.of());
+        try {
+            rules.addAll(parse(builtInText().lines().toList(), Origin.BUILT_IN_RULES, rules.size()));
+        } catch (IOException e) {
+            throw new IllegalStateException("midgie's built-in policy does not parse: " + e.getMessage(), e);
+        }
+        return new Policy(rules);
+    }
+
+    /** The built-in rules as midgie ships them, comments included: what {@code init --write-policy} copies. */
+    static String builtInText() {
+        try (InputStream in = Policy.class.getResourceAsStream(BUILT_IN_RESOURCE)) {
+            if (in == null) {
+                throw new IllegalStateException("midgie's built-in policy (" + BUILT_IN_RESOURCE
+                        + ") is missing from the build");
+            }
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("could not read midgie's built-in policy: " + e.getMessage(), e);
+        }
+    }
+
+    /** The rules of a policy text, numbered from {@code firstOrder} so a later source loses ties to an earlier one. */
+    private static List<Rule> parse(List<String> lines, Origin origin, int firstOrder) throws IOException {
         List<Rule> rules = new ArrayList<>();
         int lineNumber = 0;
-        int order = 0;
-        for (String raw : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
+        int order = firstOrder;
+        for (String raw : lines) {
             lineNumber++;
             String line = raw.strip();
             if (line.isEmpty() || line.startsWith("#")) {
                 continue;
             }
-            rules.add(parseLine(line, lineNumber, order++));
+            rules.add(parseLine(line, lineNumber, order++, origin));
         }
-        if (rules.isEmpty()) {
-            // A comment-only file is legitimate: 'init --write-policy' writes exactly that for a tree with
-            // nothing to tune, and rejecting it would break the very command line init tells you to run.
-            LOG.debug("policy file {} has no rules; every object keeps the CLI strategy", file);
-        }
-        return new Policy(rules, file);
+        return rules;
     }
 
     /** A run of non-blank characters: a word of a policy line. */
     private static final java.util.regex.Pattern TOKEN = java.util.regex.Pattern.compile("\\S+");
 
-    private static Rule parseLine(String line, int lineNumber, int order) throws IOException {
+    private static Rule parseLine(String line, int lineNumber, int order, Origin origin) throws IOException {
         String selectorText;
         String settingsText;
         if (line.startsWith("\"")) {
@@ -199,7 +269,7 @@ final class Policy {
             }
             settings.put(key, value);
         }
-        return new Rule(selector, itemLevel, settings, order, lineNumber, line.strip());
+        return new Rule(selector, selectorText, itemLevel, settings, order, lineNumber, line.strip(), origin);
     }
 
     /**
@@ -285,7 +355,7 @@ final class Policy {
                 }
                 String apply = rule.settings.get("apply");
                 if (apply != null) {
-                    applyRules.add(new ApplyRules.Rule(rule.selector, ApplyRules.Mode.byName(apply)));
+                    applyRules.add(new ApplyRules.Rule(rule.selector, ApplyRules.Mode.byName(apply), rule.builtIn()));
                 }
                 if (couldMatchIdentity(rule.selector, identity)) {
                     rule.matched = true;
@@ -372,8 +442,8 @@ final class Policy {
     }
 
     /** Where a rule lives, in the form an editor jumps to — the answer to "and where do I change it?". */
-    private String at(Rule rule) {
-        return file.getPath() + ":" + rule.lineNumber;
+    private static String at(Rule rule) {
+        return rule.builtIn() ? BUILT_IN : rule.origin.path() + ":" + rule.lineNumber;
     }
 
     private static void addApplied(Map<Rule, List<String>> byRule, String knob, Rule rule) {
@@ -390,11 +460,21 @@ final class Policy {
      * the CLI baseline, so a {@code multivalue=merge} rule written to protect accrued values quietly becomes
      * replace and the deploy deletes them. Nothing in the output distinguished that from a rule that
      * applied.
+     *
+     * <p>Built-in rules are left out, and so are the file's lines that restate one, as the file
+     * {@code init --write-policy} seeds does: they cover every tree, and most trees hold no user or no
+     * resource for them to reach — which says nothing about a typo.
      */
     List<String> unmatchedRules() {
+        Set<String> builtIns = new HashSet<>();
+        for (Rule rule : rules) {
+            if (rule.builtIn()) {
+                builtIns.add(rule.meaning());
+            }
+        }
         List<String> unmatched = new ArrayList<>();
         for (Rule rule : rules) {
-            if (!rule.matched) {
+            if (!rule.matched && !rule.builtIn() && !builtIns.contains(rule.meaning())) {
                 unmatched.add(at(rule) + ": " + rule.source);
             }
         }

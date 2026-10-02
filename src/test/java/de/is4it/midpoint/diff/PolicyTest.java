@@ -55,6 +55,13 @@ class PolicyTest {
         return Policy.load(file.toFile());
     }
 
+    /** The policy as deploy runs it: the file's lines, then the built-in ones. */
+    private static Policy effective(Path dir, String... lines) throws IOException {
+        Path file = dir.resolve("policy.txt");
+        Files.writeString(file, String.join("\n", lines) + "\n", StandardCharsets.UTF_8);
+        return Policy.effective(file.toFile());
+    }
+
     @Test
     void anUnquotedNameKeepsTheSpacesItWasWrittenWith(@TempDir Path dir) throws IOException {
         // The words used to be rejoined with one space, so the rule named 'Help Desk' instead of 'Help  Desk'.
@@ -267,6 +274,85 @@ class PolicyTest {
                 "the rule that applied must not be: " + policy.unmatchedRules());
         assertFalse(policy.unmatchedRules().stream().anyMatch(r -> r.contains("assignment")),
                 "nor an item rule offered to a matching object: " + policy.unmatchedRules());
+    }
+
+    @Test
+    void theBuiltInRulesApplyWithoutAFile() throws Exception {
+        Policy policy = Policy.effective(null);
+
+        assertEquals(9, policy.builtInCount());
+        assertEquals(0, policy.ruleCount(), "no file, so no file rules");
+        ApplyRules apply = policy.resolveFor("TaskType", "Recompute", OID, baseline()).apply;
+        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("executionState"));
+        assertEquals(ApplyRules.Mode.ALWAYS, apply.modeOf("schedule"));
+        ApplyRules resource = policy.resolveFor("ResourceType", "Prod", OID, baseline()).apply;
+        assertEquals(ApplyRules.Mode.ON_CREATE, resource.modeOf("schema/definition"));
+        assertEquals(ApplyRules.Mode.ALWAYS, resource.modeOf("schema/generationConstraints"),
+                "configuration beside the cached schema still deploys");
+        ApplyRules role = policy.resolveFor("RoleType", "Manager", OID, baseline()).apply;
+        assertEquals(ApplyRules.Mode.ALWAYS, role.modeOf("activation/administrativeStatus"),
+                "the user rules reach users only");
+    }
+
+    @Test
+    void aFileLineNamingTheSameItemOverridesABuiltIn(@TempDir Path dir) throws Exception {
+        // Equally specific, so the tie decides — and the file's lines come first.
+        Policy policy = effective(dir, "TaskType/*/executionState  apply=always");
+
+        assertEquals(ApplyRules.Mode.ALWAYS,
+                policy.resolveFor("TaskType", "Recompute", OID, baseline()).apply.modeOf("executionState"));
+        assertEquals(1, policy.ruleCount());
+        assertEquals(9, policy.builtInCount(), "the file extends the built-ins rather than replacing them");
+        assertEquals(ApplyRules.Mode.ON_CREATE,
+                policy.resolveFor("TaskType", "Recompute", OID, baseline()).apply.modeOf("schedulingState"),
+                "a built-in the file does not name still applies");
+    }
+
+    @Test
+    void aBroaderFileRuleDoesNotOverrideAMoreSpecificBuiltIn(@TempDir Path dir) throws Exception {
+        // The most specific rule wins whichever source it comes from, as within one file: overriding a built-in
+        // takes a line naming its item.
+        Policy policy = effective(dir, "TaskType/**  apply=always", "TaskType/Nightly/executionState  apply=always");
+
+        assertEquals(ApplyRules.Mode.ON_CREATE,
+                policy.resolveFor("TaskType", "Recompute", OID, baseline()).apply.modeOf("executionState"));
+        assertEquals(ApplyRules.Mode.ALWAYS,
+                policy.resolveFor("TaskType", "Nightly", OID, baseline()).apply.modeOf("executionState"),
+                "one object is carved out by naming it");
+    }
+
+    @Test
+    void builtInsAndTheLinesRestatingThemAreNeverReportedAsUnmatched(@TempDir Path dir) throws Exception {
+        // Most trees hold no user or no resource, so a built-in rule reaching nothing is the normal case — and
+        // so is the restating line 'init --write-policy' writes for it. Only a line of the file's own counts.
+        Policy policy = effective(dir, "UserType/*/credentials   apply=on-create", "Role/Typo scope=full");
+        policy.resolveFor("RoleType", "Manager", OID, baseline());
+
+        assertEquals(1, policy.unmatchedRules().size(), "only the typo: " + policy.unmatchedRules());
+        assertTrue(policy.unmatchedRules().get(0).contains("Role/Typo"), policy.unmatchedRules().toString());
+    }
+
+    @Test
+    void theDebugLogNamesABuiltInRuleAsBuiltIn() throws Exception {
+        Policy policy = Policy.effective(null);
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(Policy.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        ch.qos.logback.classic.Level original = logger.getLevel();
+        logger.addAppender(appender);
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            policy.resolveFor("ResourceType", "Prod", OID, baseline());
+        } finally {
+            logger.setLevel(original);
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+        String line = appender.list.get(0).getFormattedMessage();
+
+        assertTrue(line.contains("ResourceType/*/administrativeOperationalState  apply=on-create (built-in)"), line);
     }
 
     @Test

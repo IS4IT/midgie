@@ -20,10 +20,10 @@ import com.evolveum.midpoint.prism.delta.ObjectDelta;
 import com.evolveum.midpoint.prism.path.ItemPath;
 
 /**
- * When midgie may write an item, from the {@code --policy} file's {@code apply} knob: {@code always} (the
- * default); {@code on-create} — written in the POST that creates the object, and never touched by a later
- * PATCH; or {@code if-absent} — written whenever the server holds no value for it, and never overwritten or
- * removed, like a midPoint mapping of weak strength. The motivating item for {@code on-create} is
+ * When midgie may write an item, from the policy's {@code apply} knob — a {@code --policy} file line or one
+ * of midgie's built-in rules: {@code always} (the default); {@code on-create} — written in the POST that
+ * creates the object, and never touched by a later PATCH; or {@code if-absent} — written whenever the server
+ * holds no value for it, and never overwritten or removed, like a midPoint mapping of weak strength. The motivating item for {@code on-create} is
  * {@code TaskType/executionState}: a task is deployed suspended or runnable, and from then on operators and
  * midPoint's task manager own it, so a redeploy must not flip it back. {@code if-absent} differs only once
  * someone clears the item: it is filled in again on the next deploy.
@@ -56,14 +56,16 @@ final class ApplyRules {
         }
     }
 
-    /** One policy line's {@code apply} setting. */
+    /** One policy line's {@code apply} setting, and whether the line is one of midgie's built-in rules. */
     static final class Rule {
         final GlobPath glob;
         final Mode mode;
+        final boolean builtIn;
 
-        Rule(GlobPath glob, Mode mode) {
+        Rule(GlobPath glob, Mode mode, boolean builtIn) {
             this.glob = glob;
             this.mode = mode;
+            this.builtIn = builtIn;
         }
     }
 
@@ -159,7 +161,7 @@ final class ApplyRules {
             List<String> names = localNames(mod.getPath());
             Mode mode = modeAt(names);
             if (mode == Mode.ON_CREATE || (mode == Mode.IF_ABSENT && holdsValue(live, mod.getPath()))) {
-                addOnce(held, label(names, mode));
+                addOnce(held, label(names));
                 changed = true;
                 continue;
             }
@@ -301,9 +303,19 @@ final class ApplyRules {
         return item != null && item.hasAnyValue();
     }
 
-    /** A held-back path as the report shows it, naming the rule that held it back. */
-    private static String label(List<String> names, Mode mode) {
-        return String.join("/", names) + " (apply=" + mode.keyword + ")";
+    /**
+     * A held-back path as the report shows it, naming the rule that held it back — and saying when that rule
+     * is a built-in one, which a run without a {@code --policy} file has no other way to tell.
+     */
+    String labelOf(ItemPath path) {
+        return label(localNames(path));
+    }
+
+    private String label(List<String> names) {
+        Rule rule = ruleAt(names);
+        Mode mode = (rule != null) ? rule.mode : Mode.ALWAYS;
+        return String.join("/", names) + " (apply=" + mode.keyword
+                + ((rule != null && rule.builtIn) ? ", built-in" : "") + ")";
     }
 
     /**
@@ -348,7 +360,7 @@ final class ApplyRules {
             List<String> names = child(prefix, item);
             if (modeAt(names) == Mode.ON_CREATE) {
                 container.remove(item);
-                addOnce(stripped, label(names, Mode.ON_CREATE));
+                addOnce(stripped, label(names));
             } else if (item instanceof PrismContainer<?> && couldReachBelow(names, true)) {
                 stripOnCreate(item.getValues(), names, stripped);
             }
@@ -379,6 +391,12 @@ final class ApplyRules {
 
     /** The mode for the item at {@code itemNames}: the most specific rule matching it or an ancestor. */
     private Mode modeAt(List<String> itemNames) {
+        Rule rule = ruleAt(itemNames);
+        return (rule != null) ? rule.mode : Mode.ALWAYS;
+    }
+
+    /** The rule deciding the item at {@code itemNames}, or {@code null} when none does. */
+    private Rule ruleAt(List<String> itemNames) {
         Rule best = null;
         for (int depth = 1; depth <= itemNames.size(); depth++) {
             List<String> path = itemNames.subList(0, depth);
@@ -389,7 +407,7 @@ final class ApplyRules {
                 }
             }
         }
-        return (best != null) ? best.mode : Mode.ALWAYS;
+        return best;
     }
 
     /**

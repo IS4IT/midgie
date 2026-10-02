@@ -175,8 +175,11 @@ class InitCommandTest {
         String content = Files.readString(policy, StandardCharsets.UTF_8);
         assertTrue(content.contains("tracked on the server, so deploy runs on merge"), content);
         assertTrue(content.contains("\n#ResourceType/Prod/schemaHandling/objectType  multivalue=replace\n"), content);
-        assertFalse(content.lines().anyMatch(line -> !line.startsWith("#") && !line.isBlank()),
-                "nothing active: the file changes no deploy until someone adopts a rule:\n" + content);
+        java.util.Set<String> builtIns = Policy.builtInText().lines().collect(java.util.stream.Collectors.toSet());
+        assertFalse(content.lines().anyMatch(line -> !line.startsWith("#") && !line.isBlank()
+                        && !builtIns.contains(line)),
+                "nothing active but the built-in rules, which apply anyway: the file changes no deploy until "
+                        + "someone adopts a rule:\n" + content);
         assertTrue(result.out.contains("(commented out)"), result.out);
     }
 
@@ -527,47 +530,52 @@ class InitCommandTest {
     }
 
     @Test
-    void onCreateSuggestionsAreOfferedForTheTypesTheTreeHoldsAndChangeNothingAsWritten(@TempDir Path dir)
-            throws Exception {
+    void theBuiltInRulesAreWrittenAsActiveLinesThatChangeNothing(@TempDir Path dir) throws Exception {
+        // The seeded file shows the whole policy in effect: midgie's built-in rules as lines a deploy applies,
+        // whether or not the tree holds that type — they apply to every tree, file or not.
         Path tree = Files.createDirectories(dir.resolve("config"));
         Files.writeString(tree.resolve("task.xml"), task("Recompute", "<executionState>suspended</executionState>"),
                 StandardCharsets.UTF_8);
-        Files.writeString(tree.resolve("resource.xml"), resource("Prod"), StandardCharsets.UTF_8);
         Path policy = dir.resolve("midgie.policy");
 
         Result result = run("init", tree.toString(), "--url", url, "-u", "administrator", "-p", "s3cret",
                 "--write-policy", policy.toString());
 
         assertEquals(0, result.exit, result.err);
-        assertTrue(result.out.contains("commented-out apply=on-create"), result.out);
+        assertTrue(result.out.contains("and the 9 built-in rule(s)"), result.out);
         String content = Files.readString(policy, StandardCharsets.UTF_8);
-        assertTrue(content.contains("\n#TaskType/*/executionState  apply=on-create\n"), content);
-        // Only what the tree declares: an item no file mentions is never touched under --scope present.
-        assertFalse(content.contains("schedulingState  apply=on-create"), content);
-        assertFalse(content.contains("administrativeOperationalState  apply=on-create"), content);
-        assertTrue(content.contains("Declared in 1 of 1 TaskType file(s)"), content);
-        assertFalse(content.contains("#TaskType/*/executionState  apply=on-create\n#\n# Fill"),
-                "and the examples do not repeat a knob the suggestions already show:\n" + content);
-        assertTrue(content.contains("'apply=if-absent'"), "the alternative is named, so people know it exists:\n"
-                + content);
-        assertFalse(content.contains("UserType/*/credentials") || content.contains("administrativeStatus"),
-                "no user in the tree, so no user suggestions:\n" + content);
-        assertTrue(content.indexOf("apply=on-create") < content.indexOf("# --- end midgie suggestions"),
-                "the suggestions live inside the regenerated block:\n" + content);
+        assertTrue(content.contains("\nTaskType/*/executionState  apply=on-create\n"), content);
+        assertTrue(content.contains("\nUserType/*/credentials  apply=on-create\n"),
+                "a built-in rule for a type the tree does not hold is listed too:\n" + content);
+        assertTrue(content.indexOf("--- built-in rules") < content.indexOf("# --- end midgie suggestions"),
+                "the copy lives inside the regenerated block, so a re-run keeps it current:\n" + content);
+        assertTrue(content.contains("\n#UserType/*/description  apply=if-absent\n"),
+                "the gentler alternative is still shown as an example:\n" + content);
+        assertFalse(content.contains("#TaskType/*/executionState  apply=on-create"),
+                "and no example repeats what the built-in section shows:\n" + content);
 
-        // As written they are comments, so deploy behaves exactly as it did without them.
-        assertEquals(ApplyRules.Mode.ALWAYS, Policy.load(policy.toFile())
+        // The file carries the rules itself...
+        assertEquals(ApplyRules.Mode.ON_CREATE, Policy.load(policy.toFile())
                 .resolveFor("TaskType", "Recompute", null, baseline()).apply.modeOf("executionState"), content);
-
-        // And each one is a rule Policy.load accepts once uncommented — the round trip init promises.
-        Files.writeString(policy, content.replaceAll("(?m)^#(\\w+Type/\\*/)", "$1"), StandardCharsets.UTF_8);
-        Policy adopted = Policy.load(policy.toFile());
-        assertEquals(ApplyRules.Mode.ON_CREATE,
-                adopted.resolveFor("TaskType", "Recompute", null, baseline()).apply.modeOf("executionState"));
+        // ...and as deploy reads it, beside the built-ins, it resolves exactly as no file at all does.
+        Policy withFile = Policy.effective(policy.toFile());
+        Policy withoutFile = Policy.effective(null);
+        for (String[] item : new String[][] {{"TaskType", "executionState"}, {"TaskType", "schedulingState"},
+                {"UserType", "credentials/password/value"}, {"UserType", "activation/administrativeStatus"},
+                {"UserType", "activation/lockoutStatus"}, {"UserType", "activation/lockoutExpirationTimestamp"},
+                {"ResourceType", "administrativeOperationalState"}, {"ResourceType", "schema/definition"},
+                {"ResourceType", "schema/generationConstraints"}, {"ResourceType", "cacheInvalidationTimestamp"},
+                {"UserType", "description"}}) {
+            assertEquals(withoutFile.resolveFor(item[0], "x", null, baseline()).apply.modeOf(item[1]),
+                    withFile.resolveFor(item[0], "x", null, baseline()).apply.modeOf(item[1]),
+                    item[0] + "/" + item[1] + ":\n" + content);
+        }
+        // Restating a built-in is documentation, not a typo: no "matched no object" for a tree without users.
+        assertEquals(List.of(), withFile.unmatchedRules(), content);
     }
 
     @Test
-    void aTreeWithoutSuggestedTypesGetsNoOnCreateSection(@TempDir Path dir) throws Exception {
+    void aTreeOfOtherTypesStillGetsTheBuiltInSection(@TempDir Path dir) throws Exception {
         Path tree = Files.createDirectories(dir.resolve("config"));
         Files.writeString(tree.resolve("org.xml"), org("people"), StandardCharsets.UTF_8);
         Path policy = dir.resolve("midgie.policy");
@@ -577,10 +585,9 @@ class InitCommandTest {
 
         assertEquals(0, result.exit, result.err);
         String content = Files.readString(policy, StandardCharsets.UTF_8);
-        assertFalse(content.contains("--- apply=on-create"), content);
-        assertTrue(content.contains("\n#TaskType/*/executionState  apply=on-create\n"),
-                "it is still shown once, as an example of what a policy can say:\n" + content);
-        assertTrue(result.out.contains("suggests no rules"), result.out);
+        assertTrue(content.contains("--- built-in rules"), content);
+        assertTrue(content.contains("\nTaskType/*/executionState  apply=on-create\n"), content);
+        assertTrue(result.out.contains("the defaults cover this tree"), result.out);
     }
 
     private static StrategyOptions.Resolved baseline() {

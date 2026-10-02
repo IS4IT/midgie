@@ -164,8 +164,21 @@ class DeployRetryTest {
         Result result = deployCapturing(dir, "--policy", policy.toString());
 
         assertEquals(0, result.exit(), result.err());
-        assertTrue(result.err().contains("midgie: policy: " + policy.toAbsolutePath().normalize() + " (2 rule(s))"),
-                result.err());
+        assertTrue(result.err().contains("midgie: policy: " + policy.toAbsolutePath().normalize()
+                + " (2 rule(s), plus 9 built-in)"), result.err());
+    }
+
+    @Test
+    void withoutAPolicyFileTheBuiltInsRunSilently(@TempDir Path dir) throws Exception {
+        // The tree holds roles only, so no built-in rule reaches anything — the normal case, not a typo to
+        // report — and with no file there is no policy line to print either.
+        writeTree(dir);
+
+        Result result = deployCapturing(dir);
+
+        assertEquals(0, result.exit(), result.err());
+        assertFalse(result.err().contains("matched no object"), result.err());
+        assertFalse(result.err().contains("midgie: policy:"), result.err());
     }
 
     @Test

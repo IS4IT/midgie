@@ -122,7 +122,8 @@ public class DiffCommand implements Callable<Integer> {
     boolean noPrune;
 
     @Option(names = "--policy", paramLabel = "FILE",
-            description = "Per-object/-item diff-strategy policy file, as deploy takes it (live mode only).")
+            description = "Per-object/-item diff-strategy policy file, as deploy takes it (live mode only). A live "
+                    + "diff applies midgie's built-in apply=on-create rules with or without one.")
     File policyFile;
 
     @Override

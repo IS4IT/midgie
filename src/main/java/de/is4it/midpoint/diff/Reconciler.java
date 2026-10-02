@@ -354,7 +354,7 @@ final class Reconciler {
             }
             ApplyRules.Mode mode = strategy.apply.modeOf(kept.path().removeIds());
             if (mode != ApplyRules.Mode.ALWAYS) {
-                String label = idFreeText(kept.path()) + " (apply=" + mode.keyword + ")";
+                String label = strategy.apply.labelOf(kept.path());
                 if (!heldBack.contains(label)) {
                     heldBack.add(label);
                 }

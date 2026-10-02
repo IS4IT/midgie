@@ -150,8 +150,9 @@ public class DeployCommand implements Callable<Integer> {
     boolean noRollbackPlan;
 
     @Option(names = "--policy", paramLabel = "FILE",
-            description = "Per-object/-item diff-strategy policy file ('<Type/Name/item glob> key=value' lines); "
-                    + "most-specific selector wins.")
+            description = "Per-object/-item diff-strategy policy file ('<Type/Name/item glob> key=value' lines), "
+                    + "layered on midgie's built-in apply=on-create rules; most-specific selector wins, and a "
+                    + "file line wins a tie with a built-in one.")
     File policyFile;
 
     @Option(names = "--no-prune",
@@ -361,13 +362,13 @@ public class DeployCommand implements Callable<Integer> {
             }
 
             PrismContext prismContext = SchemaOptions.newBaseContext();
-            policy = (policyFile != null) ? Policy.load(policyFile) : null; // load early: fail fast on a bad policy
-            if (policy != null) {
+            policy = Policy.effective(policyFile); // load early: fail fast on a bad policy
+            if (policyFile != null) {
                 // Named outright, like a tree-local config file: the policy decides what a deploy deletes, and
                 // when it arrived through a config file rather than the command line, nothing else on screen
                 // says which file that was — or that a relative path was read from the config file's folder.
                 note("policy: " + policyFile.getAbsoluteFile().toPath().normalize() + " ("
-                        + policy.ruleCount() + " rule(s))");
+                        + policy.ruleCount() + " rule(s), plus " + policy.builtInCount() + " built-in)");
             }
 
             // Everything the local filesystem can settle is settled before the first round trip. Reading the
@@ -1058,7 +1059,7 @@ public class DeployCommand implements Callable<Integer> {
         return rows;
     }
 
-    /** The strategy for one object: the CLI flags, with any matching {@code --policy} knob layered on. */
+    /** The strategy for one object: the CLI flags, with any matching policy knob, the file's or a built-in, layered on. */
     private StrategyOptions.Resolved strategyFor(DeployObject unit) {
         return (policy != null)
                 ? policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy)

@@ -185,6 +185,44 @@ class ApplyRulesTest {
         assertEquals(List.of("activation/administrativeStatus (apply=on-create)"), outcome.heldBack);
     }
 
+    // --- built-in rules ---
+
+    @Test
+    void withoutAPolicyFileTheBuiltInRuleHoldsTheItemBackAndSaysWhichRuleDid() throws Exception {
+        // A run with no --policy has no file to look in, so the note itself says where the rule comes from.
+        Reconciler.Outcome outcome = plan(Policy.effective(null), DiffEngine.Scope.PRESENT,
+                task("same", "runnable"), task("same", "suspended"));
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertEquals(List.of("executionState (apply=on-create, built-in)"), outcome.heldBack);
+    }
+
+    @Test
+    void anAddedContainerLosesItsBuiltInItemsWithTheSameLabel() throws Exception {
+        Reconciler.Outcome outcome = plan(Policy.effective(null), DiffEngine.Scope.PRESENT,
+                parse(user("<activation><administrativeStatus>enabled</administrativeStatus>"
+                        + "<validTo>2030-01-01T00:00:00Z</validTo><lockoutStatus>normal</lockoutStatus></activation>")),
+                parse(user("")));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("validTo"), outcome.modificationXml);
+        assertFalse(outcome.modificationXml.contains("lockoutStatus"), outcome.modificationXml);
+        assertEquals(List.of("activation/administrativeStatus (apply=on-create, built-in)",
+                "activation/lockoutStatus (apply=on-create, built-in)"), outcome.heldBack);
+    }
+
+    @Test
+    void aFileLineOverridingABuiltInLetsTheItemThrough(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("policy.txt");
+        Files.writeString(file, "TaskType/*/executionState  apply=always\n", StandardCharsets.UTF_8);
+        Reconciler.Outcome outcome = plan(Policy.effective(file.toFile()), DiffEngine.Scope.PRESENT,
+                task("same", "runnable"), task("same", "suspended"));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("executionState"), outcome.modificationXml);
+        assertTrue(outcome.heldBack.isEmpty(), outcome.heldBack.toString());
+    }
+
     // --- if-absent ---
 
     @Test

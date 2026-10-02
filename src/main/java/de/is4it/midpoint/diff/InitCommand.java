@@ -27,7 +27,6 @@ import org.slf4j.LoggerFactory;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
-import com.evolveum.midpoint.prism.path.ItemPath;
 import com.evolveum.midpoint.schema.constants.ObjectTypes;
 
 import org.w3c.dom.Element;
@@ -96,33 +95,6 @@ public class InitCommand implements Callable<Integer> {
 
     private static final String BLOCK_END = "# --- end midgie suggestions ---";
 
-    /**
-     * An item that is usually right to write only when its object is created, and to leave to midPoint or its
-     * operators after that. {@code --write-policy} offers one as a commented-out {@code apply=on-create} line
-     * whenever a file of the tree declares it: commented, because adopting it changes what a deploy does, and
-     * that is the operator's call.
-     */
-    private record OnCreateSuggestion(String type, String path, String why) {
-    }
-
-    private static final List<OnCreateSuggestion> ON_CREATE_SUGGESTIONS = List.of(
-            new OnCreateSuggestion("TaskType", "executionState",
-                    "a task is deployed runnable or suspended; afterwards operators resume and suspend it, "
-                            + "and every deploy would flip it back."),
-            new OnCreateSuggestion("TaskType", "schedulingState",
-                    "the task manager's side of the same state; keep it with executionState, or a redeploy "
-                            + "can leave the two contradicting each other."),
-            new OnCreateSuggestion("UserType", "credentials",
-                    "an initial password and forceChange belong in the create; afterwards the user or an "
-                            + "operator owns them. (midgie never patches an encrypted value either way.)"),
-            new OnCreateSuggestion("UserType", "activation/administrativeStatus",
-                    "a user is created enabled or disabled; afterwards operators or an HR feed decide."),
-            new OnCreateSuggestion("ResourceType", "administrativeOperationalState",
-                    "operators put a resource into maintenance mode here; a deploy would take it out again."),
-            new OnCreateSuggestion("ResourceType", "schema",
-                    "the connector schema midPoint caches and refreshes itself; a deploy would put the copy "
-                            + "from the file back over a fresher one."));
-
     @Parameters(index = "0", arity = "0..1", paramLabel = "PATH",
             description = "Desired-state tree whose deployment identity should be reported (optional).")
     File path;
@@ -151,8 +123,9 @@ public class InitCommand implements Callable<Integer> {
 
     @Option(names = "--write-policy", paramLabel = "FILE|DIR|-", arity = "0..1", fallbackValue = ".",
             description = "Write a starter --policy file for PATH holding only what the defaults leave open: "
-                    + "lists whose live copy holds values the tree does not, the apply=on-create candidates the "
-                    + "tree declares, and examples of the other knobs. A directory (or no value, meaning the working "
+                    + "lists whose live copy holds values the tree does not, then midgie's built-in rules as active "
+                    + "lines (the same as without a file, so you can see and override them), and examples of the "
+                    + "other knobs. A directory (or no value, meaning the working "
                     + "directory) writes '" + DEFAULT_POLICY_NAME + "' in it; '-' writes to stdout. Re-running "
                     + "on an existing file refreshes only its marked block, leaving your own rules alone.")
     File writePolicy;
@@ -479,8 +452,9 @@ public class InitCommand implements Callable<Integer> {
      * object with its live copy, not guessed from the schema — worded against the default in effect: on
      * merge, a commented-out {@code multivalue=replace} for a list the tree should own; on replace, an active
      * {@code multivalue=merge} that stops the next deploy from deleting what others added. After them come
-     * the {@code apply=on-create} candidates the tree actually declares (see {@link #ON_CREATE_SUGGESTIONS}),
-     * then commented examples of the knobs nothing above used.
+     * midgie's built-in rules ({@link Policy#builtInText}) as active lines — a deploy applies them with or
+     * without the file, so writing them changes nothing, but the file then shows the whole policy in effect and
+     * where to override it — then commented examples of the knobs nothing above used.
      */
     private Integer seedPolicy(PrismContext prismContext, MidpointRestClient client) throws Exception {
         // Same two-step as deploy: discover and register the tree's own extension schemas *before* parsing,
@@ -500,8 +474,6 @@ public class InitCommand implements Callable<Integer> {
         SchemaSupport.register(prismContext, schemaMap);
 
         List<Fragment> fragments = new ArrayList<>();
-        Map<String, Integer> filesByType = new LinkedHashMap<>();
-        Map<OnCreateSuggestion, Integer> declaredBy = new LinkedHashMap<>();
         int skipped = 0;
         for (String failure : scan.unreadable()) {
             System.err.println("midgie: warning: " + failure + "; it has no suggestions.");
@@ -521,7 +493,6 @@ public class InitCommand implements Callable<Integer> {
             if (object.getCompileTimeClass() == null) {
                 continue;
             }
-            countOnCreateCandidates(object, filesByType, declaredBy);
             fragments.add(Fragment.of(object, file));
         }
 
@@ -557,16 +528,15 @@ public class InitCommand implements Callable<Integer> {
                 .append("#   --multivalue auto    a tracked tree merges — live values a list holds beyond the files\n")
                 .append("#                        stay, and what the tree dropped is removed with the change; an\n")
                 .append("#                        untracked tree replaces.\n")
+                .append("#   built-in rules       items midPoint or its operators own once an object exists are\n")
+                .append("#                        written only when it is created; they are listed further down.\n")
                 .append("#\n")
                 .append(tracked
                         ? "# This tree is tracked on the server, so deploy runs on merge.\n"
                         : "# This tree is not tracked on the server (see 'midgie init --create-state'), so deploy runs\n"
                                 + "# on replace.\n");
         appendListSuggestions(out, lists, tracked, notOnServer, used);
-        int onCreate = appendOnCreateSuggestions(out, filesByType, declaredBy);
-        if (onCreate > 0) {
-            used.add("apply=on-create");
-        }
+        int builtIns = appendBuiltIns(out);
         appendExamples(out, used, tracked, firstSelector, firstOid);
 
         String block = BLOCK_BEGIN + "\n" + out.toString().stripTrailing() + "\n" + BLOCK_END;
@@ -588,11 +558,11 @@ public class InitCommand implements Callable<Integer> {
                 ? "Refreshed the suggestions in" : "Appended suggestions to");
         String listRules = lists.size() + " list rule(s)" + (tracked && !lists.isEmpty() ? " (commented out)" : "");
         wrote(writePolicy, what + " " + label(writePolicy) + ": " + listRules
-                + (onCreate > 0 ? ", " + onCreate + " commented-out apply=on-create suggestion(s)" : "")
+                + " and the " + builtIns + " built-in rule(s)"
                 + (skipped > 0 ? " (" + skipped + " file(s) could not be read)" : "")
                 + (existing != null ? " — anything you wrote outside the marked block is untouched." : "")
-                + (lists.isEmpty() && onCreate == 0
-                        ? " — the defaults cover this tree, so it suggests no rules."
+                + (lists.isEmpty()
+                        ? " — the defaults cover this tree, so the file only shows them."
                         : " — review it, then pass it as 'deploy --policy " + label(writePolicy) + "'."));
         return 0;
     }
@@ -688,12 +658,8 @@ public class InitCommand implements Callable<Integer> {
         examples.add(new String[] {"multivalue=merge", "Keep one list open to values added elsewhere"
                 + (tracked ? " (already the default here; useful under --multivalue replace)." : "."),
                 "SystemConfigurationType/SystemConfiguration/**/panel  multivalue=merge"});
-        examples.add(new String[] {"apply=on-create", "Write an item only when the object is created; leave it to "
-                + "midPoint and its operators after that.", "TaskType/*/executionState  apply=on-create"});
         examples.add(new String[] {"apply=if-absent", "Fill an item in whenever the server holds no value, and "
                 + "never overwrite it (midPoint's weak strength).", "UserType/*/description  apply=if-absent"});
-        examples.add(new String[] {"apply=always", "A more specific rule wins, so one object can be carved out of "
-                + "a broader one.", "TaskType/Nightly Recompute/executionState  apply=always"});
         examples.add(new String[] {"smart-refs=verify", "Check references written as filters by running the filter "
                 + "on the server, instead of trusting the OID midPoint resolved.", "RoleType/*  smart-refs=verify"});
         examples.add(new String[] {"allow-inplace-merge=true", "Address an object by OID, whatever its name — here "
@@ -710,60 +676,29 @@ public class InitCommand implements Callable<Integer> {
         }
     }
 
-    /** Count, per suggested type, the files describing such an object and how many declare each item. */
-    private static void countOnCreateCandidates(PrismObject<? extends Objectable> object,
-            Map<String, Integer> filesByType, Map<OnCreateSuggestion, Integer> declaredBy) {
-        String type = object.getCompileTimeClass().getSimpleName();
-        boolean counted = false;
-        for (OnCreateSuggestion suggestion : ON_CREATE_SUGGESTIONS) {
-            if (!suggestion.type().equals(type)) {
-                continue;
-            }
-            if (!counted) {
-                filesByType.merge(type, 1, Integer::sum);
-                counted = true;
-            }
-            if (object.findItem(ItemPath.fromString(suggestion.path())) != null) {
-                declaredBy.merge(suggestion, 1, Integer::sum);
-            }
-        }
-    }
-
     /**
-     * Append the {@code apply=on-create} suggestions for the items this tree declares, every rule commented
-     * out so the seeded file behaves exactly as before until someone adopts one.
+     * Append midgie's built-in rules as active lines, under a header saying they apply anyway and how to
+     * override one. Inside the regenerated block on purpose: re-running {@code --write-policy} after an upgrade
+     * brings the copy in line with the rules the new version applies.
      *
-     * @return how many were suggested
+     * @return how many rules were written
      */
-    private static int appendOnCreateSuggestions(StringBuilder out, Map<String, Integer> filesByType,
-            Map<OnCreateSuggestion, Integer> declaredBy) {
-        // Only what the tree declares: under the default --scope present an item no file mentions is never
-        // touched, so a rule for it would be one more line doing nothing.
-        List<OnCreateSuggestion> relevant = ON_CREATE_SUGGESTIONS.stream()
-                .filter(suggestion -> declaredBy.getOrDefault(suggestion, 0) > 0)
-                .toList();
-        if (relevant.isEmpty()) {
-            return 0;
-        }
-        out.append("\n# --- apply=on-create: set when an object is created, then left to midPoint and its operators\n")
+    private static int appendBuiltIns(StringBuilder out) throws IOException {
+        String builtIns = Policy.builtInText();
+        out.append("\n# --- built-in rules: what midgie does with or without this file\n")
                 .append("#\n")
-                .append("# These are commented out, so they change nothing as they stand. Uncomment one to adopt it:\n")
-                .append("# the item then goes into the request that creates the object and is never touched again —\n")
-                .append("# not patched, not deleted under --scope full, not removed when it drops out of the file.\n")
-                .append("# A narrower '<Type>/<Name>/<item>  apply=always' line carves an exception out for one\n")
-                .append("# object.\n")
-                .append("# To have an item filled in again whenever the server holds no value (and never overwritten),\n")
-                .append("# use 'apply=if-absent' instead: the weak mapping strength in midPoint terms.\n");
-        for (OnCreateSuggestion suggestion : relevant) {
-            int files = filesByType.get(suggestion.type());
-            int declaring = declaredBy.getOrDefault(suggestion, 0);
-            out.append('\n').append(commentWrapped(suggestion.path() + ": " + suggestion.why()))
-                    .append("# Declared in ").append(declaring).append(" of ").append(files).append(' ')
-                    .append(suggestion.type()).append(" file(s) in this tree.\n")
-                    .append('#').append(suggestion.type()).append("/*/").append(suggestion.path())
-                    .append("  apply=on-create\n");
-        }
-        return relevant.size();
+                .append("# midgie applies these on every deploy and live diff. They are listed so this file\n")
+                .append("# shows the whole policy in effect; deleting one changes nothing. Each item is written\n")
+                .append("# when its object is created and never touched again — not patched, not deleted under\n")
+                .append("# --scope full, not removed when it drops out of the file. To change one, write the same\n")
+                .append("# selector with another value ABOVE this block (lines in the block are rewritten by the\n")
+                .append("# next 'init --write-policy'). For every task, on every deploy:\n")
+                .append("#   TaskType/*/executionState  apply=always\n")
+                .append("# or, since the more specific rule wins, for just one task:\n")
+                .append("#   TaskType/Nightly Recompute/executionState  apply=always\n")
+                .append("#\n")
+                .append(builtIns.stripTrailing()).append('\n');
+        return Policy.effective(null).builtInCount();
     }
 
     /** {@code text} as {@code #} comment lines of about the width the rest of the seeded file uses. */

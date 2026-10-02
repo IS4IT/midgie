@@ -1,0 +1,33 @@
+# executionState: a task is deployed runnable or suspended; afterwards operators resume and suspend it,
+# and every deploy would flip it back.
+TaskType/*/executionState  apply=on-create
+
+# schedulingState: the task manager's side of the same state; kept with executionState, or a redeploy
+# could leave the two contradicting each other.
+TaskType/*/schedulingState  apply=on-create
+
+# credentials: an initial password and forceChange belong in the create; afterwards the user or an
+# operator owns them. (midgie never patches an encrypted value either way.)
+UserType/*/credentials  apply=on-create
+
+# activation/administrativeStatus: a user is created enabled or disabled; afterwards operators or an HR
+# feed decide, and a deploy would re-enable a user someone disabled.
+UserType/*/activation/administrativeStatus  apply=on-create
+
+# activation/lockoutStatus, lockoutExpirationTimestamp: set by midPoint after failed logins and cleared
+# by an operator; a deploy would unlock a locked-out user.
+UserType/*/activation/lockoutStatus  apply=on-create
+UserType/*/activation/lockoutExpirationTimestamp  apply=on-create
+
+# administrativeOperationalState: operators put a resource into maintenance mode here; a deploy would
+# take it out again.
+ResourceType/*/administrativeOperationalState  apply=on-create
+
+# schema/definition: the connector schema midPoint caches and refreshes itself; a deploy would put the
+# copy from the file back over a fresher one. generationConstraints, beside it, is configuration and
+# still deploys.
+ResourceType/*/schema/definition  apply=on-create
+
+# cacheInvalidationTimestamp: an operator expires the resource's cached shadows by setting it; a deploy
+# putting an older value back would make stale shadows count as fresh again.
+ResourceType/*/cacheInvalidationTimestamp  apply=on-create
