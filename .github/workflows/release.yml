@@ -14,8 +14,11 @@
 # The image push needs two repository secrets: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access
 # token with Read/Write on is4it/midgie).
 #
-# To cut a release: update CHANGELOG.md (move Unreleased -> the new version), then:
+# To cut a release: update CHANGELOG.md (move Unreleased -> the new version) and set version and appVersion
+# in charts/midgie/Chart.yaml to it, commit both as "Release 0.1.0", then:
 #   git tag -a v0.1.0 -m "midgie 0.1.0" && git push origin v0.1.0
+# The chart is packaged below with the tag's version whatever Chart.yaml says; the bump keeps a chart
+# packaged from a checkout installing the same release.
 #
 # Run it by hand ('gh workflow run Release -f tag=v0.1.0') to rebuild and push the image for a tag that is
 # already released — an image-only fix (a base-image CVE, a missing tool) then costs no version bump. The
