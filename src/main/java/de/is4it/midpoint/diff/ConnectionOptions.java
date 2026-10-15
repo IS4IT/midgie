@@ -196,12 +196,12 @@ public final class ConnectionOptions {
             }
             if (caCertHere) {
                 trustAll = false;
-                System.err.println("midgie: note: ignoring insecure from the config file: --cacert on the command "
-                        + "line verifies the server.");
+                System.err.println(NoteStyle.of("midgie: note: ignoring insecure from the config file: --cacert on "
+                        + "the command line verifies the server."));
             } else {
                 trustedCa = null;
-                System.err.println("midgie: note: ignoring cacert from the config file: --insecure was given on "
-                        + "the command line.");
+                System.err.println(NoteStyle.of("midgie: note: ignoring cacert from the config file: --insecure was "
+                        + "given on the command line."));
             }
         }
         String user = user();

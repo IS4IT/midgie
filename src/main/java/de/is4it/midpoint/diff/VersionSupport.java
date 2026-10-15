@@ -95,8 +95,8 @@ final class VersionSupport {
             // Best-effort, but not mute. A least-privilege deploy account has no read on NodeType and gets
             // 403 here, so the guard against parsing a different major line with the bundled schema — the
             // hazard CLAUDE.md calls out — silently never ran.
-            System.err.println("midgie: note: could not read the server version (GET /nodes/current); "
-                    + "the schema-version check did not run.");
+            System.err.println(NoteStyle.of("midgie: note: could not read the server version (GET /nodes/current); "
+                    + "the schema-version check did not run."));
             return;
         }
         if (!sameMajorLine(compile, live)) {

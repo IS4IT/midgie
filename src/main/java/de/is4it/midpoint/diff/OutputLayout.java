@@ -34,6 +34,9 @@ import org.slf4j.LoggerFactory;
  * further so a wrapped note still reads as one. Where there is no terminal — CI, a pipe, a file — nothing is
  * wrapped unless {@code COLUMNS} says how wide to go: a log viewer wraps long lines itself, and a message
  * searched for in a log is easier to find on one line.
+ *
+ * <p>A note, and the items under it, can be styled apart from the rest ({@link NoteStyle}); each rendered line
+ * is styled on its own, after the wrap, so the escape codes never count towards a line's width.
  */
 final class OutputLayout {
 
@@ -54,8 +57,8 @@ final class OutputLayout {
     private OutputLayout() {
     }
 
-    /** One paragraph of column 2: its text, and how far it is indented past column 2. */
-    private record Paragraph(String text, int indent) {
+    /** One paragraph of column 2: its text, how far it is indented past column 2, and whether it is a note. */
+    private record Paragraph(String text, int indent, boolean note) {
     }
 
     /**
@@ -75,21 +78,27 @@ final class OutputLayout {
         /** A paragraph at column 2; blank text adds nothing. */
         Block add(String text) {
             if (text != null && !text.isBlank()) {
-                paragraphs.add(new Paragraph(text.strip(), 0));
+                paragraphs.add(new Paragraph(text.strip(), 0, NoteStyle.isNote(text.strip())));
             }
             return this;
         }
 
-        /** An item under the paragraph before it, indented one step further. */
+        /** An item under the paragraph before it, indented one step further, and a note if that one is. */
         Block addItem(String text) {
             if (text != null && !text.isBlank()) {
-                paragraphs.add(new Paragraph(text.strip(), STEP));
+                boolean note = !paragraphs.isEmpty() && paragraphs.get(paragraphs.size() - 1).note();
+                paragraphs.add(new Paragraph(text.strip(), STEP, note));
             }
             return this;
         }
 
         /** The block's lines for a terminal {@code width} columns wide; {@code width <= 0} means do not wrap. */
         List<String> render(int width) {
+            return render(width, UnaryOperator.identity());
+        }
+
+        /** The block's lines, as {@link #render(int)}, with each line of a note passed through {@code noteStyle}. */
+        List<String> render(int width, UnaryOperator<String> noteStyle) {
             boolean wrap = width - COLUMN_2 >= MIN_COLUMN_2;
             List<String> lines = new ArrayList<>();
             String column1 = "  " + pad(label, LABEL_WIDTH) + " ";
@@ -103,7 +112,8 @@ final class OutputLayout {
                         ? wrap(paragraph.text(), Math.max(1, width - start), Math.max(1, width - start - STEP))
                         : List.of(paragraph.text());
                 for (int i = 0; i < chunks.size(); i++) {
-                    lines.add(spaces((i == 0) ? start : start + STEP) + chunks.get(i));
+                    String chunk = paragraph.note() ? noteStyle.apply(chunks.get(i)) : chunks.get(i);
+                    lines.add(spaces((i == 0) ? start : start + STEP) + chunk);
                 }
             }
             return lines;

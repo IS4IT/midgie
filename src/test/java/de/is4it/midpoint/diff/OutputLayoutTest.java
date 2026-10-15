@@ -49,6 +49,28 @@ class OutputLayoutTest {
     }
 
     @Test
+    void eachLineOfANoteAndOfTheItemsUnderItIsStyledAfterTheWrap() {
+        int width = OutputLayout.COLUMN_2 + 30;
+        List<String> lines = new OutputLayout.Block("would-patch", "r.xml  RoleType/R")
+                .add("1 change(s)")
+                .add("warning: this change REMOVES 1 value")
+                .addItem("subtype: alpha")
+                .add("note: removing 1 value(s) no longer declared:")
+                .addItem("subtype: beta")
+                .render(width, line -> "<" + line + ">");
+
+        assertEquals(List.of(
+                "  would-patch   r.xml  RoleType/R",
+                COL2 + "1 change(s)",
+                COL2 + "warning: this change REMOVES 1",
+                COL2 + "  value",
+                COL2 + "  subtype: alpha",
+                COL2 + "<note: removing 1 value(s) no>",
+                COL2 + "  <longer declared:>",
+                COL2 + "  <subtype: beta>"), lines);
+    }
+
+    @Test
     void aWordLongerThanTheColumnIsCut() {
         assertEquals(List.of("abcdefghij", "klmnopqrst", "uv"), OutputLayout.wrap("abcdefghijklmnopqrstuv", 10, 10));
         assertEquals(List.of("a", "bcdefghijk", "lm"), OutputLayout.wrap("a bcdefghijklm", 10, 10));

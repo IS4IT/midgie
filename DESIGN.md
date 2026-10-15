@@ -364,6 +364,11 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   streams apart cannot separate a note from its object. Column 2 wraps to the terminal width (`stty size` on
   `/dev/tty`, re-read after `SIGWINCH`) with a hanging indent; with no terminal it is not wrapped unless `COLUMNS`
   is set. Notes about the run as a whole stay on stderr.
+- Notes (`note: …`, and the items under one) are dim and italic on a terminal (`NoteStyle`), so the result rows,
+  warnings and summary stand out from them. Whether to style is picocli's `Ansi.AUTO` decision, the one `--help`
+  colours by: standard input and output a terminal, `NO_COLOR` and `CLICOLOR=0` turn it off, `CLICOLOR_FORCE=1`
+  or `-Dpicocli.ansi=true` on anywhere. A block styles each line after the wrap, so escape codes never count
+  towards the width. The orphan note is not dimmed: it is printed last to be seen, and no later run repeats it.
 
 ## Packaging & license
 

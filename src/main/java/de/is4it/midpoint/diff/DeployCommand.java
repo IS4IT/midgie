@@ -1906,8 +1906,8 @@ public class DeployCommand implements Callable<Integer> {
             return;
         }
         for (SchemaFile local : localSchemas) {
-            System.err.println("midgie: note: registered local schema (not deployed): "
-                    + local.sourceFile() + " [" + local.targetNamespace() + "]");
+            System.err.println(NoteStyle.of("midgie: note: registered local schema (not deployed): "
+                    + local.sourceFile() + " [" + local.targetNamespace() + "]"));
         }
         for (SchemaFile schema : schemaOrder.brokenAt()) {
             System.err.println("midgie: warning: schema dependency cycle — broke it at "
@@ -1961,7 +1961,7 @@ public class DeployCommand implements Callable<Integer> {
             return;
         }
         PrintStream stream = (error || payloadOnStdout()) ? System.err : System.out;
-        for (String line : block.render(OutputLayout.width())) {
+        for (String line : block.render(OutputLayout.width(), NoteStyle::of)) {
             stream.println(line);
         }
     }
@@ -1977,8 +1977,9 @@ public class DeployCommand implements Callable<Integer> {
         }
         if (asDiff) {
             int colon = text.indexOf(": ");
-            System.err.println("midgie: " + text.substring(0, colon + 2) + unit.objectPath() + ": "
-                    + text.substring(colon + 2));
+            String line = "midgie: " + text.substring(0, colon + 2) + unit.objectPath() + ": "
+                    + text.substring(colon + 2);
+            System.err.println(NoteStyle.isNote(text) ? NoteStyle.of(line) : line);
             return;
         }
         block.add(text);
@@ -1990,7 +1991,7 @@ public class DeployCommand implements Callable<Integer> {
             return;
         }
         if (asDiff) {
-            System.err.println("midgie:   " + text);
+            System.err.println(NoteStyle.of("midgie:   " + text));
             return;
         }
         block.addItem(text);
@@ -1998,12 +1999,16 @@ public class DeployCommand implements Callable<Integer> {
 
     /**
      * The objects that left the tree, last, so they are still on screen when the run ends: once their rows are
-     * gone, no later run names them again.
+     * gone, no later run names them again. For the same reason they are not dimmed like the other notes.
      */
     private void reportOrphans() {
+        if (quiet) {
+            return;
+        }
         for (PlanState.Orphan orphan : orphans) {
-            note("note: " + orphan.object() + " is no longer declared by the tree (" + orphan.file()
-                    + " was removed); its object is left untouched — delete it yourself if that is intended.");
+            System.err.println("midgie: note: " + orphan.object() + " is no longer declared by the tree ("
+                    + orphan.file() + " was removed); its object is left untouched — delete it yourself if that "
+                    + "is intended.");
         }
     }
 
@@ -2064,7 +2069,8 @@ public class DeployCommand implements Callable<Integer> {
 
     private void note(String message) {
         if (!quiet) {
-            System.err.println("midgie: " + message);
+            String line = "midgie: " + message;
+            System.err.println(NoteStyle.isNote(message) ? NoteStyle.of(line) : line);
         }
     }
 

@@ -178,8 +178,9 @@ public class DiffCommand implements Callable<Integer> {
             }
         }
         if (!inert.isEmpty() && !quiet) {
-            System.err.println("midgie: note: " + String.join(", ", inert) + (inert.size() == 1 ? " has" : " have")
-                    + " no effect on an offline diff, which compares the two files as they are.");
+            System.err.println(NoteStyle.of("midgie: note: " + String.join(", ", inert)
+                    + (inert.size() == 1 ? " has" : " have")
+                    + " no effect on an offline diff, which compares the two files as they are."));
         }
         return diffOffline(strategy);
     }
@@ -245,7 +246,7 @@ public class DiffCommand implements Callable<Integer> {
 
             if ((debug || trace) && !quiet) {
                 for (String declined : result.keyPairingDeclined()) {
-                    System.err.println("midgie: note: " + declined + ".");
+                    System.err.println(NoteStyle.of("midgie: note: " + declined + "."));
                 }
             }
 
@@ -269,16 +270,16 @@ public class DiffCommand implements Callable<Integer> {
             // Merge notes go to stderr so stdout stays a clean PATCH body.
             if (!quiet) {
                 for (String path : result.mergeFallbackPaths()) {
-                    System.err.println("midgie: note: '" + path + "' diffs to a whole-value replace; "
-                            + "merge does not apply there, so it was left as replace.");
+                    System.err.println(NoteStyle.of("midgie: note: '" + path + "' diffs to a whole-value replace; "
+                            + "merge does not apply there, so it was left as replace."));
                 }
                 for (String path : result.smartReferencePaths()) {
-                    System.err.println("midgie: note: '" + path + "' is a smart reference; the OID midPoint "
-                            + "resolved its filter to is left in place.");
+                    System.err.println(NoteStyle.of("midgie: note: '" + path + "' is a smart reference; the OID "
+                            + "midPoint resolved its filter to is left in place."));
                 }
                 for (String path : result.protectedSkippedPaths()) {
-                    System.err.println("midgie: note: skipped protected value at '" + path
-                            + "' — ciphertext changes on every fetch and is not safely diffable.");
+                    System.err.println(NoteStyle.of("midgie: note: skipped protected value at '" + path
+                            + "' — ciphertext changes on every fetch and is not safely diffable."));
                 }
                 for (String path : result.accruedInPlaceEditPaths()) {
                     System.err.println("midgie: warning: '" + path + "' edits an accrued (live-only) "

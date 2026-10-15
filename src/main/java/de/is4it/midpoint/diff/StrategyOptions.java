@@ -282,9 +282,9 @@ public final class StrategyOptions {
         // operator can act on, since auto only picks natural-keys where the key is filled in and pairing is
         // therefore well-defined. What auto chose is reported per object instead.
         if (plan.fixedStrategy() == EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) {
-            System.err.println("midgie: note: --equivalence natural-keys "
+            System.err.println(NoteStyle.of("midgie: note: --equivalence natural-keys "
                     + "(REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS) is prism-experimental; "
-                    + "container-value matching by natural key may behave unexpectedly.");
+                    + "container-value matching by natural key may behave unexpectedly."));
         }
         return plan;
     }

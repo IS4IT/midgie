@@ -462,7 +462,8 @@ public class RollbackCommand implements Callable<Integer> {
 
     private void note(String message) {
         if (!quiet) {
-            System.err.println("midgie: " + message);
+            String line = "midgie: " + message;
+            System.err.println(NoteStyle.isNote(message) ? NoteStyle.of(line) : line);
         }
     }
 

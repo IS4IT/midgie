@@ -9,6 +9,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Notes are dim and italic in a terminal.** `note: …` lines, and the items listed under one, no longer look like the result rows, warnings and summary they comment on. Whether to style follows the same rules as `--help`'s colours: only when standard input and output are a terminal, never with `NO_COLOR` set or `CLICOLOR=0`, and anywhere with `CLICOLOR_FORCE=1` — for a CI log that renders ANSI styles. Piped or redirected output is unchanged. The note naming an object that left the tree keeps full brightness.
+
 - **An object that left the tree is named at the end of the run.** The note that a deleted file's object is no longer declared, and is left on the server for you to delete, came before the per-object rows and the summary, so on any real tree it scrolled out of sight — and a deploy that writes reports it only once. It is now the last thing `deploy` prints, `--plan` included. `deploy --apply-plan` repeats it at the end of its output too, since it is the apply that lets go of the object's record: a plan-and-apply pipeline used to name the object only in the plan job's log. A plan made by an earlier version carries no such note.
 
 ## [0.18.0] - 2026-10-02
