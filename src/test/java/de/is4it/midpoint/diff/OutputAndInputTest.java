@@ -63,6 +63,22 @@ class OutputAndInputTest {
         assertThrows(IllegalArgumentException.class, () -> DeltaOutput.render(prismContext, delta, "yaml"));
     }
 
+    @Test
+    void aRemovingDeltaIsWarnedAboutOnOneLineForTheObjectBlock() throws Exception {
+        PrismObject<? extends Objectable> desired = prismContext.parseObject(role("Same"));
+        PrismObject<? extends Objectable> live = prismContext.parseObject(role("Same").replace("</role>",
+                "<subtype>a</subtype><subtype>b</subtype><requestable>true</requestable></role>"));
+        ObjectDelta<? extends Objectable> delta = new DiffEngine(prismContext).diff(desired, live,
+                EquivalenceStrategy.REAL_VALUE, DiffEngine.Scope.FULL, DiffEngine.MultiValueStrategy.replaceAll())
+                .delta();
+
+        assertEquals("this change REMOVES 3 values from the live object: subtype ×2, requestable ×1",
+                DeltaOutput.removalLine(delta));
+        assertTrue(DeltaOutput.removalWarning(delta).startsWith("WARNING: this change REMOVES 3 values"),
+                "the offline diff keeps its own form");
+        assertEquals(null, DeltaOutput.removalLine(descriptionChangeDelta()), "a change that removes nothing");
+    }
+
     private ObjectDelta<? extends Objectable> descriptionChangeDelta() throws Exception {
         PrismObject<? extends Objectable> desired = prismContext.parseObject(role("Desired"));
         PrismObject<? extends Objectable> live = prismContext.parseObject(role("Current"));

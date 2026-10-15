@@ -142,6 +142,27 @@ final class DeltaOutput {
         return out.toString();
     }
 
+    /**
+     * The same warning on one line, for deploy's block about the object, whose line already says it is a
+     * warning: {@code this change REMOVES 3 values from the live object: subtype ×1, inducement ×2}. The
+     * multi-line form, flattened, read {@code warning: WARNING: … object;     - subtype (1 value)} there.
+     */
+    static String removalLine(ObjectDelta<? extends Objectable> delta) {
+        int removed = removedValueCount(delta);
+        if (removed == 0) {
+            return null;
+        }
+        List<String> paths = new java.util.ArrayList<>();
+        for (ItemDelta<?, ?> mod : delta.getModifications()) {
+            int count = size(mod.getValuesToDelete());
+            if (count > 0) {
+                paths.add(mod.getPath() + " ×" + count);
+            }
+        }
+        return "this change REMOVES " + removed + (removed == 1 ? " value" : " values") + " from the live object: "
+                + String.join(", ", paths);
+    }
+
     private static int size(java.util.Collection<?> values) {
         return (values != null) ? values.size() : 0;
     }

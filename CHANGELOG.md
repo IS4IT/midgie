@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The removal warning in `deploy`'s output is one readable line.** Under an object it read `warning: WARNING: this change REMOVES 1 value from the live object;     - subtype (1 value)`, the multi-line warning of the offline `diff` squashed into one; it now reads `warning: this change REMOVES 1 value from the live object: subtype ×1`, the paths counted the way the "keeps live value(s)" note counts them. `diff` keeps its own multi-line form.
+
 ## [0.18.2] - 2026-10-15
 
 ### Changed

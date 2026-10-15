@@ -290,9 +290,9 @@ final class Reconciler {
         String modificationXml = DeltaOutput.toModificationXml(prismContext, delta);
         String summary = DeltaOutput.toSummary(delta).replace("\n", "; ");
         // Counted on the delta being sent, removals included: that is the blast radius the operator confirms.
-        String removalWarning = DeltaOutput.removalWarning(delta);
+        String removalWarning = DeltaOutput.removalLine(delta);
         if (removalWarning != null) {
-            warnings.add(removalWarning.replace("\n", "; "));
+            warnings.add(removalWarning);
         }
         LOG.debug("{} {}: PATCH, {} change(s) ({} removal(s) from the tree): {}", restType, targetOid, changes,
                 judged.removing.size(), summary);
