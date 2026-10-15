@@ -266,6 +266,9 @@ class RemovalDetectorTest {
                 "and its name must never be offered for deletion");
         assertEquals(1, detector.orphaned().size(), "it is reported as orphaned instead");
         assertTrue(detector.orphaned().get(0).sourceFile.contains("role.xml"));
+        assertEquals("RoleType/Removal Probe (" + OID + ")", detector.orphaned().get(0).label,
+                "named by what it is, with the OID that deleting it by hand needs");
+        assertEquals(OID, detector.orphaned().get(0).identityKey);
     }
 
     @Test

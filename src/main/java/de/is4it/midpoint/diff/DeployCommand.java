@@ -686,17 +686,17 @@ public class DeployCommand implements Callable<Integer> {
         comparedPaths = detector.comparedPaths();
         reportUnjudged(detector.unjudged(), units, files);
         for (RemovalDetector.Orphan orphan : detector.orphaned()) {
-            String movedTo = files.movedTo(orphan.objectLabel, orphan.paths);
+            String movedTo = files.movedTo(orphan.identityKey, orphan.paths);
             if (movedTo != null) {
                 // Not gone, moved: its old content stays recorded until a deploy of the new place reads it.
-                note("note: " + orphan.objectLabel + " moved from " + orphan.sourceFile + " to " + movedTo
+                note("note: " + orphan.label + " moved from " + orphan.sourceFile + " to " + movedTo
                         + "; deploy that path to apply what changed with the move.");
                 continue;
             }
             // The whole object left the tree. midgie does not delete objects, and taking one apart value by
             // value would strip its name, so say it plainly and leave the decision to the operator.
             orphanPaths.addAll(orphan.paths);
-            orphans.add(new PlanState.Orphan(orphan.objectLabel, orphan.sourceFile));
+            orphans.add(new PlanState.Orphan(orphan.label, orphan.sourceFile));
         }
         Set<String> deployed = new HashSet<>();
         for (DeployObject unit : units) {

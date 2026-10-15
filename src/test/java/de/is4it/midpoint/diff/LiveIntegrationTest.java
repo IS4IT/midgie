@@ -1046,9 +1046,10 @@ class LiveIntegrationTest {
                 "--yes", "--rollback-plan", plans.toString());
         assertEquals(0, second.exit, second.out);
         assertTrue(second.out.contains("Done:") && second.out.contains("Rollback plan:"), second.out);
-        assertTrue(lastLine(second).contains("is no longer declared by the tree (")
+        assertTrue(lastLine(second).contains("note: RoleType/IT Orphan Role (" + DEPLOY_MATCH_OID
+                        + ") is no longer declared by the tree (")
                 && lastLine(second).contains("gone.xml was removed)"),
-                "the orphan is the last thing the run says:\n" + second.out);
+                "the orphan is the last thing the run says, by type, name and OID:\n" + second.out);
         assertTrue(exists("roles", DEPLOY_MATCH_OID), "and the object itself is left on the server");
     }
 

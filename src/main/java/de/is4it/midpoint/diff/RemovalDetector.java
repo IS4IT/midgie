@@ -295,12 +295,14 @@ final class RemovalDetector {
 
     /** An object that left the tree entirely: reported, never taken apart value by value. */
     static final class Orphan {
-        final String objectLabel;
+        final String identityKey;   // its OID, else Type/Name: what finds it again elsewhere in the tree
+        final String label;         // how the report names it
         final String sourceFile;
         final List<String> paths;   // the repository paths that described it
 
-        Orphan(String objectLabel, String sourceFile, List<String> paths) {
-            this.objectLabel = objectLabel;
+        Orphan(String identityKey, String label, String sourceFile, List<String> paths) {
+            this.identityKey = identityKey;
+            this.label = label;
             this.sourceFile = sourceFile;
             this.paths = List.copyOf(paths);
         }
@@ -410,8 +412,9 @@ final class RemovalDetector {
             // mangled object behind. Deleting objects is deliberately out of scope, so say so and leave it.
             // Its identity does not need the union, so files that no longer combine still get reported.
             PrismObject<? extends Objectable> before = previous.union();
-            orphaned.add(new Orphan(identityKeyOf(before != null ? before : previous.objects.get(0)),
-                    previous.sourceLabel(), previous.paths));
+            PrismObject<? extends Objectable> identified = (before != null) ? before : previous.objects.get(0);
+            orphaned.add(new Orphan(identityKeyOf(identified), labelOf(identified), previous.sourceLabel(),
+                    previous.paths));
         }
 
         LOG.debug("detected {} removal(s) and {} orphaned object(s) against revision {}",
@@ -919,6 +922,15 @@ final class RemovalDetector {
             keys.add(typeAndName(object));
         }
         return keys;
+    }
+
+    /**
+     * How a report names an object: {@code Type/Name}, which says what it is, and its OID when it has one, which
+     * is what deleting it by hand needs.
+     */
+    private static String labelOf(PrismObject<? extends Objectable> object) {
+        String oid = object.getOid();
+        return (oid != null && !oid.isBlank()) ? typeAndName(object) + " (" + oid + ")" : typeAndName(object);
     }
 
     private static String typeAndName(PrismObject<? extends Objectable> object) {
