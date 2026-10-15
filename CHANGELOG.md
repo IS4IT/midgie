@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The note about an object that left the tree says when the server no longer holds it either.** It asked you to delete the object yourself even when that had already been done — after a `--dry-run`, or between a `--plan` and its `--apply-plan`. The run now looks the object up at the end, by OID or else by type and name, and says `…, and also does not exist on the server anymore.` instead, dimmed like the other notes since nothing is left to do. A plan made by 0.18.1 does not record what to look the object up by, so its apply keeps the old wording, as does a run whose lookup fails.
+
 ## [0.18.1] - 2026-10-15
 
 ### Changed

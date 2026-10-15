@@ -29,6 +29,7 @@ import org.w3c.dom.Element;
 import com.evolveum.midpoint.prism.Objectable;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
+import com.evolveum.midpoint.schema.constants.ObjectTypes;
 import com.evolveum.midpoint.util.exception.SchemaException;
 
 import picocli.CommandLine.Command;
@@ -244,6 +245,9 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Objects that left the tree: named after everything else the run prints, and again by --apply-plan. */
     private final List<PlanState.Orphan> orphans = new ArrayList<>();
+
+    /** Those of them the server no longer holds either, as found at the end of the run. */
+    private final Set<PlanState.Orphan> orphansGone = new HashSet<>();
 
     /** What the writing passes did, for the deploy: row; failed is settled once retries are over. */
     private final Tally sent = new Tally();
@@ -564,6 +568,7 @@ public class DeployCommand implements Callable<Integer> {
                 recordState(prismContext, client, tracking, units);
             }
             writeRollbackPlan(client, tracking);
+            checkOrphans(prismContext, client);
             reportOrphans();
             return exit;
         } catch (Exception e) {
@@ -696,7 +701,8 @@ public class DeployCommand implements Callable<Integer> {
             // The whole object left the tree. midgie does not delete objects, and taking one apart value by
             // value would strip its name, so say it plainly and leave the decision to the operator.
             orphanPaths.addAll(orphan.paths);
-            orphans.add(new PlanState.Orphan(orphan.label, orphan.sourceFile));
+            orphans.add(new PlanState.Orphan(orphan.label, orphan.sourceFile, restTypeOf(orphan.objectClass),
+                    orphan.oid, orphan.name));
         }
         Set<String> deployed = new HashSet<>();
         for (DeployObject unit : units) {
@@ -1666,6 +1672,7 @@ public class DeployCommand implements Callable<Integer> {
             recordPlannedState(prismContext, client, state, entries, applied);
         }
         writeRollbackPlan(client, netBase, deployment, revision);
+        checkOrphans(prismContext, client);
         return failed.isEmpty() ? 0 : EXIT_ERROR;
     }
 
@@ -1998,18 +2005,72 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     /**
+     * Ask the server which of the objects that left the tree it no longer holds either, so the note does not
+     * ask for a delete that has been done. One request per object, and only when there are any. An object that
+     * cannot be looked up — a plan made by 0.18.1, a failed request — is reported as possibly still there.
+     */
+    private void checkOrphans(PrismContext prismContext, MidpointRestClient client) {
+        if (client == null || quiet) {
+            return;
+        }
+        for (PlanState.Orphan orphan : orphans) {
+            if (Boolean.FALSE.equals(onServer(prismContext, client, orphan))) {
+                orphansGone.add(orphan);
+            }
+        }
+    }
+
+    /** Whether the server holds {@code orphan}: by OID, else by type and name; {@code null} when it cannot tell. */
+    private static Boolean onServer(PrismContext prismContext, MidpointRestClient client, PlanState.Orphan orphan) {
+        if (orphan.restType() == null) {
+            return null;
+        }
+        try {
+            if (orphan.oid() != null) {
+                client.getObject(orphan.restType(), orphan.oid());
+                return true;
+            }
+            if (orphan.name() != null && prismContext != null) {
+                Class<?> clazz = ObjectTypes.getClassFromRestType(orphan.restType());
+                return !LiveLookup.byName(prismContext, client, clazz, orphan.restType(), orphan.name()).isEmpty();
+            }
+            return null;
+        } catch (MidpointRestClient.RestException e) {
+            if (e.isNotFound()) {
+                return false;
+            }
+            LOG.debug("could not tell whether {} is still on the server: {}", orphan.object(), e.getMessage());
+            return null;
+        } catch (Exception e) {
+            LOG.debug("could not tell whether {} is still on the server", orphan.object(), e);
+            return null;
+        }
+    }
+
+    /**
      * The objects that left the tree, last, so they are still on screen when the run ends: once their rows are
-     * gone, no later run names them again. For the same reason they are not dimmed like the other notes.
+     * gone, no later run names them again. For the same reason one that is still on the server is not dimmed
+     * like the other notes; one the server no longer holds asks for nothing, and is.
      */
     private void reportOrphans() {
         if (quiet) {
             return;
         }
         for (PlanState.Orphan orphan : orphans) {
-            System.err.println("midgie: note: " + orphan.object() + " is no longer declared by the tree ("
-                    + orphan.file() + " was removed); its object is left untouched — delete it yourself if that "
-                    + "is intended.");
+            String gone = orphan.object() + " is no longer declared by the tree (" + orphan.file() + " was removed)";
+            if (orphansGone.contains(orphan)) {
+                note("note: " + gone + ", and also does not exist on the server anymore.");
+            } else {
+                System.err.println("midgie: note: " + gone + "; its object is left untouched — delete it yourself "
+                        + "if that is intended.");
+            }
         }
+    }
+
+    /** The REST collection of {@code clazz}, or {@code null} when it has none. */
+    private static String restTypeOf(Class<?> clazz) {
+        ObjectTypes type = (clazz != null) ? ObjectTypes.getObjectTypeIfKnown(clazz) : null;
+        return (type != null) ? type.getRestType() : null;
     }
 
     /** True when the OID should be shown: {@code --debug} (or {@code --trace}, which implies it). */

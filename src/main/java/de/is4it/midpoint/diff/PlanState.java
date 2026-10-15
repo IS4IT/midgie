@@ -43,11 +43,15 @@ final class PlanState {
     /**
      * An object no file of the tree declares any more, which the plan found and left on the server. The plan's
      * run rows let go of its record, so after the apply no later run names it again; the apply says it once more.
+     * The last three find it on the server, to tell whether it is still there; a plan made by 0.18.1 has none.
      *
-     * @param object how the plan named it
-     * @param file   the file it was last deployed from
+     * @param object   how the plan named it
+     * @param file     the file it was last deployed from
+     * @param restType its REST collection, or {@code null}
+     * @param oid      its OID, or {@code null} when it was deployed by name
+     * @param name     its name, or {@code null}
      */
-    record Orphan(String object, String file) {
+    record Orphan(String object, String file, String restType, String oid, String name) {
     }
 
     /**
@@ -89,7 +93,11 @@ final class PlanState {
         RollbackPlan.appendRows(xml, contents.runRows(), "  ");
         for (Orphan orphan : contents.orphans()) {
             xml.append("  <orphan object=\"").append(escape(orphan.object())).append("\" file=\"")
-                    .append(escape(orphan.file())).append("\"/>").append(System.lineSeparator());
+                    .append(escape(orphan.file())).append('"');
+            optionalAttribute(xml, "restType", orphan.restType());
+            optionalAttribute(xml, "oid", orphan.oid());
+            optionalAttribute(xml, "name", orphan.name());
+            xml.append("/>").append(System.lineSeparator());
         }
         xml.append("</planState>").append(System.lineSeparator());
         java.nio.file.Path target = new File(dir, FILE).toPath();
@@ -123,7 +131,8 @@ final class PlanState {
                 units.add(new Unit(attribute(child, "entry"), attribute(child, "oid"),
                         RollbackPlan.Manifest.rowsIn(child)));
             } else if ("orphan".equals(child.getTagName())) {
-                orphans.add(new Orphan(child.getAttribute("object"), child.getAttribute("file")));
+                orphans.add(new Orphan(child.getAttribute("object"), child.getAttribute("file"),
+                        attribute(child, "restType"), attribute(child, "oid"), attribute(child, "name")));
             }
         }
         return new Contents(text(root, "deployment"), text(root, "revision"), deployKeys, units,
@@ -134,6 +143,12 @@ final class PlanState {
         if (value != null && !value.isBlank()) {
             xml.append("  <").append(name).append('>').append(escape(value)).append("</").append(name).append('>')
                     .append(System.lineSeparator());
+        }
+    }
+
+    private static void optionalAttribute(StringBuilder xml, String name, String value) {
+        if (value != null) {
+            xml.append(' ').append(name).append("=\"").append(escape(value)).append('"');
         }
     }
 

@@ -297,12 +297,19 @@ final class RemovalDetector {
     static final class Orphan {
         final String identityKey;   // its OID, else Type/Name: what finds it again elsewhere in the tree
         final String label;         // how the report names it
+        final Class<?> objectClass; // with the OID or name, what finds it on the server
+        final String oid;           // null when it was deployed by name
+        final String name;
         final String sourceFile;
         final List<String> paths;   // the repository paths that described it
 
-        Orphan(String identityKey, String label, String sourceFile, List<String> paths) {
+        Orphan(String identityKey, String label, Class<?> objectClass, String oid, String name, String sourceFile,
+                List<String> paths) {
             this.identityKey = identityKey;
             this.label = label;
+            this.objectClass = objectClass;
+            this.oid = oid;
+            this.name = name;
             this.sourceFile = sourceFile;
             this.paths = List.copyOf(paths);
         }
@@ -413,8 +420,10 @@ final class RemovalDetector {
             // Its identity does not need the union, so files that no longer combine still get reported.
             PrismObject<? extends Objectable> before = previous.union();
             PrismObject<? extends Objectable> identified = (before != null) ? before : previous.objects.get(0);
-            orphaned.add(new Orphan(identityKeyOf(identified), labelOf(identified), previous.sourceLabel(),
-                    previous.paths));
+            String oid = (identified.getOid() != null && !identified.getOid().isBlank()) ? identified.getOid() : null;
+            String name = (identified.getName() != null) ? identified.getName().getOrig() : null;
+            orphaned.add(new Orphan(identityKeyOf(identified), labelOf(identified), identified.getCompileTimeClass(),
+                    oid, name, previous.sourceLabel(), previous.paths));
         }
 
         LOG.debug("detected {} removal(s) and {} orphaned object(s) against revision {}",

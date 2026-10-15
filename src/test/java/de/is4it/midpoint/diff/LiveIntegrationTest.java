@@ -1054,6 +1054,46 @@ class LiveIntegrationTest {
     }
 
     @Test
+    void anObjectThatLeftTheTreeAndTheServerIsNotAskedToBeDeleted(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Path roles = Files.createDirectories(tree.resolve("roles"));
+        Files.writeString(roles.resolve("kept.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", null),
+                StandardCharsets.UTF_8);
+        Files.writeString(roles.resolve("gone.xml"), role(DEPLOY_MATCH_OID, "IT Orphan Role", null),
+                StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        git(tree, "rm", "-q", "roles/gone.xml");
+        Files.writeString(roles.resolve("kept.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", "changed"),
+                StandardCharsets.UTF_8);
+        commit(tree, "v2");
+
+        // Planned while the role is still there, and deleted by hand between the plan and its apply.
+        Path plan = dir.resolve("plan");
+        CliResult planned = runInterleaved("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--plan", plan.toString());
+        assertEquals(1, planned.exit, planned.out);
+        assertTrue(lastLine(planned).contains("delete it yourself"), planned.out);
+        client.deleteObject("roles", DEPLOY_MATCH_OID);
+
+        CliResult preview = runInterleaved("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--dry-run");
+        assertEquals(1, preview.exit, preview.out);
+        assertTrue(lastLine(preview).endsWith("(roles/gone.xml was removed), and also does not exist on the server "
+                + "anymore."), "a deploy looks the object up before asking for its delete:\n" + preview.out);
+
+        CliResult applied = runInterleaved("deploy", "--apply-plan", plan.toString(), "--url", HOST, "-u", USER,
+                "-p", PASSWORD, "--yes", "--no-rollback-plan");
+        assertEquals(0, applied.exit, applied.out);
+        assertTrue(lastLine(applied).contains("RoleType/IT Orphan Role (" + DEPLOY_MATCH_OID + ")")
+                && lastLine(applied).endsWith("and also does not exist on the server anymore."),
+                "so does the apply of a plan made while it was there:\n" + applied.out);
+    }
+
+    @Test
     void anObjectThatLeftTheTreeIsNamedAgainWhenThePlanIsApplied(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteDeployObjects();

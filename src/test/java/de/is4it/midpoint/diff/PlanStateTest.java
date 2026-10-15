@@ -29,13 +29,23 @@ class PlanStateTest {
                 List.of(new PlanState.Unit("001-roles-x.patch.xml", "x", List.of(changed)),
                         new PlanState.Unit(null, null, List.of(added))),
                 List.of(gone),
-                List.of(new PlanState.Orphan("RoleType/R&D \"old\"", "roles/gone.xml")));
+                List.of(new PlanState.Orphan("RoleType/R&D \"old\" (x)", "roles/gone.xml", "roles", "x", "R&D \"old\""),
+                        new PlanState.Orphan("RoleType/By name", "roles/by-name.xml", "roles", null, "By name")));
 
         PlanState.write(dir.toFile(), contents);
 
         assertEquals(contents, PlanState.read(dir.toFile()));
         assertTrue(Files.readString(dir.resolve(PlanState.FILE)).contains(PlanStore.GENERATED_MARKER),
                 "it must never be discovered as deploy input");
+    }
+
+    @Test
+    void anOrphanRecordedBy0181IsReadWithoutWhatFindsItOnTheServer(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve(PlanState.FILE), "<planState>\n"
+                + "  <orphan object=\"RoleType/Old (x)\" file=\"roles/old.xml\"/>\n</planState>\n");
+
+        assertEquals(List.of(new PlanState.Orphan("RoleType/Old (x)", "roles/old.xml", null, null, null)),
+                PlanState.read(dir.toFile()).orphans());
     }
 
     @Test

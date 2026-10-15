@@ -131,7 +131,11 @@ the midPoint source tree.
   (`SystemConfiguration` is `indestructible` anyway); one whose every file has gone is reported as an orphan,
   in a note printed after everything else the run says: a writing run consumes its rows, so no later run
   repeats it. A plan records it in `state.xml`, and `--apply-plan`, whose run rows are what consume them, names
-  it again at the end of its own output.
+  it again at the end of its own output. Before the note is printed the server is asked whether it still holds
+  the object (a `GET` by OID, else a search by type and name; `state.xml` carries both): one it no longer holds
+  is reported as not existing on the server anymore, instead of asking for a delete that has been done — worded
+  so it cannot be read as midgie having deleted it. A lookup that fails, or a plan from 0.18.1 that lacks those
+  fields, keeps the note that asks for the delete.
   Last-applied files are one object when they share its OID or its type and name, whatever order they come in
   (a file naming it by OID, one by name and one by both merge into one group), but never across two different
   OIDs: a new object given an old one's name is not paired with the old one's history, and the old one is
@@ -368,7 +372,8 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
   warnings and summary stand out from them. Whether to style is picocli's `Ansi.AUTO` decision, the one `--help`
   colours by: standard input and output a terminal, `NO_COLOR` and `CLICOLOR=0` turn it off, `CLICOLOR_FORCE=1`
   or `-Dpicocli.ansi=true` on anywhere. A block styles each line after the wrap, so escape codes never count
-  towards the width. The orphan note is not dimmed: it is printed last to be seen, and no later run repeats it.
+  towards the width. The orphan note is not dimmed while the server still holds the object: it is printed last
+  to be seen, and no later run repeats it.
 
 ## Packaging & license
 
