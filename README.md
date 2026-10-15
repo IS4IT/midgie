@@ -8,6 +8,11 @@ A schema-aware diff/apply tool for [midPoint](https://evolveum.com/midpoint/). I
 `ObjectModificationType` XML that midPoint's REST `PATCH` endpoint consumes — a `kubectl diff`/`apply` for
 midPoint config, one object at a time or a whole folder tree (`deploy`).
 
+![midgie deploy over a small tree: first with --dry-run, then with --yes](docs/teaser.gif)
+
+*A tracked tree deployed twice: `--dry-run` shows what would change — a new archetype, an edited role that
+drops a value, a file deleted from the tree — and `--yes` applies it.*
+
 > **It compares one object with itself, not two different objects.** Both inputs are the *same* object
 > (same OID) in two states: the **desired** state (how you want it) and the **current** state (how it is
 > now). The computed delta transforms current → desired — exactly like `git diff` between two revisions of
