@@ -5,7 +5,7 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.18.1] - 2026-10-15
 
 ### Changed
 
@@ -687,7 +687,8 @@ REST `PATCH` consumes — a thin wrapper around midPoint's own `PrismObject.diff
 - Fat JAR (Java 17), EUPL-1.2, [REUSE](https://reuse.software/)-compliant. CI runs `mvn verify` on JDK 17
   and 21 plus a REUSE licence lint; tagged releases attach the fat JAR.
 
-[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/IS4IT/midgie/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/IS4IT/midgie/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/IS4IT/midgie/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/IS4IT/midgie/compare/v0.16.3...v0.17.0
 [0.16.3]: https://github.com/IS4IT/midgie/compare/v0.16.2...v0.16.3
