@@ -128,7 +128,10 @@ the midPoint source tree.
   files: a deleted fragment yields exactly the values no surviving file still declares, and a value merely
   *moved* between two files of one object never appears at all, both falling out of the comparison rather
   than needing a subtraction pass to undo. The object itself is never a deletion candidate
-  (`SystemConfiguration` is `indestructible` anyway); one whose every file has gone is reported as an orphan.
+  (`SystemConfiguration` is `indestructible` anyway); one whose every file has gone is reported as an orphan,
+  in a note printed after everything else the run says: a writing run consumes its rows, so no later run
+  repeats it. A plan records it in `state.xml`, and `--apply-plan`, whose run rows are what consume them, names
+  it again at the end of its own output.
   Last-applied files are one object when they share its OID or its type and name, whatever order they come in
   (a file naming it by OID, one by name and one by both merge into one group), but never across two different
   OIDs: a new object given an old one's name is not paired with the old one's history, and the old one is

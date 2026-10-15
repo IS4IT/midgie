@@ -28,7 +28,8 @@ class PlanStateTest {
         PlanState.Contents contents = new PlanState.Contents("root/tree", "abc123", List.of("deploy:root/tree"),
                 List.of(new PlanState.Unit("001-roles-x.patch.xml", "x", List.of(changed)),
                         new PlanState.Unit(null, null, List.of(added))),
-                List.of(gone));
+                List.of(gone),
+                List.of(new PlanState.Orphan("RoleType/R&D \"old\"", "roles/gone.xml")));
 
         PlanState.write(dir.toFile(), contents);
 

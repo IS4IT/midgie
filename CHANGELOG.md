@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **An object that left the tree is named at the end of the run.** The note that a deleted file's object is no longer declared, and is left on the server for you to delete, came before the per-object rows and the summary, so on any real tree it scrolled out of sight — and a deploy that writes reports it only once. It is now the last thing `deploy` prints, `--plan` included. `deploy --apply-plan` repeats it at the end of its output too, since it is the apply that lets go of the object's record: a plan-and-apply pipeline used to name the object only in the plan job's log. A plan made by an earlier version carries no such note.
+
 ## [0.18.0] - 2026-10-02
 
 ### Changed

@@ -41,15 +41,26 @@ final class PlanState {
     }
 
     /**
+     * An object no file of the tree declares any more, which the plan found and left on the server. The plan's
+     * run rows let go of its record, so after the apply no later run names it again; the apply says it once more.
+     *
+     * @param object how the plan named it
+     * @param file   the file it was last deployed from
+     */
+    record Orphan(String object, String file) {
+    }
+
+    /**
      * What a plan records about tracking.
      *
      * @param deployment the deployment key, which also names the default rollback-plan directory
      * @param revision   the commit planned
      * @param deployKeys the {@code deploy:} row per deployed path
      * @param runRows    rows no one object claims, written only when every entry applied
+     * @param orphans    objects that left the tree
      */
     record Contents(String deployment, String revision, List<String> deployKeys, List<Unit> units,
-            List<RollbackPlan.RowChange> runRows) {
+            List<RollbackPlan.RowChange> runRows, List<Orphan> orphans) {
     }
 
     private PlanState() {
@@ -76,6 +87,10 @@ final class PlanState {
             xml.append("  </unit>").append(System.lineSeparator());
         }
         RollbackPlan.appendRows(xml, contents.runRows(), "  ");
+        for (Orphan orphan : contents.orphans()) {
+            xml.append("  <orphan object=\"").append(escape(orphan.object())).append("\" file=\"")
+                    .append(escape(orphan.file())).append("\"/>").append(System.lineSeparator());
+        }
         xml.append("</planState>").append(System.lineSeparator());
         java.nio.file.Path target = new File(dir, FILE).toPath();
         Io.restrictToOwner(target);
@@ -96,6 +111,7 @@ final class PlanState {
         }
         List<String> deployKeys = new ArrayList<>();
         List<Unit> units = new ArrayList<>();
+        List<Orphan> orphans = new ArrayList<>();
         NodeList children = root.getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
             if (!(children.item(i) instanceof Element child)) {
@@ -106,10 +122,12 @@ final class PlanState {
             } else if ("unit".equals(child.getTagName())) {
                 units.add(new Unit(attribute(child, "entry"), attribute(child, "oid"),
                         RollbackPlan.Manifest.rowsIn(child)));
+            } else if ("orphan".equals(child.getTagName())) {
+                orphans.add(new Orphan(child.getAttribute("object"), child.getAttribute("file")));
             }
         }
         return new Contents(text(root, "deployment"), text(root, "revision"), deployKeys, units,
-                RollbackPlan.Manifest.rowsIn(root));
+                RollbackPlan.Manifest.rowsIn(root), orphans);
     }
 
     private static void element(StringBuilder xml, String name, String value) {

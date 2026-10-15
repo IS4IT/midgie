@@ -242,6 +242,9 @@ public class DeployCommand implements Callable<Integer> {
     /** Paths of gone files whose object left the tree; reported, so their rows have nothing left to say. */
     private final Set<String> orphanPaths = new LinkedHashSet<>();
 
+    /** Objects that left the tree: named after everything else the run prints, and again by --apply-plan. */
+    private final List<PlanState.Orphan> orphans = new ArrayList<>();
+
     /** What the writing passes did, for the deploy: row; failed is settled once retries are over. */
     private final Tally sent = new Tally();
 
@@ -358,7 +361,9 @@ public class DeployCommand implements Callable<Integer> {
 
         try {
             if (applyPlanDir != null) {
-                return runApplyPlan();
+                Integer exit = runApplyPlan();
+                reportOrphans();
+                return exit;
             }
 
             PrismContext prismContext = SchemaOptions.newBaseContext();
@@ -559,6 +564,7 @@ public class DeployCommand implements Callable<Integer> {
                 recordState(prismContext, client, tracking, units);
             }
             writeRollbackPlan(client, tracking);
+            reportOrphans();
             return exit;
         } catch (Exception e) {
             String message = (e.getMessage() != null) ? e.getMessage() : e.toString();
@@ -690,8 +696,7 @@ public class DeployCommand implements Callable<Integer> {
             // The whole object left the tree. midgie does not delete objects, and taking one apart value by
             // value would strip its name, so say it plainly and leave the decision to the operator.
             orphanPaths.addAll(orphan.paths);
-            note("note: " + orphan.objectLabel + " is no longer declared by the tree (" + orphan.sourceFile
-                    + " was removed); its object is left untouched — delete it yourself if that is intended.");
+            orphans.add(new PlanState.Orphan(orphan.objectLabel, orphan.sourceFile));
         }
         Set<String> deployed = new HashSet<>();
         for (DeployObject unit : units) {
@@ -1590,7 +1595,7 @@ public class DeployCommand implements Callable<Integer> {
             deployKeys.add(tracking.files.deployKeyOf(scope));
         }
         PlanState.write(planDir, new PlanState.Contents(tracking.identity.key(), tracking.currentRevision,
-                deployKeys, planned, rows.run()));
+                deployKeys, planned, rows.run(), orphans));
     }
 
     // --- apply-plan (replay saved files verbatim) ---
@@ -1602,6 +1607,10 @@ public class DeployCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
         LOG.debug("apply-plan: {} entry/entries from {}", entries.size(), applyPlanDir);
+        PlanState.Contents state = PlanState.read(applyPlanDir);
+        if (state != null) {
+            orphans.addAll(state.orphans());
+        }
         if (dryRun) {
             for (PlanStore.Entry entry : entries) {
                 reportEntry(entry, entry.kind == PlanStore.Kind.CREATE ? "would-create" : "would-patch", "", false);
@@ -1628,7 +1637,6 @@ public class DeployCommand implements Callable<Integer> {
         if (client == null) {
             return EXIT_ERROR;
         }
-        PlanState.Contents state = PlanState.read(applyPlanDir);
         // Only now is prism worth its start-up: for the inverses of the net, and for the state rows. Extension
         // schema too, since a stored body may carry extension items.
         PrismContext prismContext = (!noRollbackPlan || state != null) ? schemaOptions.buildContext(client) : null;
@@ -1986,6 +1994,17 @@ public class DeployCommand implements Callable<Integer> {
             return;
         }
         block.addItem(text);
+    }
+
+    /**
+     * The objects that left the tree, last, so they are still on screen when the run ends: once their rows are
+     * gone, no later run names them again.
+     */
+    private void reportOrphans() {
+        for (PlanState.Orphan orphan : orphans) {
+            note("note: " + orphan.object() + " is no longer declared by the tree (" + orphan.file()
+                    + " was removed); its object is left untouched — delete it yourself if that is intended.");
+        }
     }
 
     /** True when the OID should be shown: {@code --debug} (or {@code --trace}, which implies it). */

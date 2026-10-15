@@ -1023,6 +1023,77 @@ class LiveIntegrationTest {
     }
 
     @Test
+    void anObjectThatLeftTheTreeIsNamedLastAndLeftOnTheServer(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Path roles = Files.createDirectories(tree.resolve("roles"));
+        Files.writeString(roles.resolve("kept.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", null),
+                StandardCharsets.UTF_8);
+        Files.writeString(roles.resolve("gone.xml"), role(DEPLOY_MATCH_OID, "IT Orphan Role", null),
+                StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        Path plans = dir.resolve("rollback");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--rollback-plan", plans.toString()).exit);
+
+        // The kept role changes too, so the run has a summary and a rollback plan for the note to come after.
+        git(tree, "rm", "-q", "roles/gone.xml");
+        Files.writeString(roles.resolve("kept.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", "changed"),
+                StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        CliResult second = runInterleaved("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes", "--rollback-plan", plans.toString());
+        assertEquals(0, second.exit, second.out);
+        assertTrue(second.out.contains("Done:") && second.out.contains("Rollback plan:"), second.out);
+        assertTrue(lastLine(second).contains("is no longer declared by the tree (")
+                && lastLine(second).contains("gone.xml was removed)"),
+                "the orphan is the last thing the run says:\n" + second.out);
+        assertTrue(exists("roles", DEPLOY_MATCH_OID), "and the object itself is left on the server");
+    }
+
+    @Test
+    void anObjectThatLeftTheTreeIsNamedAgainWhenThePlanIsApplied(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        Path tree = trackedRepo(dir);
+        Path roles = Files.createDirectories(tree.resolve("roles"));
+        Files.writeString(roles.resolve("kept.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", null),
+                StandardCharsets.UTF_8);
+        Files.writeString(roles.resolve("gone.xml"), role(DEPLOY_MATCH_OID, "IT Orphan Role", null),
+                StandardCharsets.UTF_8);
+        commit(tree, "v1");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        git(tree, "rm", "-q", "roles/gone.xml");
+        Files.writeString(roles.resolve("kept.xml"), role(DEPLOY_ROLE_OID, "IT Deploy Role", "changed"),
+                StandardCharsets.UTF_8);
+        commit(tree, "v2");
+        Path plan = dir.resolve("plan");
+        CliResult planned = runInterleaved("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--plan", plan.toString());
+        assertEquals(1, planned.exit, planned.out);
+        assertTrue(lastLine(planned).contains("is no longer declared by the tree ("), planned.out);
+
+        // The apply job's log is often the only one anybody reads, and after it no run names the object again.
+        CliResult applied = runInterleaved("deploy", "--apply-plan", plan.toString(), "--url", HOST, "-u", USER,
+                "-p", PASSWORD, "--yes", "--rollback-plan", dir.resolve("nets").toString());
+        assertEquals(0, applied.exit, applied.out);
+        assertTrue(applied.out.contains("Rollback plan:"), applied.out);
+        assertTrue(lastLine(applied).contains("is no longer declared by the tree (")
+                && lastLine(applied).contains("gone.xml was removed)"),
+                "the apply names the orphan last as well:\n" + applied.out);
+        assertTrue(exists("roles", DEPLOY_MATCH_OID), "and leaves it on the server");
+
+        CliResult after = runInterleaved("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes", "--no-rollback-plan");
+        assertEquals(0, after.exit, after.out);
+        assertFalse(after.out.contains("is no longer declared by the tree"),
+                "the apply let go of the orphan's rows:\n" + after.out);
+    }
+
+    @Test
     void aTreeRowFromAnEarlierVersionIsReadOnceAndReplacedByFileRows(@TempDir Path dir) throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
         deleteDeployObjects();
@@ -1351,6 +1422,31 @@ class LiveIntegrationTest {
             System.setOut(originalOut);
             System.setErr(originalErr);
         }
+    }
+
+    /**
+     * Run the CLI in-process with stdout and stderr in one stream, in the order a terminal or a CI log shows
+     * them. Everything is in {@code out}; {@code err} is empty.
+     */
+    private static CliResult runInterleaved(String... args) {
+        PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream both = new ByteArrayOutputStream();
+        try {
+            PrintStream stream = new PrintStream(both, true, StandardCharsets.UTF_8);
+            System.setOut(stream);
+            System.setErr(stream);
+            int exit = new CommandLine(new Main()).execute(args);
+            return new CliResult(exit, both.toString(StandardCharsets.UTF_8), "");
+        } finally {
+            System.setOut(originalOut);
+            System.setErr(originalErr);
+        }
+    }
+
+    private static String lastLine(CliResult result) {
+        List<String> lines = result.out.strip().lines().toList();
+        return lines.isEmpty() ? "" : lines.get(lines.size() - 1);
     }
 
     private record CliResult(int exit, String out, String err) {
