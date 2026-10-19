@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Releases can be verified.** The JAR and the Helm chart carry a SLSA build-provenance attestation, and the release attaches `midgie-<version>.cdx.json`, a CycloneDX SBOM of every library the JAR bundles, attested against the JAR. The image in Docker Hub is signed with cosign and carries a provenance attestation and an SBOM of its OS packages. All of it is keyless, through Sigstore: a signature names the workflow and git ref that built the artifact. The README's new "Verifying a release" section has the `gh attestation verify` and `cosign verify` commands. Every build now writes the SBOM to `target/bom.json`.
+
 ## [0.18.3] - 2026-10-15
 
 ### Fixed

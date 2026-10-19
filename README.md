@@ -157,6 +157,28 @@ kubectl get ns <namespace> -o jsonpath='{.metadata.annotations.openshift\.io/sa\
 helm upgrade midgie charts/midgie -n <namespace> -f charts/midgie/values-openshift.yaml --set podSecurityContext.fsGroup=<from that range>
 ```
 
+### Verifying a release
+
+Releases after 0.18.3 can be checked against the workflow that built them. The JAR and the chart carry a build-provenance attestation, the JAR also an attestation of its SBOM (`midgie-<version>.cdx.json`, attached to the release: every library the JAR bundles, with versions, hashes and licences), and the image is signed and attested in Docker Hub. All are signed keylessly through Sigstore, so there is no key to fetch: a signature names the workflow and the git ref it ran from.
+
+```bash
+# The JAR, downloaded from the release (the chart's .tgz the same way)
+gh attestation verify midgie-<version>.jar --repo IS4IT/midgie \
+  --signer-workflow IS4IT/midgie/.github/workflows/release.yml
+# ... and that the attached SBOM is the one built with it
+gh attestation verify midgie-<version>.jar --repo IS4IT/midgie \
+  --signer-workflow IS4IT/midgie/.github/workflows/release.yml --predicate-type https://cyclonedx.org/bom
+
+# The image
+gh attestation verify oci://docker.io/is4it/midgie:<version> --repo IS4IT/midgie \
+  --signer-workflow IS4IT/midgie/.github/workflows/release.yml
+cosign verify docker.io/is4it/midgie:<version> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/IS4IT/midgie/\.github/workflows/release\.yml@refs/(tags/v.+|heads/main)$'
+```
+
+The cosign form is the one a cluster admission policy (Kyverno, Sigstore policy-controller) can enforce. The identity admits `heads/main` as well as the version tags because an image rebuilt for an existing release (a base-image fix) is built by a run started by hand from `main`.
+
 ## Commands
 
 `midgie` has four subcommands. **`diff`** shows the change for a **single object** and never writes; **`deploy`** reconciles any number of **files and folders** — one file is a tree of one; **`rollback`** puts back what the last `deploy` changed; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see below). `diff` and `deploy` read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`); `rollback` replays a saved plan and reads nothing from the tree.
