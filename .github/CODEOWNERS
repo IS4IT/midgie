@@ -1,0 +1,8 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+# Review requests on pull requests (today, Dependabot's). The workflows are named on their own: they hold
+# the release credentials and decide what gets published.
+*           @lhaeger
+/.github/   @lhaeger

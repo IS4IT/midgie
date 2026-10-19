@@ -23,6 +23,7 @@ jobs:
   build:
     name: Build & test (JDK ${{ matrix.java }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -52,6 +53,7 @@ jobs:
   image:
     name: Container image (amd64 + arm64)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -90,6 +92,7 @@ jobs:
   chart:
     name: Helm chart
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -125,6 +128,7 @@ jobs:
   reuse:
     name: REUSE compliance
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -137,6 +141,7 @@ jobs:
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
