@@ -1,0 +1,15 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+# gitleaks configuration, read by the CI 'Secret scan' job and the pre-commit hook. It extends the stock
+# rules rather than replacing them, and allowlists by value, not by path: a real secret pasted into one of
+# these files is still caught.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "The docker/ rig's throwaway midPoint admin password, used by the compose file, its README, the live tests and the README teaser. It guards nothing but a local container."
+regexTarget = "match"
+regexes = ['''T3stPw890uio''']

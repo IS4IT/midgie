@@ -15,7 +15,9 @@ java -jar target/midgie.jar --help
 java -jar target/midgie.jar diff examples/a.xml examples/b.xml
 ```
 
-`mvn -B -ntp verify` is what both workflows run. The live integration tests self-skip unless the `docker/` rig is up, so a green run that reports skips is the normal case, not a problem.
+`mvn -B -ntp verify` is what the CI and release workflows run. The live integration tests self-skip unless the `docker/` rig is up, so a green run that reports skips is the normal case, not a problem.
+
+Run `pre-commit install` once per clone: it runs gitleaks on every commit, as CI's `Secret scan` job does on every push over the whole history. `.gitleaks.toml` allowlists exactly one value, the `docker/` rig's throwaway admin password; anything else that looks like a secret fails both.
 
 ## Things that will bite you
 

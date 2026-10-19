@@ -1,0 +1,8 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+# Findings gitleaks reports that are not secrets, one fingerprint per line (commit:file:rule:line).
+
+# Review prose describing a URL that carries user:password, not a credential.
+04f6713fc0fc3d4fe793f4001483665468e9e471:docs/review/x1-secrets-logging.md:curl-auth-user:20
