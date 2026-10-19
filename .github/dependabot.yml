@@ -1,0 +1,31 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+# Routine version bumps, once a month, one pull request per ecosystem. Security fixes for a known
+# vulnerability are separate: Dependabot opens those as soon as an alert appears, whatever this schedule.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      maven:
+        patterns: ['*']
+    ignore:
+      # The midPoint schema must match the target midPoint's major line, and the build fails unless
+      # docker/.env's MP_VER moves with it (see CLAUDE.md). Moving to another midPoint is a deliberate
+      # change, not a routine bump.
+      - dependency-name: 'com.evolveum.*'
+
+  # The SHA pins in .github/workflows, kept current with their version comments.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+
+# Not covered: docker/midgie/Dockerfile's base image, whose tag floats on purpose (see the comment there).
