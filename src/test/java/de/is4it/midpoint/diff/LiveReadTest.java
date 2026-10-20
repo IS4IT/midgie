@@ -32,6 +32,7 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.LookupTableType;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.RoleType;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -104,13 +105,18 @@ class LiveReadTest {
 
     @Test
     void aNewerPatchAndAnotherLineAreWarnedAboutAndAnUnreadableVersionIsSaid() {
+        // The bundled version may be in any of midPoint's forms — 4.10.5, 4.11, 4.11-RC2, 4.11.0-SNAPSHOT — so
+        // the server versions are made from its line and patch, not from its text.
         String bundled = VersionSupport.compileTimeVersion();
-        String[] parts = bundled.split("\\.");
-        nodeVersion = parts[0] + "." + parts[1] + "." + (Integer.parseInt(parts[2]) + 1);
+        String line = VersionSupport.majorMinor(bundled);
+        Integer patch = VersionSupport.patchOf(bundled);
+        assertNotNull(patch, "the bundled version must name its patch or none at all, got: " + bundled);
+        nodeVersion = line + "." + (patch + 1);
         assertTrue(stderrOf(() -> VersionSupport.warnIfMismatch(prismContext, client))
                 .contains("is a newer patch release"));
 
-        nodeVersion = parts[0] + "." + (Integer.parseInt(parts[1]) + 1) + ".0";
+        String[] numbers = line.split("\\.");
+        nodeVersion = numbers[0] + "." + (Integer.parseInt(numbers[1]) + 1) + ".0";
         assertTrue(stderrOf(() -> VersionSupport.warnIfMismatch(prismContext, client))
                 .contains("differs from the bundled schema version"));
 

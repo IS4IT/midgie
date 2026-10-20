@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Offline tests for version comparison and the embedded compile-time version. */
@@ -20,6 +21,23 @@ class VersionSupportTest {
         assertEquals("4.10", VersionSupport.majorMinor("4.10.3"));
         assertEquals("4.10", VersionSupport.majorMinor("4.10.3-SNAPSHOT"));
         assertEquals("4.11", VersionSupport.majorMinor("4.11"));
+        assertEquals("4.11", VersionSupport.majorMinor("4.11-RC2"));
+        assertEquals("4.11", VersionSupport.majorMinor("4.11.0-SNAPSHOT"));
+    }
+
+    @Test
+    void patchOfReadsEveryFormMidpointVersionsComeIn() {
+        assertEquals(5, VersionSupport.patchOf("4.10.5"));
+        assertEquals(5, VersionSupport.patchOf("4.10.5-SNAPSHOT"));
+        assertEquals(0, VersionSupport.patchOf("4.11.0-SNAPSHOT"));
+        // A release that names no patch is the line's first: the GA (4.10 shipped as "4.10"), its milestones,
+        // release candidates and snapshots.
+        assertEquals(0, VersionSupport.patchOf("4.11"));
+        assertEquals(0, VersionSupport.patchOf("4.11-RC2"));
+        assertEquals(0, VersionSupport.patchOf("4.11-M6"));
+        assertEquals(0, VersionSupport.patchOf("4.11-SNAPSHOT"));
+        assertNull(VersionSupport.patchOf("4.10.x"), "a patch that is not a number is unreadable");
+        assertNull(VersionSupport.patchOf("4"), "no line at all");
     }
 
     @Test
@@ -35,8 +53,10 @@ class VersionSupportTest {
         assertTrue(VersionSupport.comparePatch("4.10.5", "4.10.6") < 0, "server on a newer patch");
         assertTrue(VersionSupport.comparePatch("4.10.5", "4.10.3") > 0, "server on an older patch");
         assertEquals(0, VersionSupport.comparePatch("4.10.5", "4.10.5-SNAPSHOT"));
-        assertEquals(0, VersionSupport.comparePatch("4.10.5", "4.10"), "no patch to compare is not a mismatch");
-        assertEquals(0, VersionSupport.comparePatch("4.10.5", "4.10.x"));
+        assertTrue(VersionSupport.comparePatch("4.10.5", "4.10") > 0, "the line's first release is older");
+        assertTrue(VersionSupport.comparePatch("4.11-RC2", "4.11.1") < 0,
+                "a schema bundled from a release candidate is older than the line's first patch");
+        assertEquals(0, VersionSupport.comparePatch("4.10.5", "4.10.x"), "an unreadable patch is not a mismatch");
     }
 
     @Test

@@ -132,11 +132,20 @@ final class VersionSupport {
         return (a == null || b == null) ? 0 : Integer.compare(a, b);
     }
 
-    /** {@code "4.10.5"} / {@code "4.10.5-SNAPSHOT"} -> {@code 5}; {@code null} when there is no numeric patch. */
+    /**
+     * {@code "4.10.5"} / {@code "4.10.5-SNAPSHOT"} -> {@code 5}. A version that names no patch is its line's first
+     * release: {@code "4.11"}, {@code "4.11-RC2"}, {@code "4.11-M6"} and {@code "4.11-SNAPSHOT"} -> {@code 0}, the
+     * qualifier after the {@code -} not being a patch. {@code null} when the patch is there but not a number
+     * ({@code "4.10.x"}), or the version has no line at all.
+     */
     static Integer patchOf(String version) {
-        String[] parts = version.split("[.-]");
-        if (parts.length < 3) {
+        int qualifier = version.indexOf('-');
+        String[] parts = ((qualifier >= 0) ? version.substring(0, qualifier) : version).split("\\.");
+        if (parts.length < 2) {
             return null;
+        }
+        if (parts.length == 2) {
+            return 0;
         }
         try {
             return Integer.valueOf(parts[2]);
