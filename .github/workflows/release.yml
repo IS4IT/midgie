@@ -14,8 +14,9 @@
 # What a release can be checked against (README "Verifying a release" has the commands):
 # - the JAR and the Helm chart carry a SLSA build-provenance attestation, and the JAR an SBOM attestation
 #   for midgie-<version>.cdx.json (the CycloneDX SBOM the build writes, attached to the release as well);
-# - the image is signed with cosign and carries a provenance attestation, both stored in Docker Hub next to
-#   it (as sha256-<digest>.sig and attestation manifests), plus BuildKit's SBOM of its OS packages.
+# - the image is signed with cosign and carries a provenance attestation, both attached to it in Docker Hub
+#   as OCI referrers (cosign 3 stores its signature that way, not as a sha256-<digest>.sig tag), plus
+#   BuildKit's SBOM of its OS packages.
 # All of it is keyless: signed with a short-lived Sigstore certificate issued to this workflow, so there is
 # no signing key to keep, and a signature names the workflow and ref that made it.
 #
