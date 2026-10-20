@@ -797,7 +797,7 @@ public final class DiffEngine {
                     resolvedDesired.addAll(open);
                     takenLive.addAll(openLive);
                     if (openLive.size() < open.size()) {
-                        warnings.add("'" + mod.getPath() + "' holds " + openLive.size() + " value(s) for "
+                        warnings.add("'" + PathText.of(mod.getPath()) + "' holds " + openLive.size() + " value(s) for "
                                 + open.size() + " filter(s), and which filter's resolution is missing cannot be "
                                 + "told offline, so none of them is sent; --smart-refs verify asks the server");
                     }
@@ -822,7 +822,7 @@ public final class DiffEngine {
             }
             resolvedDesired.forEach(mod::removeValueToAdd);
             takenLive.forEach(mod::removeValueToDelete);
-            paths.add(mod.getPath().toString());
+            paths.add(PathText.of(mod.getPath()));
             if (mod.isEmpty()) {
                 emptied.add(mod);
             }
@@ -994,7 +994,7 @@ public final class DiffEngine {
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
             if (isUnder(localNames(mod.getPath()), incomplete)) {
                 toRemove.add(mod);
-                skipped.add(mod.getPath().toString());
+                skipped.add(PathText.of(mod.getPath()));
             }
         }
         toRemove.forEach(delta::removeModification);
@@ -1032,7 +1032,7 @@ public final class DiffEngine {
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
             if (isProtected(mod)) {
                 toRemove.add(mod);
-                skipped.add(mod.getPath().toString());
+                skipped.add(PathText.of(mod.getPath()));
             }
         }
         toRemove.forEach(delta::removeModification);
@@ -1173,7 +1173,7 @@ public final class DiffEngine {
         List<String> flagged = new ArrayList<>();
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
             if (accruedEditLevel(mod.getPath(), desired, live, multiValue) != null) {
-                flagged.add(mod.getPath().toString());
+                flagged.add(PathText.of(mod.getPath()));
             }
         }
         return flagged;
@@ -1330,7 +1330,7 @@ public final class DiffEngine {
             for (PrismContainerValue<?> value : desiredContainer.getValues()) {
                 index++;
                 if (!NaturalKeys.carries(naturalKey, value)) {
-                    warnings.add("'" + path + "' value #" + index + " does not carry its natural key ("
+                    warnings.add("'" + PathText.of(path) + "' value #" + index + " does not carry its natural key ("
                             + NaturalKeys.names(desiredContainer) + "), so it cannot be matched to a live value; it will "
                             + "be treated as a whole-value change instead of an update of the matching entry.");
                 }
@@ -1360,9 +1360,9 @@ public final class DiffEngine {
             for (PrismContainerValue<?> value : desiredContainer.getValues()) {
                 keyUsable = keyUsable && NaturalKeys.carries(naturalKey, value);
             }
-            warnings.add("'" + path + "': desired matches " + matched + " of "
+            warnings.add("'" + PathText.of(path) + "': desired matches " + matched + " of "
                     + liveContainer.getValues().size() + " live value(s), and this path is on "
-                    + "multivalue=replace, so the other " + unmatched + " will be DELETED. Set '" + path
+                    + "multivalue=replace, so the other " + unmatched + " will be DELETED. Set '" + PathText.of(path)
                     + " multivalue=merge' to update just the entries you list."
                     + (keyUsable ? "" : " Their natural key (" + NaturalKeys.names(desiredContainer)
                             + ") is not filled in on every value, so they can only be matched by content — "
@@ -1469,7 +1469,7 @@ public final class DiffEngine {
         }
         Set<String> remaining = new java.util.HashSet<>();
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
-            remaining.add(mod.getPath().toString());
+            remaining.add(PathText.of(mod.getPath()));
         }
         return paths.stream().filter(remaining::contains).toList();
     }
@@ -1527,7 +1527,7 @@ public final class DiffEngine {
             }
             if (mod.getValuesToReplace() != null) {
                 // Kept for definition-less deltas, where cardinality cannot be read.
-                fallbacks.add(mod.getPath().toString());
+                fallbacks.add(PathText.of(mod.getPath()));
                 continue;
             }
             if (mod.getValuesToDelete() != null && !mod.getValuesToDelete().isEmpty()) {

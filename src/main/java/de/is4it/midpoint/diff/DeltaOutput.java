@@ -65,7 +65,7 @@ final class DeltaOutput {
             if (out.length() > 0) {
                 out.append('\n');
             }
-            out.append(operationLabel(mod)).append(' ').append(mod.getPath());
+            out.append(operationLabel(mod)).append(' ').append(PathText.of(mod.getPath()));
             int removed = size(mod.getValuesToDelete());
             if (removed > 0) {
                 // Spell out the blast radius: "delete <path>" alone reads like one small change even when it
@@ -135,7 +135,7 @@ final class DeltaOutput {
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
             int count = size(mod.getValuesToDelete());
             if (count > 0) {
-                out.append("\n    - ").append(mod.getPath()).append(" (").append(count)
+                out.append("\n    - ").append(PathText.of(mod.getPath())).append(" (").append(count)
                         .append(count == 1 ? " value" : " values").append(')');
             }
         }
@@ -156,7 +156,7 @@ final class DeltaOutput {
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
             int count = size(mod.getValuesToDelete());
             if (count > 0) {
-                paths.add(mod.getPath() + " ×" + count);
+                paths.add(PathText.of(mod.getPath()) + " ×" + count);
             }
         }
         return "this change REMOVES " + removed + (removed == 1 ? " value" : " values") + " from the live object: "

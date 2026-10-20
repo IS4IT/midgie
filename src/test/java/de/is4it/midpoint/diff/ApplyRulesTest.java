@@ -97,6 +97,10 @@ class ApplyRulesTest {
         assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("assignment/3/activation/administrativeStatus"));
         assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("c:assignment/3/c:activation"));
         assertEquals(ApplyRules.Mode.ALWAYS, apply.modeOf("assignment/3/targetRef"));
+        // prism's own rendering since midPoint 4.11 puts the id after the name.
+        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("assignment[3]/activation/administrativeStatus"));
+        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("c:assignment[3]/c:activation"));
+        assertEquals(ApplyRules.Mode.ALWAYS, apply.modeOf("assignment[3]/targetRef"));
     }
 
     // --- planning ---

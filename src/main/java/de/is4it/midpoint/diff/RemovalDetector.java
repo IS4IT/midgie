@@ -817,7 +817,7 @@ final class RemovalDetector {
      */
     private static String pathText(ItemPath itemPath, List<Step> steps) {
         if (steps.isEmpty()) {
-            return itemPath.toString();
+            return PathText.of(itemPath);
         }
         StringBuilder text = new StringBuilder();
         int consumed = 0;

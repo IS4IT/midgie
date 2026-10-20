@@ -48,7 +48,7 @@ class NestedOwnershipTest {
 
         assertTrue(result.delta().isEmpty(), "nothing the tree declares differs: " + result.delta());
         assertEquals(1, result.keptNested().size(), "and the kept item is reported: " + result.keptNested());
-        assertEquals("mapping/4/lifecycleState", result.keptNested().get(0).path().toString());
+        assertEquals("mapping/4/lifecycleState", PathText.of(result.keptNested().get(0).path()));
     }
 
     @Test
@@ -90,7 +90,7 @@ class NestedOwnershipTest {
         assertTrue(result.delta().getModifications().iterator().next().getValuesToReplace() != null,
                 "as a replace of a single-valued item desired declares");
         assertEquals(List.of("mapping/4/lifecycleState"),
-                result.keptNested().stream().map(k -> k.path().toString()).collect(Collectors.toList()));
+                result.keptNested().stream().map(k -> PathText.of(k.path())).collect(Collectors.toList()));
     }
 
     @Test
@@ -107,7 +107,7 @@ class NestedOwnershipTest {
 
         assertTrue(tracked.delta().isEmpty(), tracked.delta().toString());
         assertEquals(List.of("archetypePolicy/display/label"),
-                tracked.keptNested().stream().map(k -> k.path().toString()).collect(Collectors.toList()));
+                tracked.keptNested().stream().map(k -> PathText.of(k.path())).collect(Collectors.toList()));
         assertTrue(untracked.delta().isEmpty(), "untracked keeps it as before: " + untracked.delta());
         assertTrue(untracked.keptNested().isEmpty(), "and says nothing, as before");
     }
@@ -133,7 +133,7 @@ class NestedOwnershipTest {
 
         assertEquals(paths(untracked.delta()), paths(tracked.delta()), "tracked: " + tracked.delta());
         ItemDelta<?, ?> inducement = tracked.delta().getModifications().iterator().next();
-        assertEquals("inducement", inducement.getPath().toString());
+        assertEquals("inducement", PathText.of(inducement.getPath()));
         assertNotNull(inducement.getValuesToDelete(), "the old value is still deleted whole");
         assertTrue(tracked.keptNested().isEmpty());
     }
@@ -147,7 +147,7 @@ class NestedOwnershipTest {
         DiffEngine.DiffResult tracked = diff(desired, live, DiffEngine.Scope.PRESENT, true);
 
         assertTrue(tracked.delta().isEmpty(), tracked.delta().toString());
-        assertEquals("mapping/4/condition", tracked.keptNested().get(0).path().toString());
+        assertEquals("mapping/4/condition", PathText.of(tracked.keptNested().get(0).path()));
     }
 
     @Test
@@ -179,7 +179,7 @@ class NestedOwnershipTest {
 
         assertTrue(tracked.delta().isEmpty(), tracked.delta().toString());
         assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
-                tracked.keptNested().stream().map(k -> k.path().toString()).collect(Collectors.toList()));
+                tracked.keptNested().stream().map(k -> PathText.of(k.path())).collect(Collectors.toList()));
         assertTrue(deletes(untracked.delta(), "adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
                 "untracked, the file still decides: " + untracked.delta());
     }
@@ -226,12 +226,12 @@ class NestedOwnershipTest {
     }
 
     private static List<String> paths(ObjectDelta<?> delta) {
-        return delta.getModifications().stream().map(mod -> mod.getPath().toString()).collect(Collectors.toList());
+        return delta.getModifications().stream().map(mod -> PathText.of(mod.getPath())).collect(Collectors.toList());
     }
 
     private static boolean deletes(ObjectDelta<?> delta, String path) {
         for (ItemDelta<?, ?> mod : delta.getModifications()) {
-            if (mod.getPath().toString().equals(path) && mod.getValuesToDelete() != null
+            if (PathText.of(mod.getPath()).equals(path) && mod.getValuesToDelete() != null
                     && !mod.getValuesToDelete().isEmpty()) {
                 return true;
             }

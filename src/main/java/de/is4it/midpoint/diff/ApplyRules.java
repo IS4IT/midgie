@@ -114,13 +114,19 @@ final class ApplyRules {
     }
 
     /**
-     * As {@link #modeOf(ItemPath)}, for a path already rendered as text ({@code a/1/b}): container ids and
-     * namespace prefixes are dropped, so the rendered form of a delta path matches like the path itself.
+     * As {@link #modeOf(ItemPath)}, for a path already rendered as text: container ids and namespace prefixes
+     * are dropped, so the rendered form of a delta path matches like the path itself. An id may stand as a
+     * segment of its own ({@code a/1/b}, as {@link PathText} writes it) or follow its item's name
+     * ({@code a[1]/b}, as prism's {@code ItemPath.toString()} writes it since midPoint 4.11).
      */
     Mode modeOf(String path) {
         List<String> names = new ArrayList<>();
         for (String segment : path.split("/")) {
             String name = segment.strip();
+            int id = name.indexOf('[');
+            if (id >= 0) {
+                name = name.substring(0, id);
+            }
             int close = name.lastIndexOf('}');
             name = (close >= 0) ? name.substring(close + 1) : name.substring(name.indexOf(':') + 1);
             if (!name.isEmpty() && !name.chars().allMatch(Character::isDigit)) {

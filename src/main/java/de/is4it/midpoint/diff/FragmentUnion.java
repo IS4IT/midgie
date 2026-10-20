@@ -178,7 +178,8 @@ final class FragmentUnion {
 
     /** The message for two fragments giving different values to an item whose schema is not loaded. */
     private static String unknownCardinality(ItemPath path, PrismValue held, PrismValue incoming, Merge origin) {
-        return contradiction(path, held, incoming, origin) + "\n'" + path + "' has no definition here, so "
+        return contradiction(path, held, incoming, origin) + "\n'" + PathText.of(path)
+                + "' has no definition here, so "
                 + "whether it holds one value or several cannot be told. Load the schema that defines it "
                 + "(--schema-dir), or declare the item in one file.";
     }
@@ -197,7 +198,7 @@ final class FragmentUnion {
      * blocks by eye to find the line that actually differs.
      */
     private static String contradiction(ItemPath path, PrismValue held, PrismValue incoming, Merge origin) {
-        return "Contradiction at '" + path + "': " + TextDiff.clash(
+        return "Contradiction at '" + PathText.of(path) + "': " + TextDiff.clash(
                 describe(sourcesDeclaring(origin.earlier(), path, held)), render(held),
                 String.valueOf(origin.source().sourceFile()), render(incoming));
     }

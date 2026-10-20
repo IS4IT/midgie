@@ -730,7 +730,7 @@ class DiffCommandTest {
                 "nothing in this object may claim a natural-keys bucket: " + result.equivalenceChoices());
         assertNoOverlappingPaths(result);
         for (ItemDelta<?, ?> mod : result.delta().getModifications()) {
-            String path = mod.getPath().toString();
+            String path = PathText.of(mod.getPath());
             if (path.contains("objectDetailsPage")) {
                 assertTrue(path.contains("objectDetailsPage/84/panel"),
                         "the page stays; only a panel is added or deleted: " + path);
@@ -854,12 +854,12 @@ class DiffCommandTest {
     /** True if any modification deletes value(s) at a path mentioning {@code childLocalName}. */
     private static boolean deletesPath(DiffEngine.DiffResult result, String childLocalName) {
         return result.delta().getModifications().stream()
-                .anyMatch(mod -> mod.getPath().toString().contains(childLocalName)
+                .anyMatch(mod -> PathText.of(mod.getPath()).contains(childLocalName)
                         && mod.getValuesToDelete() != null && !mod.getValuesToDelete().isEmpty());
     }
 
     private static List<String> paths(DiffEngine.DiffResult result) {
-        return result.delta().getModifications().stream().map(mod -> mod.getPath().toString()).toList();
+        return result.delta().getModifications().stream().map(mod -> PathText.of(mod.getPath())).toList();
     }
 
     /**
