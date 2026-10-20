@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Jackson is 2.21.7.** The midPoint 4.10.5 schema brought jackson-core and jackson-databind 2.21.5, which have published vulnerabilities, mostly denial of service in parsing: GHSA-7hhh-6rmp-j9qf, GHSA-p6pp-m3f8-5c89, GHSA-cxp5-3px4-pw24, GHSA-wv8q-qhhj-9h54, GHSA-gx83-3vf8-gh7j, GHSA-q4xh-88c3-wmh7 and GHSA-wjgm-6hv5-3cvf. midgie now pins 2.21.7, which fixes all of them, in the JAR, the image and the SBOM. midgie parses XML, and its own JSON only in the values of its state lookup table, so the exposure was small.
+
 ## [0.18.4] - 2026-10-20
 
 ### Added

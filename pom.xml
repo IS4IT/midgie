@@ -28,6 +28,12 @@
 
         <picocli.version>4.7.6</picocli.version>
         <junit.version>5.10.2</junit.version>
+
+        <!-- Jackson comes in through midpoint-schema and prism, and midPoint 4.10.5 brings 2.21.5, which
+             has known vulnerabilities fixed in 2.21.7. Pinned in dependencyManagement below, so the JAR
+             ships the fixed version and Dependabot can see it. A midpoint.version that brings 2.21.7 or
+             later makes the pin unnecessary. -->
+        <jackson.version>2.21.7</jackson.version>
     </properties>
 
     <repositories>
@@ -39,6 +45,18 @@
             <snapshots><enabled>false</enabled></snapshots>
         </repository>
     </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Pulls prism-api / prism-impl transitively. Provides MidPointPrismContextFactory,
