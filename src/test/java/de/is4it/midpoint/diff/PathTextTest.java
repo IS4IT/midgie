@@ -19,13 +19,16 @@ class PathTextTest {
     private static final String NS = "http://midpoint.evolveum.com/xml/ns/public/common/common-3";
 
     @Test
-    void aContainerIdIsASegmentOfItsOwn() {
-        // prism 4.10 renders this path the same; prism 4.11 renders objectDetailsPage[5]/panel[9]/description.
+    void aContainerIdFollowsItsItemsName() {
+        // prism 4.11 renders this path the same; prism 4.10 renders objectDetailsPage/5/panel/9/description.
         ItemPath path = ItemPath.create(new QName(NS, "adminGuiConfiguration"), new QName(NS, "objectDetails"),
                 new QName(NS, "objectDetailsPage"), 5L, new QName(NS, "panel"), 9L, new QName(NS, "description"));
 
-        assertEquals("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description",
+        assertEquals("adminGuiConfiguration/objectDetails/objectDetailsPage[5]/panel[9]/description",
                 PathText.of(path));
+        assertEquals("assignment[3]", PathText.of(ItemPath.create(new QName(NS, "assignment"), 3L)));
+        assertEquals("[3]/targetRef", PathText.of(ItemPath.create(3L, new QName(NS, "targetRef"))),
+                "a path that starts at a container value starts with its id");
     }
 
     @Test

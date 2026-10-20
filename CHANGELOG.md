@@ -11,6 +11,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Releases can be verified.** The JAR and the Helm chart carry a SLSA build-provenance attestation, and the release attaches `midgie-<version>.cdx.json`, a CycloneDX SBOM of every library the JAR bundles, attested against the JAR. The image in Docker Hub is signed with cosign and carries a provenance attestation and an SBOM of its OS packages. All of it is keyless, through Sigstore: a signature names the workflow and git ref that built the artifact. The README's new "Verifying a release" section has the `gh attestation verify` and `cosign verify` commands. Every build now writes the SBOM to `target/bom.json`.
 
+### Changed
+
+- **A container id in a printed path follows its item's name.** midgie printed `mapping/4/lifecycleState`; it now prints `mapping[4]/lifecycleState`, the form midPoint 4.11 itself writes and the one `deploy`'s removal report already used for a value paired by id (`inducement[3]`). That covers the `summary` format and every warning and note that names a path. The PATCH body is unchanged: its `<path>` elements are midPoint's own syntax. A script that reads `--format summary` output has to expect the new form.
+
 ## [0.18.3] - 2026-10-15
 
 ### Fixed

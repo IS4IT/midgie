@@ -413,7 +413,7 @@ class DiffCommandTest {
     void mergeFlagsInPlaceEditOfAccruedValue(@TempDir Path dir) throws Exception {
         // live carries an accrued assignment[2]; desired replaces it with a new managed assignment[3].
         // Under natural-keys prism pairs the leftover accrued id=2 with the desired id=3 and edits it in
-        // place (assignment/2/targetRef) — merge cannot preserve id=2, so the accrued value is overwritten.
+        // place (assignment[2]/targetRef) — merge cannot preserve id=2, so the accrued value is overwritten.
         File live = write(dir, "live.xml", user(assignment("1", "role-1"), assignment("2", "role-2")));
         File desired = write(dir, "desired.xml", user(assignment("1", "role-1"), assignment("3", "role-3")));
 
@@ -647,7 +647,7 @@ class DiffCommandTest {
                 "the in-place edit must run through the live container id: " + paths(result));
 
         // The assignment change stays a whole-value add/delete: no deep edit reaching into an assignment.
-        assertFalse(paths(result).stream().anyMatch(p -> p.contains("assignment/") && p.contains("targetRef")),
+        assertFalse(paths(result).stream().anyMatch(p -> p.startsWith("assignment[") && p.contains("targetRef")),
                 "assignments must not be paired and deep-edited: " + paths(result));
 
         assertTrue(result.equivalenceChoices().stream()
@@ -662,7 +662,7 @@ class DiffCommandTest {
         DiffEngine.DiffResult objectWide = engine().diff(desired, live,
                 EquivalenceStrategy.REAL_VALUE_CONSIDER_DIFFERENT_IDS_NATURAL_KEYS,
                 DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
-        assertTrue(paths(objectWide).stream().anyMatch(p -> p.contains("assignment/") && p.contains("targetRef")),
+        assertTrue(paths(objectWide).stream().anyMatch(p -> p.startsWith("assignment[") && p.contains("targetRef")),
                 "object-wide natural-keys is expected to deep-edit an assignment: " + paths(objectWide));
     }
 
@@ -732,7 +732,7 @@ class DiffCommandTest {
         for (ItemDelta<?, ?> mod : result.delta().getModifications()) {
             String path = PathText.of(mod.getPath());
             if (path.contains("objectDetailsPage")) {
-                assertTrue(path.contains("objectDetailsPage/84/panel"),
+                assertTrue(path.contains("objectDetailsPage[84]/panel"),
                         "the page stays; only a panel is added or deleted: " + path);
             }
         }

@@ -437,7 +437,7 @@ class RemovalDetectorTest {
         ObjectDelta<?> prune = RemovalDetector.pruneDelta(prismContext, OID, removals, live);
         assertEquals(1, prune.getModifications().size(), prune.toString());
         ItemDelta<?, ?> only = prune.getModifications().iterator().next();
-        assertEquals("mapping/4/lifecycleState", PathText.of(only.getPath()));
+        assertEquals("mapping[4]/lifecycleState", PathText.of(only.getPath()));
     }
 
     @Test
@@ -500,7 +500,7 @@ class RemovalDetectorTest {
 
         assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
         List<String> paths = outcome.delta.getModifications().stream().map(m -> PathText.of(m.getPath())).toList();
-        assertEquals(List.of("mapping/4/lifecycleState"), paths, "only the item, never the mapping: " + paths);
+        assertEquals(List.of("mapping[4]/lifecycleState"), paths, "only the item, never the mapping: " + paths);
         assertEquals(1, outcome.removing.size());
         assertTrue(outcome.keptNested.isEmpty(), "the tree deployed it, so it is not reported as kept: "
                 + outcome.keptNested);
@@ -535,7 +535,7 @@ class RemovalDetectorTest {
 
         assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
         ItemDelta<?, ?> only = outcome.delta.getModifications().iterator().next();
-        assertEquals("mapping/4/lifecycleState", PathText.of(only.getPath()));
+        assertEquals("mapping[4]/lifecycleState", PathText.of(only.getPath()));
         assertTrue(only.getValuesToReplace() != null, "a replace with the declared value: " + only);
     }
 
@@ -655,7 +655,7 @@ class RemovalDetectorTest {
         // The delete is addressed through both of the server's ids.
         ObjectDelta<?> prune = RemovalDetector.pruneDelta(prismContext, OID, removals,
                 prismContext.parseObject(role(gui(5L, 9L, "<description>old</description>", 10L))));
-        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage[5]/panel[9]/description"),
                 prune.getModifications().stream().map(m -> PathText.of(m.getPath())).toList());
     }
 
@@ -674,7 +674,7 @@ class RemovalDetectorTest {
         ObjectDelta<?> prune = RemovalDetector.pruneDelta(prismContext, OID, removals,
                 prismContext.parseObject(role(gui(5L, 9L, "", 10L))));
         ItemDelta<?, ?> only = prune.getModifications().iterator().next();
-        assertEquals("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel", PathText.of(only.getPath()));
+        assertEquals("adminGuiConfiguration/objectDetails/objectDetailsPage[5]/panel", PathText.of(only.getPath()));
         assertEquals(9L, ((com.evolveum.midpoint.prism.PrismContainerValue<?>)
                 only.getValuesToDelete().iterator().next()).getId(), "the server's own panel, by its id");
     }
@@ -695,7 +695,7 @@ class RemovalDetectorTest {
         Reconciler.Outcome dropped = reconciler.planAgainst(desired,
                 prismContext.parseObject(role(gui(5L, 9L, "<description>old</description>", 10L))),
                 trackedStrategy(), removals, true);
-        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage[5]/panel[9]/description"),
                 dropped.delta.getModifications().stream().map(m -> PathText.of(m.getPath())).toList());
 
         // Changed on the server after the deploy: kept, with a note.

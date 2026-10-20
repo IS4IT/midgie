@@ -94,13 +94,13 @@ class ApplyRulesTest {
     void renderedDeltaPathsMatchWithIdsAndPrefixesDropped(@TempDir Path dir) throws Exception {
         Policy policy = load(dir, "UserType/*/assignment/activation apply=on-create");
         ApplyRules apply = policy.resolveFor("UserType", "jdoe", USER_OID, baseline(DiffEngine.Scope.PRESENT)).apply;
-        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("assignment/3/activation/administrativeStatus"));
-        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("c:assignment/3/c:activation"));
-        assertEquals(ApplyRules.Mode.ALWAYS, apply.modeOf("assignment/3/targetRef"));
-        // prism's own rendering since midPoint 4.11 puts the id after the name.
         assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("assignment[3]/activation/administrativeStatus"));
         assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("c:assignment[3]/c:activation"));
         assertEquals(ApplyRules.Mode.ALWAYS, apply.modeOf("assignment[3]/targetRef"));
+        // An id written as a segment of its own matches the same.
+        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("assignment/3/activation/administrativeStatus"));
+        assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("c:assignment/3/c:activation"));
+        assertEquals(ApplyRules.Mode.ALWAYS, apply.modeOf("assignment/3/targetRef"));
     }
 
     // --- planning ---

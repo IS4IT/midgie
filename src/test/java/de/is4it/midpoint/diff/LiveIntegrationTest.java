@@ -140,7 +140,7 @@ class LiveIntegrationTest {
         CliResult diff = run("diff", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--format", "summary");
         assertEquals(1, diff.exit, diff.err);
-        assertTrue(diff.out.contains("panel/") && diff.out.contains("displayOrder"),
+        assertTrue(diff.out.contains("panel[") && diff.out.contains("displayOrder"),
                 "auto must reach the panel in place rather than replace the page, got: " + diff.out);
 
         assertEquals(0, run("deploy", edited.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes").exit);

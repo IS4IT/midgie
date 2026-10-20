@@ -117,7 +117,7 @@ class KeyedEntryReplacementTest {
                 DiffEngine.EquivalencePlan.auto(), DiffEngine.Scope.PRESENT,
                 DiffEngine.MultiValueStrategy.of(true, List.of()), DiffEngine.SmartReferenceCheck.NEVER);
 
-        assertEquals("replace schemaHandling/objectType/2/displayName",
+        assertEquals("replace schemaHandling/objectType[2]/displayName",
                 DeltaOutput.toSummary(result.delta()).strip(), "one in-place edit, nothing added or deleted");
         assertTrue(result.keyPairingDeclined().stream().anyMatch(m -> m.startsWith(
                         "schemaHandling/objectType/synchronization/reaction/actions/addFocus does not fill in its key")
@@ -137,7 +137,7 @@ class KeyedEntryReplacementTest {
                 DiffEngine.EquivalencePlan.auto(), DiffEngine.Scope.PRESENT,
                 DiffEngine.MultiValueStrategy.replaceAll(), DiffEngine.SmartReferenceCheck.NEVER);
 
-        assertEquals("add+delete schemaHandling/objectType/2/synchronization/reaction/3/actions/addFocus"
+        assertEquals("add+delete schemaHandling/objectType[2]/synchronization/reaction[3]/actions/addFocus"
                         + "  (removes 1 value)", DeltaOutput.toSummary(result.delta()).strip(),
                 "the object type and its reaction stay; the unnamed action is replaced");
     }

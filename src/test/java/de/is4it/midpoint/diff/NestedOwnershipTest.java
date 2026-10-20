@@ -48,7 +48,7 @@ class NestedOwnershipTest {
 
         assertTrue(result.delta().isEmpty(), "nothing the tree declares differs: " + result.delta());
         assertEquals(1, result.keptNested().size(), "and the kept item is reported: " + result.keptNested());
-        assertEquals("mapping/4/lifecycleState", PathText.of(result.keptNested().get(0).path()));
+        assertEquals("mapping[4]/lifecycleState", PathText.of(result.keptNested().get(0).path()));
     }
 
     @Test
@@ -58,7 +58,7 @@ class NestedOwnershipTest {
 
         DiffEngine.DiffResult result = diff(desired, live, DiffEngine.Scope.PRESENT, false);
 
-        assertTrue(deletes(result.delta(), "mapping/4/lifecycleState"), "unchanged untracked: " + result.delta());
+        assertTrue(deletes(result.delta(), "mapping[4]/lifecycleState"), "unchanged untracked: " + result.delta());
         assertTrue(result.keptNested().isEmpty());
     }
 
@@ -69,7 +69,7 @@ class NestedOwnershipTest {
 
         DiffEngine.DiffResult result = diff(desired, live, DiffEngine.Scope.FULL, true);
 
-        assertTrue(deletes(result.delta(), "mapping/4/lifecycleState"), "full replace: " + result.delta());
+        assertTrue(deletes(result.delta(), "mapping[4]/lifecycleState"), "full replace: " + result.delta());
         assertTrue(result.keptNested().isEmpty());
     }
 
@@ -85,11 +85,11 @@ class NestedOwnershipTest {
 
         DiffEngine.DiffResult result = diff(desired, live, DiffEngine.Scope.PRESENT, true);
 
-        assertEquals(List.of("mapping/7/lifecycleState"), paths(result.delta()),
+        assertEquals(List.of("mapping[7]/lifecycleState"), paths(result.delta()),
                 "only the declared item changes: " + result.delta());
         assertTrue(result.delta().getModifications().iterator().next().getValuesToReplace() != null,
                 "as a replace of a single-valued item desired declares");
-        assertEquals(List.of("mapping/4/lifecycleState"),
+        assertEquals(List.of("mapping[4]/lifecycleState"),
                 result.keptNested().stream().map(k -> PathText.of(k.path())).collect(Collectors.toList()));
     }
 
@@ -147,7 +147,7 @@ class NestedOwnershipTest {
         DiffEngine.DiffResult tracked = diff(desired, live, DiffEngine.Scope.PRESENT, true);
 
         assertTrue(tracked.delta().isEmpty(), tracked.delta().toString());
-        assertEquals("mapping/4/condition", PathText.of(tracked.keptNested().get(0).path()));
+        assertEquals("mapping[4]/condition", PathText.of(tracked.keptNested().get(0).path()));
     }
 
     @Test
@@ -160,7 +160,7 @@ class NestedOwnershipTest {
 
         for (boolean tracked : new boolean[] {false, true}) {
             DiffEngine.DiffResult result = diff(desired, live, DiffEngine.Scope.PRESENT, tracked);
-            assertEquals(List.of("mapping/7/lifecycleState"), paths(result.delta()), "tracked=" + tracked);
+            assertEquals(List.of("mapping[7]/lifecycleState"), paths(result.delta()), "tracked=" + tracked);
         }
         assertEquals(null, desired.getValue().findContainer(
                 com.evolveum.midpoint.prism.path.ItemName.from(NS, "mapping")).getValues().get(1).getId(),
@@ -178,9 +178,10 @@ class NestedOwnershipTest {
         DiffEngine.DiffResult untracked = diff(desired, live, DiffEngine.Scope.PRESENT, false);
 
         assertTrue(tracked.delta().isEmpty(), tracked.delta().toString());
-        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage[5]/panel[9]/description"),
                 tracked.keptNested().stream().map(k -> PathText.of(k.path())).collect(Collectors.toList()));
-        assertTrue(deletes(untracked.delta(), "adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+        assertTrue(deletes(untracked.delta(),
+                        "adminGuiConfiguration/objectDetails/objectDetailsPage[5]/panel[9]/description"),
                 "untracked, the file still decides: " + untracked.delta());
     }
 
@@ -191,7 +192,7 @@ class NestedOwnershipTest {
 
         for (boolean tracked : new boolean[] {false, true}) {
             DiffEngine.DiffResult result = diff(desired, live, DiffEngine.Scope.PRESENT, tracked);
-            assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+            assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage[5]/panel[9]/description"),
                     paths(result.delta()), "tracked=" + tracked);
         }
     }
@@ -203,7 +204,7 @@ class NestedOwnershipTest {
 
         DiffEngine.DiffResult tracked = diff(desired, live, DiffEngine.Scope.PRESENT, true);
 
-        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage/5/panel/9/description"),
+        assertEquals(List.of("adminGuiConfiguration/objectDetails/objectDetailsPage[5]/panel[9]/description"),
                 paths(tracked.delta()));
         assertTrue(tracked.keptNested().isEmpty(), tracked.keptNested().toString());
     }
