@@ -49,7 +49,7 @@ config: cacert <- /etc/midgie/midgie.properties        (--trace)
 config: url <- /home/you/.midgie.properties            (--trace)
 ```
 
-Three things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. **A flag that has since become the default is refused** — `create-if-absent`, `match-by-name`, `prune` — with the `no-…` key that does work now, since the old key would sit there meaning nothing. And **`yes` is refused**: it decides whether a run writes without asking, and a file on disk is not where a person confirms that — pass it on the command line. (`no-prune` may be set anywhere: it only ever deletes less.)
+Three things the file will not do. **A key that is not an option is an error**, naming the file and the key, because a mistyped setting that silently does nothing is the failure mode this tool works hardest to avoid. **A flag that has since become the default is refused** — `create-if-absent`, `match-by-name`, `prune` — with the `no-…` key that does work now, since the old key would sit there meaning nothing. And **`yes` is refused**: it decides whether a run writes without asking, and a file on disk is not where a person confirms that — pass it on the command line. So is **`overwrite`**, which lets `deploy --plan` replace a plan someone may be reviewing: that is a decision about one plan, and set in a file it would also fail every deploy that writes none. (`no-prune` may be set anywhere: it only ever deletes less.)
 
 ### A `.midgie.properties` in the tree
 

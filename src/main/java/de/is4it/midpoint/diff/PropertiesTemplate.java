@@ -24,14 +24,14 @@ import picocli.CommandLine.Model.OptionSpec;
  * <p>It is generated from the command model rather than kept as a literal, so an option added later appears
  * here without anyone remembering to — a hand-maintained template would drift into describing a version of
  * midgie that no longer exists, which is worse than none. Options that only make sense per run are left out
- * (help, version, the debug switches), as are the two a file may not set at all.
+ * (help, version, the debug switches), as are those a file may not set at all.
  */
 final class PropertiesTemplate {
 
     /** Never worth a default: they answer "what is this run doing", not "how is this machine set up". */
     private static final Set<String> SKIPPED = Set.of("help", "version", "debug", "trace", "dry-run", "yes",
             "confirm-each-apply", "format", "output", "write-policy", "write-properties", "write-cacert", "create-state",
-            "plan", "apply-plan",
+            "plan", "apply-plan", "overwrite",
             // Parse for compatibility but do nothing; offering them here would generate a file that
             // ConfigDefaults then refuses. The '--no-…' forms carry the setting instead.
             "create-if-absent", "match-by-name", "prune");

@@ -46,6 +46,8 @@ bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator
 bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator --yes   # apply
 bin/midgie deploy config/ --url … --plan out/                      # write the changes to out/ for review
 bin/midgie deploy --apply-plan out/ --url … --yes                  # replay a reviewed plan
+bin/midgie deploy config/ --url … --plan                           # plan into the default folder, replacing the last one
+bin/midgie deploy config/ --apply-plan --url … --yes               # replay the default folder's plan
 ```
 
 ### Apply order and fragments
@@ -71,7 +73,22 @@ A block is printed whole, on one stream — stdout, or stderr for a failed objec
 
 ### Retries, saved plans and the policy file
 
-Three more flags round it out: **`--retry`** re-applies the failed units until they stabilise (catches references the static OID graph can't order — by name, filter, or expression); **`--plan <dir>`** writes the ordered changes as numbered `create`/`patch` files for review or GitOps, and **`--apply-plan <dir>`** replays them verbatim, minus comments — leaving a rollback plan like any deploy, and, on a tracked tree, recording the tracking rows the plan computed so the next plan detects what this one's tree dropped; **`--policy <file>`** is a central file of `<selector> key=value` lines keyed on the object/item — for when part of the tree needs, say, `scope=full` on one object or `multivalue=merge` on a container; [The policy file](policy.md) describes it. Full design in [`DESIGN.md`](../DESIGN.md#deploy--apply-a-folder-tree).
+Three more flags round it out: **`--retry`** re-applies the failed units until they stabilise (catches references the static OID graph can't order — by name, filter, or expression); **`--plan [dir]`** writes the ordered changes as numbered `create`/`patch` files for review or GitOps, and **`--apply-plan [dir]`** replays them verbatim, minus comments — leaving a rollback plan like any deploy, and, on a tracked tree, recording the tracking rows the plan computed so the next plan detects what this one's tree dropped (see [Saved plans](#saved-plans) below); **`--policy <file>`** is a central file of `<selector> key=value` lines keyed on the object/item — for when part of the tree needs, say, `scope=full` on one object or `multivalue=merge` on a container; [The policy file](policy.md) describes it. Full design in [`DESIGN.md`](../DESIGN.md#deploy--apply-a-folder-tree).
+
+### Saved plans
+
+`--plan` writes into a folder that is missing, empty, or holds a midgie plan and nothing else: the numbered plan files, its `state.xml`, and the marker of a plan still being written, all of which midgie stamps as its own. Any other file or subfolder — review notes, a `.DS_Store`, a tree pointed at by mistake — and midgie refuses the folder before it contacts the server, rather than mix a plan into it or delete what is there.
+
+**Without a DIR**, `--plan` writes to `plan/` in the deployment's own folder, next to its [rollback plans](#the-rollback-plan-always-on): `$XDG_STATE_HOME/midgie/<deployment>/plan/` (else `~/.local/state/…`), readable by you alone. That folder is midgie's, so every `--plan` run replaces the plan in it — run it as often as it takes to get the tree right, and there are no old plan folders to clean up. The run ends with the command that replays it, and **`--apply-plan` without a DIR** finds the same folder from the tree you give it (default: the current directory), the way `rollback` finds its net:
+
+```bash
+bin/midgie deploy config/ --url … --plan               # … Wrote 3 plan file(s) to ~/.local/state/midgie/<deployment>/plan. Apply with: midgie deploy config/ --apply-plan --url <url>
+bin/midgie deploy config/ --apply-plan --url … --yes
+```
+
+**A folder you name** keeps its plan: you may be reviewing it, or have committed it. A second `--plan` into it is refused unless you add **`--overwrite`**, which replaces the plan there — and still refuses a folder holding anything else. `--overwrite` only goes with `--plan`, and only on the command line: a config file setting it is refused, as `yes` is.
+
+A `--plan` or `--apply-plan` without a DIR takes the next argument that is not an option as its DIR, so `deploy --plan config/` means "plan into `config/`" — which the rule above now refuses. Write the flag after the tree, or as `--plan=`. In a container the default folder lives in the container's `HOME` and goes with it; name a mounted folder instead.
 
 ### The rollback plan (always on)
 

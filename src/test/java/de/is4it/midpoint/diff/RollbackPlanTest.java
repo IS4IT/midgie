@@ -125,6 +125,30 @@ class RollbackPlanTest {
     }
 
     @Test
+    void theDefaultPlanDirectoryBesideTheRunsIsNeverOneOfThem(@TempDir Path dir) throws Exception {
+        // deploy --plan writes its default plan into the same per-deployment directory; even while it is being
+        // written, and so carries the unfinished-plan marker, it is no run to rotate away or replay.
+        File plan = PlanStore.defaultDir("abc123/config", new File("/irrelevant"));
+        File base = dir.resolve("base").toFile();
+        File inBase = new File(base, plan.getName());
+        PlanStore.markIncomplete(inBase);
+        PlanStore.write(inBase, 1, 3, "roles", "11111111-0000-0000-0d00-000000000002", "Manager",
+                PlanStore.Kind.CREATE, "<role/>");
+        for (String stamp : List.of("20260101-000000", "20260102-000000")) {
+            File run = new File(base, stamp);
+            Files.createDirectories(run.toPath());
+            Files.writeString(new File(run, RollbackPlan.MANIFEST).toPath(), "<rollbackManifest/>",
+                    StandardCharsets.UTF_8);
+        }
+
+        assertFalse(RollbackPlan.isRunDirectory(inBase));
+        RollbackPlan.rotate(base, 1);
+        assertTrue(new File(inBase, "001-roles-11111111-0000-0000-0d00-000000000002.create.xml").exists(),
+                "the plan must survive rotation");
+        assertEquals("20260102-000000", RollbackPlan.newestUnder(base).getName());
+    }
+
+    @Test
     void rotationLeavesEverythingThatIsNotARunAlone(@TempDir Path dir) throws Exception {
         // --rollback-plan and a tree-local config may name any directory, the tree itself included. Its
         // folders sort after the timestamps, so they used to be the first thing rotated away.

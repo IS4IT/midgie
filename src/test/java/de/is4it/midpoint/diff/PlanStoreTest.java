@@ -7,6 +7,7 @@ package de.is4it.midpoint.diff;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -26,12 +27,12 @@ class PlanStoreTest {
     @Test
     void writesThenReadsCreatesAndPatchesInOrder(@TempDir Path dir) throws IOException {
         File out = dir.toFile();
-        assertFalse(PlanStore.hasPlanFiles(out), "empty dir has no plan files");
+        assertEquals(PlanStore.Contents.EMPTY, PlanStore.inspect(out), "an empty dir holds no plan");
 
         PlanStore.write(out, 10, 3, "roles", OID, "Manager", PlanStore.Kind.CREATE, "<role oid=\"" + OID + "\"/>");
         PlanStore.write(out, 20, 3, "users", "33333333-0000-0000-0d00-000000000001", "jsmith",
                 PlanStore.Kind.PATCH, "<objectModification/>");
-        assertTrue(PlanStore.hasPlanFiles(out));
+        assertEquals(PlanStore.Contents.PLAN, PlanStore.inspect(out));
 
         List<PlanStore.Entry> entries = PlanStore.read(out);
         assertEquals(2, entries.size());
@@ -105,5 +106,89 @@ class PlanStoreTest {
         assertEquals(1, entries.size());
         assertEquals("roles", entries.get(0).restType);
         assertEquals("NewRole", entries.get(0).oid, "name sanitised into the filename token");
+    }
+
+    // --- the directory a plan is written to ---
+
+    @Test
+    void theDefaultDirectorySitsBesideTheDeploymentsRollbackPlans() {
+        File tree = new File("/irrelevant/config");
+        assertEquals(new File(RollbackPlan.defaultBase("abc123/config", tree), "plan"),
+                PlanStore.defaultDir("abc123/config", tree));
+    }
+
+    @Test
+    void aMissingDirectoryIsEmpty(@TempDir Path dir) throws IOException {
+        assertEquals(PlanStore.Contents.EMPTY, PlanStore.inspect(dir.resolve("not-yet").toFile()));
+    }
+
+    @Test
+    void aPlanWithItsStateAndAnUnfinishedOneAreTold(@TempDir Path dir) throws IOException {
+        File out = dir.toFile();
+        PlanStore.write(out, 1, 3, "roles", OID, "Manager", PlanStore.Kind.CREATE, "<role/>");
+        Files.writeString(dir.resolve(PlanState.FILE), PlanStore.markGenerated("<planState/>"));
+        assertEquals(PlanStore.Contents.PLAN, PlanStore.inspect(out));
+
+        PlanStore.markIncomplete(out);
+        assertEquals(PlanStore.Contents.UNFINISHED_PLAN, PlanStore.inspect(out));
+    }
+
+    @Test
+    void anEmptyPlanFileLeftByADeadRunStillCountsAsThePlans(@TempDir Path dir) throws IOException {
+        // write() creates the file before it writes the body; a run that died between the two left it empty.
+        PlanStore.markIncomplete(dir.toFile());
+        Files.createFile(dir.resolve("001-roles-" + OID + ".patch.xml"));
+        assertEquals(PlanStore.Contents.UNFINISHED_PLAN, PlanStore.inspect(dir.toFile()));
+    }
+
+    @Test
+    void anythingButAPlanIsRefusedAndNamed(@TempDir Path dir) throws IOException {
+        File out = dir.toFile();
+        PlanStore.write(out, 1, 3, "roles", OID, "Manager", PlanStore.Kind.CREATE, "<role/>");
+
+        assertRefused(dir, "notes.txt", () -> Files.writeString(dir.resolve("notes.txt"), "reviewed"));
+        assertRefused(dir, ".DS_Store", () -> Files.writeString(dir.resolve(".DS_Store"), "x"));
+        assertRefused(dir, "sub/", () -> Files.createDirectory(dir.resolve("sub")));
+        assertRefused(dir, "002-roles-x.patch.xml",
+                () -> Files.writeString(dir.resolve("002-roles-x.patch.xml"), "<objectModification/>"));
+        assertRefused(dir, PlanState.FILE, () -> Files.writeString(dir.resolve(PlanState.FILE), "<planState/>"));
+    }
+
+    @Test
+    void aFileWhereTheDirectoryShouldBeIsRefused(@TempDir Path dir) throws IOException {
+        Path file = Files.writeString(dir.resolve("plan"), "x");
+        IOException ex = assertThrows(IOException.class, () -> PlanStore.inspect(file.toFile()));
+        assertTrue(ex.getMessage().contains("not a directory"), ex.getMessage());
+    }
+
+    @Test
+    void clearRemovesThePlanAndLeavesItMarkedUnfinished(@TempDir Path dir) throws IOException {
+        File out = dir.toFile();
+        PlanStore.write(out, 1, 3, "roles", OID, "Manager", PlanStore.Kind.CREATE, "<role/>");
+        PlanStore.write(out, 2, 3, "users", "33333333-0000-0000-0d00-000000000001", "jsmith",
+                PlanStore.Kind.PATCH, "<objectModification/>");
+        Files.writeString(dir.resolve(PlanState.FILE), PlanStore.markGenerated("<planState/>"));
+
+        assertEquals(2, PlanStore.clear(out), "the plan files are counted, state.xml goes with them");
+        assertEquals(PlanStore.Contents.UNFINISHED_PLAN, PlanStore.inspect(out),
+                "a run that dies now leaves a plan --apply-plan refuses, not an empty one that reads as done");
+        try (var left = Files.list(dir)) {
+            assertEquals(List.of(".midgie-plan-incomplete"),
+                    left.map(p -> p.getFileName().toString()).toList(), "nothing of the old plan is left");
+        }
+    }
+
+    private interface Change {
+        void apply() throws IOException;
+    }
+
+    /** Make {@code change} to a directory holding a plan, check it is refused naming {@code entry}, undo it. */
+    private static void assertRefused(Path dir, String entry, Change change) throws IOException {
+        change.apply();
+        IOException ex = assertThrows(IOException.class, () -> PlanStore.inspect(dir.toFile()));
+        assertTrue(ex.getMessage().contains(entry), ex.getMessage());
+        assertTrue(Files.exists(dir.resolve(entry.replace("/", ""))), "inspect touches nothing");
+        Files.delete(dir.resolve(entry.replace("/", "")));
+        assertEquals(PlanStore.Contents.PLAN, PlanStore.inspect(dir.toFile()), "and is fine again without it");
     }
 }

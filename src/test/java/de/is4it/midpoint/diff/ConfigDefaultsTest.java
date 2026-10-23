@@ -479,6 +479,17 @@ class ConfigDefaultsTest {
     }
 
     @Test
+    void overwriteInAFileIsRefused(@TempDir Path dir) throws Exception {
+        // Replacing a plan is a decision about that plan. In a file it would reach every deploy, and fail each
+        // one that writes no plan for carrying it.
+        useConfig(dir, "midgie.deploy.overwrite = true");
+        Result result = run("deploy", dir.toString());
+        assertEquals(2, result.exit, result.out);
+        assertTrue(result.err.contains("command line") && result.err.contains("plan someone may be reviewing"),
+                result.err);
+    }
+
+    @Test
     void pruneInAFileIsRefusedAsNowTheDefault(@TempDir Path dir) throws Exception {
         // Removing what a tracked tree dropped is the default now; a file still saying 'prune = true' was
         // written for the opposite world, and must say so rather than sit there doing nothing.

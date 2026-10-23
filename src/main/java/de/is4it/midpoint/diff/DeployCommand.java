@@ -49,9 +49,10 @@ import picocli.CommandLine.Parameters;
  * ({@code --scope present}), PATCH, or POST to create with {@code --create-if-absent} — so a role is created
  * before the user that references it. The unit is the <b>object</b>, not the file: an object described by
  * several files is combined first ({@link FragmentUnion}) and applied once. {@code --retry} re-applies the failed set until it
- * stabilises; {@code --plan <dir>} writes the changes as reviewable files and {@code --apply-plan <dir>}
- * replays them verbatim; {@code --policy <file>} varies the diff strategy per object/item. Writing is gated:
- * a single up-front confirmation by default ({@code --yes}, {@code --confirm-each-apply}, {@code --dry-run}).
+ * stabilises; {@code --plan [dir]} writes the changes as reviewable files and {@code --apply-plan [dir]}
+ * replays them verbatim, both defaulting to the deployment's {@link PlanStore#defaultDir plan directory};
+ * {@code --policy <file>} varies the diff strategy per object/item. Writing is gated: a single up-front
+ * confirmation by default ({@code --yes}, {@code --confirm-each-apply}, {@code --dry-run}).
  *
  * <p>Exit codes: offline {@code 0}/{@code 2}. Apply {@code 0} (all created/patched/in-sync/skipped or
  * declined) / {@code 2} (any unit stuck, or a setup error). {@code --dry-run}/{@code --plan} {@code 0}
@@ -131,13 +132,24 @@ public class DeployCommand implements Callable<Integer> {
             description = "After the apply pass, re-apply the failed units until a round makes no progress (catches by-name refs).")
     boolean retry;
 
-    @Option(names = "--plan", paramLabel = "DIR",
-            description = "Write the ordered per-object changes (create/patch files) to DIR instead of applying. Needs --url.")
+    // Both take an optional DIR: picocli assigns the fallback "" when none follows, and call() resolves that
+    // to the deployment's default plan directory before anything else reads the field.
+    @Option(names = "--plan", paramLabel = "DIR", arity = "0..1", fallbackValue = "",
+            description = "Write the ordered per-object changes (create/patch files) to DIR instead of applying "
+                    + "(default: 'plan' in the deployment's directory under $XDG_STATE_HOME/midgie, replaced on "
+                    + "every run). DIR must be empty or hold only a plan. Needs --url.")
     File planDir;
 
-    @Option(names = "--apply-plan", paramLabel = "DIR",
-            description = "Replay a plan directory written by --plan (POST creates, PATCH patches, in order). Needs --url.")
+    @Option(names = "--apply-plan", paramLabel = "DIR", arity = "0..1", fallbackValue = "",
+            description = "Replay a plan directory written by --plan (POST creates, PATCH patches, in order); "
+                    + "without DIR, the default plan of the deployment of PATH (default: the current "
+                    + "directory). Needs --url.")
     File applyPlanDir;
+
+    @Option(names = "--overwrite",
+            description = "Replace the plan already in the --plan DIR. The default plan directory is always "
+                    + "replaced; a DIR holding anything but a plan is refused either way.")
+    boolean overwrite;
 
     @Option(names = "--rollback-plan", paramLabel = "DIR",
             description = "Where to leave the rollback plan this run writes (default: a per-deployment "
@@ -225,6 +237,12 @@ public class DeployCommand implements Callable<Integer> {
     // Objects whose removals this run could not judge for a reason that may pass: their rows stay put.
     private final Set<DeployObject> unjudgedUnits = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
+    /** Whether --plan was given without a DIR, so planDir is the deployment's default, replaced every run. */
+    private boolean planDirDefaulted;
+
+    /** The deployment this run belongs to, derived once; see {@link #identity()}. */
+    private DeploymentIdentity identity;
+
     /** Plan entries the operator declined under --confirm-each-apply; they are neither applied nor failed. */
     private int declinedEntries;
 
@@ -282,6 +300,10 @@ public class DeployCommand implements Callable<Integer> {
             System.err.println("midgie: use either --plan or --apply-plan, not both.");
             return EXIT_ERROR;
         }
+        if (overwrite && planDir == null) {
+            System.err.println("midgie: --overwrite only applies to --plan.");
+            return EXIT_ERROR;
+        }
         if (output != null && format == null) {
             format = "xml";
         }
@@ -317,7 +339,7 @@ public class DeployCommand implements Callable<Integer> {
             return EXIT_ERROR;
         }
         if (applyPlanDir == null && (paths == null || paths.isEmpty())) {
-            System.err.println("midgie: provide at least one PATH, or --apply-plan <dir>.");
+            System.err.println("midgie: provide at least one PATH, or --apply-plan [DIR].");
             return EXIT_ERROR;
         }
         // --apply-plan replays a plan verbatim and returns before any of these is read. Accepting them
@@ -340,7 +362,14 @@ public class DeployCommand implements Callable<Integer> {
             if (matchByNameLegacy || noMatchByName) {
                 ignored.add(noMatchByName ? "--no-match-by-name" : "--match-by-name");
             }
-            if (paths != null && !paths.isEmpty()) {
+            // Without a DIR, the PATH is what finds the plan, as the TREE of 'rollback' finds its net.
+            if (isDefault(applyPlanDir)) {
+                if (paths != null && paths.size() > 1) {
+                    System.err.println("midgie: --apply-plan without DIR replays the plan of one tree; "
+                            + "give at most one PATH.");
+                    return EXIT_ERROR;
+                }
+            } else if (paths != null && !paths.isEmpty()) {
                 ignored.add("PATH");
             }
             if (!ignored.isEmpty()) {
@@ -354,6 +383,21 @@ public class DeployCommand implements Callable<Integer> {
             System.err.println("midgie: --plan writes the plan files it computes; "
                     + "--dry-run and --retry do not apply to it.");
             return EXIT_ERROR;
+        }
+        // Settled before the first round trip, like everything else the local filesystem can answer.
+        if (planDir != null) {
+            Integer stop = resolvePlanDir();
+            if (stop != null) {
+                return stop;
+            }
+        }
+        if (isDefault(applyPlanDir)) {
+            applyPlanDir = PlanStore.defaultDir(deploymentKey(), tree());
+            if (!applyPlanDir.isDirectory()) {
+                System.err.println("midgie: no plan at " + applyPlanDir + " — 'midgie deploy " + tree()
+                        + " --plan --url …' writes one there.");
+                return EXIT_ERROR;
+            }
         }
 
         // Resolved whether or not this run writes: grouping consults the strategy before anything is
@@ -612,7 +656,7 @@ public class DeployCommand implements Callable<Integer> {
      */
     private Tracking resolveTracking(PrismContext prismContext, MidpointRestClient client) {
         File tree = (paths != null && !paths.isEmpty()) ? paths.get(0) : null;
-        DeploymentIdentity identity = DeploymentIdentity.of(tree, app);
+        DeploymentIdentity identity = identity();
         if (!identity.isAvailable()) {
             trackingNote("note: removals cannot be detected — " + identity.unavailableReason() + ".");
             return new Tracking(identity, null, null, null);
@@ -1399,11 +1443,8 @@ public class DeployCommand implements Callable<Integer> {
      * off than one who knows there is not.
      */
     private void writeRollbackPlan(MidpointRestClient client, Tracking tracking) {
-        File base = (rollbackPlanDir != null) ? rollbackPlanDir
-                : RollbackPlan.defaultBase(tracking.identity != null ? tracking.identity.key() : null,
-                        (paths != null && !paths.isEmpty()) ? paths.get(0) : null);
-        String deployment = (tracking.identity != null && tracking.identity.isAvailable())
-                ? tracking.identity.key() : null;
+        String deployment = deploymentKey();
+        File base = (rollbackPlanDir != null) ? rollbackPlanDir : RollbackPlan.defaultBase(deployment, tree());
         writeRollbackPlan(client, base, deployment, tracking.currentRevision);
     }
 
@@ -1454,6 +1495,74 @@ public class DeployCommand implements Callable<Integer> {
         return message;
     }
 
+    /** Whether a --plan/--apply-plan was given without a DIR, which picocli leaves as an empty path. */
+    private static boolean isDefault(File planOption) {
+        return planOption != null && planOption.getPath().isEmpty();
+    }
+
+    /** The tree whose deployment this run is: the first PATH, else — for --apply-plan — the current directory. */
+    private File tree() {
+        return (paths != null && !paths.isEmpty()) ? paths.get(0) : new File(".");
+    }
+
+    /**
+     * The deployment this run belongs to, derived once from {@link #tree()}: tracking keys its rows by it, and
+     * the rollback plan and the default plan directory go under its directory.
+     */
+    private DeploymentIdentity identity() {
+        if (identity == null) {
+            identity = DeploymentIdentity.of(tree(), app);
+        }
+        return identity;
+    }
+
+    /** The deployment's key, or {@code null} when it cannot be derived (no git history, say). */
+    private String deploymentKey() {
+        return identity().key();
+    }
+
+    /**
+     * Settle the --plan directory before the first round trip: the deployment's default when no DIR was given,
+     * and refused when it holds anything but a plan, or a plan it may not replace. Returns the exit code to stop
+     * with, or {@code null} to go on.
+     */
+    private Integer resolvePlanDir() {
+        if (isDefault(planDir)) {
+            planDir = PlanStore.defaultDir(deploymentKey(), tree());
+            planDirDefaulted = true;
+        }
+        try {
+            String refusal = planDirRefusal(PlanStore.inspect(planDir));
+            if (refusal != null) {
+                System.err.println("midgie: " + refusal);
+                return EXIT_ERROR;
+            }
+        } catch (IOException e) {
+            System.err.println("midgie: " + e.getMessage());
+            return EXIT_ERROR;
+        }
+        return null;
+    }
+
+    /**
+     * Why a plan may not be written over what the --plan directory holds, or {@code null} when it may. A plan in
+     * a directory the operator named may be under review or committed, so replacing it takes --overwrite; the
+     * default directory is midgie's own and is replaced on every run.
+     */
+    private String planDirRefusal(PlanStore.Contents contents) {
+        if (contents == PlanStore.Contents.PLAN && !planDirDefaulted && !overwrite) {
+            return "--plan directory " + planDir + " already holds a plan; use an empty (or new) directory, "
+                    + "or pass --overwrite to replace it.";
+        }
+        return null;
+    }
+
+    /** The command that replays the plan this run wrote, for the line that says where it went. */
+    private String applyPlanCommand() {
+        return "midgie deploy " + (planDirDefaulted ? tree() + " --apply-plan" : "--apply-plan " + planDir)
+                + ((planDirDefaulted && app != null) ? " --app " + app : "") + " --url <url>";
+    }
+
     /** Plan directories this run writes to or reads from — never discovery input, even when nested in a path. */
     private List<File> planDirectories() {
         List<File> dirs = new ArrayList<>();
@@ -1474,15 +1583,26 @@ public class DeployCommand implements Callable<Integer> {
     // --- plan (write reviewable files, no server writes) ---
 
     private Integer runPlan(Reconciler reconciler, List<DeployObject> units, Tracking tracking) throws Exception {
-        if (PlanStore.isIncomplete(planDir)) {
+        // Inspected again rather than trusted from resolvePlanDir: the server work since then takes a while.
+        PlanStore.Contents contents = PlanStore.inspect(planDir);
+        String refusal = planDirRefusal(contents);
+        if (refusal != null) {
+            System.err.println("midgie: " + refusal);
+            return EXIT_ERROR;
+        }
+        if (contents == PlanStore.Contents.UNFINISHED_PLAN) {
             // An unfinished plan cannot be replayed anyway, so there is nothing to protect; refusing until
             // the operator deletes it by hand only makes a failed run harder to repeat.
-            int discarded = PlanStore.discardIncomplete(planDir);
+            int discarded = PlanStore.clear(planDir);
             note("note: discarded " + discarded + " file(s) of an unfinished plan in " + planDir + ".");
-        } else if (PlanStore.hasPlanFiles(planDir)) {
-            System.err.println("midgie: --plan directory " + planDir
-                    + " already contains plan files; use an empty (or new) directory.");
-            return EXIT_ERROR;
+        } else if (contents == PlanStore.Contents.PLAN) {
+            int replaced = PlanStore.clear(planDir);
+            note("note: replaced the previous plan in " + planDir + " (" + replaced + " file(s)).");
+        }
+        if (planDirDefaulted) {
+            // A create entry is the whole desired object and can carry a clearValue password; the files are
+            // owner-only already, and the directory midgie chose for them is too.
+            Io.restrictDirToOwner(planDir.toPath());
         }
         // Marked from the first file to the last: a run that dies half way leaves the marker behind, and
         // --apply-plan then refuses the partial plan instead of replaying part of the tree as a success.
@@ -1561,16 +1681,20 @@ public class DeployCommand implements Callable<Integer> {
             }
         }
         emitSummary(tally, true);
-        if (tally.changed() > 0) {
-            status("Wrote " + tally.changed() + " plan file(s) to " + planDir + ".");
-        }
         if (tally.failed > 0) {
+            if (tally.changed() > 0) {
+                status("Wrote " + tally.changed() + " plan file(s) to " + planDir + ".");
+            }
             note("note: the plan in " + planDir + " is incomplete and will not be replayed; fix the errors "
                     + "above and re-run --plan.");
             return EXIT_ERROR;
         }
         writePlanState(tracking, units, wouldApply, planFiles);
         PlanStore.markComplete(planDir);
+        if (tally.changed() > 0) {
+            status("Wrote " + tally.changed() + " plan file(s) to " + planDir + ". Apply with: "
+                    + applyPlanCommand());
+        }
         return tally.changed() > 0 ? 1 : 0;
     }
 

@@ -8,7 +8,10 @@ package de.is4it.midpoint.diff;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -76,18 +79,113 @@ final class PlanStore {
     private static final String GENERATED_COMMENT = "<!-- " + GENERATED_MARKER
             + ": plan file, do not deploy -->";
 
-    /** True if {@code dir} already holds plan files (so a fresh plan is never mixed into a stale one). */
-    static boolean hasPlanFiles(File dir) {
-        String[] names = dir.list();
-        if (names == null) {
-            return false;
+    /** The directory {@code --plan} and {@code --apply-plan} use when given none; see {@link #defaultDir}. */
+    static final String DEFAULT_DIR = "plan";
+
+    /** How many of the entries that make a directory unusable for a plan an error names. */
+    private static final int NAMED_ENTRIES = 5;
+
+    /** What {@link #inspect} found in a plan directory. */
+    enum Contents { EMPTY, PLAN, UNFINISHED_PLAN }
+
+    /**
+     * A deployment's default plan directory: {@code plan/} in the directory its rollback plans go to
+     * ({@link RollbackPlan#defaultBase}), so what midgie keeps for one deployment sits in one place and one
+     * tree's plan never replaces another's. Rollback rotation considers only timestamp-named run directories,
+     * so it never touches this one.
+     */
+    static File defaultDir(String deploymentKey, File tree) {
+        return new File(RollbackPlan.defaultBase(deploymentKey, tree), DEFAULT_DIR);
+    }
+
+    /**
+     * What {@code dir} holds, refusing it when that is anything but a midgie plan.
+     *
+     * <p>A plan is written only into a directory that is missing, empty, or holds a plan and nothing else:
+     * plan files and {@link PlanState#FILE} carrying the {@link #GENERATED_MARKER}, and the unfinished-plan
+     * marker. Any other entry — somebody's notes, a subdirectory, a link, an unmarked file named like a plan
+     * file — means the directory is not only midgie's, and replacing a plan there would delete or mix in with
+     * what somebody else put there. It is also what turns {@code deploy --plan config/}, where picocli takes
+     * the tree for the plan's directory, into a refusal instead of a plan written into the tree.
+     */
+    static Contents inspect(File dir) throws IOException {
+        Path path = dir.toPath();
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            return Contents.EMPTY;
         }
-        for (String name : names) {
-            if (name.endsWith(".create.xml") || name.endsWith(".patch.xml")) {
-                return true;
+        if (!Files.isDirectory(path)) {
+            throw new IOException("--plan " + dir + " is not a directory.");
+        }
+        boolean planned = false;
+        boolean unfinished = false;
+        List<String> foreign = new ArrayList<>();
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(path)) {
+            for (Path entry : entries) {
+                String name = entry.getFileName().toString();
+                if (name.equals(INCOMPLETE_MARKER) && Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) {
+                    unfinished = true;
+                } else if (isPlanEntry(entry)) {
+                    planned = true;
+                } else {
+                    foreign.add(Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) ? name + "/" : name);
+                }
             }
         }
-        return false;
+        if (!foreign.isEmpty()) {
+            foreign.sort(null);
+            String named = String.join(", ", foreign.subList(0, Math.min(NAMED_ENTRIES, foreign.size())))
+                    + (foreign.size() > NAMED_ENTRIES ? ", … (" + (foreign.size() - NAMED_ENTRIES) + " more)" : "");
+            throw new IOException("--plan directory " + dir + " holds more than a midgie plan: " + named
+                    + ". Use an empty directory, or one that holds only a plan.");
+        }
+        if (unfinished) {
+            return Contents.UNFINISHED_PLAN;
+        }
+        return planned ? Contents.PLAN : Contents.EMPTY;
+    }
+
+    /**
+     * A file of a plan: named as a plan file or {@link PlanState#FILE}, a regular file rather than a link, and
+     * carrying the generated-file marker. An empty one counts too — {@link #write} creates the file before it
+     * writes the body, so a run that died between the two leaves one behind, and it holds nothing to lose.
+     */
+    private static boolean isPlanEntry(Path entry) throws IOException {
+        String name = entry.getFileName().toString();
+        if (!(isPlanFileName(name) || name.equals(PlanState.FILE))
+                || !Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        // Decoded leniently: a file that is not UTF-8 is simply not one of midgie's, not an error.
+        return Files.size(entry) == 0
+                || new String(Files.readAllBytes(entry), StandardCharsets.UTF_8).contains(GENERATED_MARKER);
+    }
+
+    private static boolean isPlanFileName(String name) {
+        return name.endsWith(".create.xml") || name.endsWith(".patch.xml");
+    }
+
+    /**
+     * Remove the plan in {@code dir} — finished or not — so a new one can be written there, and return the
+     * number of plan files removed. Only the entries {@link #inspect} accepts as a plan's are touched.
+     *
+     * <p>The unfinished-plan marker goes down first and stays: a run that dies half way through leaves a plan
+     * {@code --apply-plan} refuses, never what is left of the old one, which would replay as a complete plan.
+     */
+    static int clear(File dir) throws IOException {
+        markIncomplete(dir);
+        int removed = 0;
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(dir.toPath())) {
+            for (Path entry : entries) {
+                if (!isPlanEntry(entry)) {
+                    continue;
+                }
+                Files.delete(entry);
+                if (isPlanFileName(entry.getFileName().toString())) {
+                    removed++;
+                }
+            }
+        }
+        return removed;
     }
 
     /** True if {@code dir} holds a plan that was never finished. */
@@ -106,19 +204,6 @@ final class PlanStore {
     /** The plan is whole and may be replayed. */
     static void markComplete(File dir) throws IOException {
         Files.deleteIfExists(new File(dir, INCOMPLETE_MARKER).toPath());
-    }
-
-    /** Delete the files of an unfinished plan, so a re-run does not need manual cleanup. */
-    static int discardIncomplete(File dir) throws IOException {
-        Files.deleteIfExists(new File(dir, PlanState.FILE).toPath());
-        File[] files = dir.listFiles((d, name) -> name.endsWith(".create.xml") || name.endsWith(".patch.xml"));
-        int removed = 0;
-        for (File file : (files != null) ? files : new File[0]) {
-            if (Files.deleteIfExists(file.toPath())) {
-                removed++;
-            }
-        }
-        return removed;
     }
 
     /**
@@ -151,7 +236,7 @@ final class PlanStore {
         Files.createDirectories(dir.toPath());
         // A create entry is the whole desired object, so it can carry a clearValue password; the process
         // umask would leave the plan readable to every local user of a shared host or CI runner.
-        java.nio.file.Path target = new File(dir, fileName).toPath();
+        Path target = new File(dir, fileName).toPath();
         Io.restrictToOwner(target);
         Files.writeString(target, markGenerated(body) + System.lineSeparator(), StandardCharsets.UTF_8);
         LOG.trace("plan file written: {}", fileName);

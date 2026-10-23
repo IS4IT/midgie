@@ -120,9 +120,13 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      * every later run non-interactive is exactly the accident this tool refuses elsewhere. ({@code prune} was
      * refused for the same reason while deleting was opt-in; removing what a tracked tree dropped is the
      * default now, still behind that confirmation, and {@code no-prune} — which only ever deletes less — may
-     * be set anywhere.)
+     * be set anywhere.) {@code overwrite} lets {@code deploy --plan} replace a plan that may be under review, which
+     * is a decision about that one plan; in a file it would also apply to every deploy that writes no plan, and
+     * fail each of them for it. Each maps to the reason the refusal gives.
      */
-    private static final Set<String> REFUSED = Set.of("yes");
+    private static final Map<String, String> REFUSED = Map.of(
+            "yes", "it decides whether a run writes without asking",
+            "overwrite", "it decides whether a plan someone may be reviewing is replaced");
 
     /**
      * Keys that named a flag which has since become the default. The option still parses on the command
@@ -436,9 +440,10 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
         Set<String> known = knownKeys(root);
         for (String key : new TreeSet<>(properties.stringPropertyNames())) {
             String option = key.substring(key.lastIndexOf('.') + 1);
-            if (REFUSED.contains(option)) {
+            String refusal = REFUSED.get(option);
+            if (refusal != null) {
                 throw new IOException(origin.get(key) + " sets '" + key + "', which has to be given on the command "
-                        + "line: it decides whether a run writes without asking.");
+                        + "line: " + refusal + ".");
             }
             String replacement = NOW_DEFAULT.get(option);
             if (replacement != null) {
@@ -515,7 +520,7 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
         }
         OptionSpec option = (OptionSpec) argSpec;
         String key = stripPrefix(option.longestName());
-        if (REFUSED.contains(key)) {
+        if (REFUSED.containsKey(key)) {
             return null;   // validate() already refused the file; belt and braces
         }
         for (String variable : ENV_OVERRIDES.getOrDefault(key, List.of())) {

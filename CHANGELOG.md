@@ -7,8 +7,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`deploy --plan` without a folder** writes to `plan/` in the deployment's own folder under `$XDG_STATE_HOME/midgie`, next to its rollback plans, and replaces the plan there on every run — iterating on a tree no longer leaves a plan folder per run to clean up. The run ends with the command that replays it, and **`deploy <tree> --apply-plan` without a folder** finds that plan from the tree.
+- **`--overwrite`** lets `--plan` replace the plan in a folder you named. It goes only with `--plan`, and only on the command line: a config file setting it is refused, as `yes` is.
+
 ### Changed
 
+- **`--plan` refuses a folder that holds anything but a plan** — any file or subfolder midgie did not write there as part of a plan, checked before the server is contacted, with `--overwrite` too. It used to accept any folder without plan files in it, so a plan could land among other files, or in a tree it was pointed at by mistake.
 - **The documentation moved from the README to `docs/`.** The README is now an overview with a quick start; installing, the container image and Helm chart, the commands, removal detection, the policy file, the diff strategy, configuration, the flag reference, the safety guards and the schema each have a page of their own. Links to the README's old section anchors no longer land on those sections.
 
 ## [0.19.0] - 2026-10-23

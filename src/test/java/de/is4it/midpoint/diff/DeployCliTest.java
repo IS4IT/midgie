@@ -6,6 +6,7 @@
 package de.is4it.midpoint.diff;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
@@ -447,20 +448,89 @@ class DeployCliTest {
     }
 
     @Test
-    void planDirectoryNestedInTheTreeIsExcluded(@TempDir Path dir) throws IOException {
-        // The unmarked case the marker cannot catch: files that were already there when --plan was pointed
-        // inside the tree. Excluded by canonical path for the current run.
+    void aPlanDirectoryHoldingAnythingButAPlanIsRefusedBeforeAnyRoundTrip(@TempDir Path dir) throws IOException {
+        // Pointed into a tree, or at a folder of somebody's notes, a plan would mix with — and on replacing,
+        // delete — what is there. Refused up front, so the dead host below is never reached.
         write(dir, "roles/real.xml", role("11111111-1111-1111-1111-111111111111", "Real Role", ""));
         write(dir, "plan/001-roles-x.create.xml", role("55555555-5555-5555-5555-555555555555", "Stale Plan Role", ""));
+        write(dir, "plan/notes.txt", "reviewed by ops");
+
+        String plan = dir.resolve("plan").toString();
+        Result r = run("deploy", dir.toString(), "--url", DEAD_HOST, "-u", "u", "-p", "p", "--plan", plan);
+        assertEquals(2, r.exit, r.err);
+        assertTrue(r.err.contains("holds more than a midgie plan"), r.err);
+        assertTrue(r.err.contains("001-roles-x.create.xml") && r.err.contains("notes.txt"),
+                "an unmarked file named like a plan file is not a plan's either:\n" + r.err);
+
+        Result overwrite = run("deploy", dir.toString(), "--url", DEAD_HOST, "-u", "u", "-p", "p",
+                "--plan", plan, "--overwrite");
+        assertEquals(2, overwrite.exit, overwrite.err);
+        assertTrue(overwrite.err.contains("holds more than a midgie plan"), "--overwrite does not lift it:\n"
+                + overwrite.err);
+        assertTrue(Files.exists(dir.resolve("plan/notes.txt")), "nothing in the directory is touched");
+    }
+
+    @Test
+    void aNetDirectoryNestedInTheTreeIsExcluded(@TempDir Path dir) throws IOException {
+        // The unmarked case the marker cannot catch: files that were already there when --rollback-plan was
+        // pointed inside the tree. Excluded by canonical path for the current run.
+        write(dir, "roles/real.xml", role("11111111-1111-1111-1111-111111111111", "Real Role", ""));
+        write(dir, "nets/001-roles-x.create.xml", role("55555555-5555-5555-5555-555555555555", "Stale Plan Role", ""));
 
         Result withoutFlag = run("deploy", dir.toString());
         assertTrue(withoutFlag.out.contains("Stale Plan Role"),
-                "without --plan the directory is an ordinary folder:\n" + withoutFlag.out);
+                "without --rollback-plan the directory is an ordinary folder:\n" + withoutFlag.out);
 
-        Result r = run("deploy", dir.toString(), "--plan", dir.resolve("plan").toString(),
-                "--url", DEAD_HOST, "-u", "u", "-p", "p");
+        Result r = run("deploy", dir.toString(), "--rollback-plan", dir.resolve("nets").toString());
+        assertEquals(0, r.exit, r.err);
+        assertTrue(r.out.contains("Real Role"), r.out);
         assertFalse(r.out.contains("Stale Plan Role"),
-                "the --plan directory must not be discovery input:\n" + r.out + r.err);
+                "the --rollback-plan directory must not be discovery input:\n" + r.out + r.err);
+    }
+
+    @Test
+    void overwriteOnlyAppliesToPlan() {
+        Result r = run("deploy", TREE, "--url", DEAD_HOST, "--overwrite");
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("--overwrite only applies to --plan"), r.err);
+
+        Result replay = run("deploy", "--apply-plan", "in", "--url", DEAD_HOST, "--overwrite");
+        assertEquals(2, replay.exit);
+        assertTrue(replay.err.contains("--overwrite only applies to --plan"), replay.err);
+    }
+
+    @Test
+    void planWithoutDirKeepsTheTreeInDiscovery() {
+        // picocli leaves an empty path for a --plan without DIR, and an empty path resolves to the working
+        // directory. Excluded from discovery, it would have hidden a tree given relative to it.
+        Result r = run("deploy", TREE, "--url", DEAD_HOST, "-u", "u", "-p", "p", "--plan");
+        assertEquals(2, r.exit, r.err);
+        assertFalse(r.err.contains("no midPoint objects found"), "the tree must still be read:\n" + r.err);
+    }
+
+    @Test
+    void applyPlanWithoutDirTakesOneTree() {
+        Result r = run("deploy", TREE, TREE, "--apply-plan", "--url", DEAD_HOST);
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("give at most one PATH"), r.err);
+    }
+
+    @Test
+    void applyPlanWithADirStillRefusesAPath(@TempDir Path dir) {
+        Result r = run("deploy", TREE, "--apply-plan", dir.toString(), "--url", DEAD_HOST);
+        assertEquals(2, r.exit);
+        assertTrue(r.err.contains("PATH would have no effect"), r.err);
+    }
+
+    @Test
+    void applyPlanWithoutDirNamesWhereThePlanWasLookedFor(@TempDir Path dir) throws IOException {
+        write(dir, "roles/real.xml", role("11111111-1111-1111-1111-111111111111", "Real Role", ""));
+
+        Result r = run("deploy", dir.toString(), "--apply-plan", "--url", DEAD_HOST);
+        assertEquals(2, r.exit);
+        File expected = PlanStore.defaultDir(DeploymentIdentity.of(dir.toFile(), null).key(), dir.toFile());
+        assertTrue(r.err.contains("no plan at " + expected), r.err);
+        assertTrue(r.err.contains("--plan"), "it says how to write one: " + r.err);
     }
 
     // --- fixtures & harness ---
