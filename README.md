@@ -24,6 +24,8 @@ multi-valued items, PolyStrings, references, and metadata are compared exactly t
 them. All the diff logic runs **locally** — the live modes only add a REST fetch/patch around the same
 engine.
 
+`midgie` is an independent tool by [IS4IT](https://www.is4it.de/), not an Evolveum product — see [Project status and support](#project-status-and-support).
+
 ## Why
 
 midPoint's existing apply paths (`post-initial-objects`, `ninja import`, REST `PUT`) all do a *full object
@@ -729,6 +731,37 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `mv
 (the rig-gated live tests self-skip), builds the container image for amd64 and arm64, lints the Helm chart,
 and runs a [REUSE](https://reuse.software/) licence-compliance lint on every push to `main` and every pull
 request against it.
+
+## Project status and support
+
+**`midgie` is not an Evolveum product.** It is an independent open-source tool written and maintained by
+[IS4IT GmbH](https://www.is4it.de/), an Evolveum partner. It is not developed, endorsed, certified or
+supported by Evolveum s.r.o.
+
+*midPoint* and *Evolveum* are trademarks of Evolveum s.r.o. This project uses the names only to say what it
+works with, and claims no rights in them.
+
+**Where to take what.**
+
+| | Where |
+|---|---|
+| A bug, question or feature request about `midgie` | [this repository's issues](https://github.com/IS4IT/midgie/issues) |
+| A security finding in `midgie` | privately, per [`SECURITY.md`](SECURITY.md) — not a public issue |
+| A bug or question about midPoint itself | [Evolveum's tracker](https://support.evolveum.com) or the [midPoint mailing lists](https://lists.evolveum.com/) |
+| Commercial midPoint support | Evolveum or an Evolveum partner |
+
+Please do not raise `midgie` issues with Evolveum, on the midPoint mailing lists, or in the midPoint
+development chat: neither Evolveum's support nor a midPoint subscription covers this tool, and a
+subscription question that arrives as a `midgie` question costs the community time it could spend on
+midPoint.
+
+**Maturity.** `midgie` is `0.x`, in daily use in IS4IT customer projects, and still moving: the CLI surface
+and output may change between minor versions, and the [`CHANGELOG`](CHANGELOG.md) says what changed. Only
+the latest release is supported, with no backports. It holds midPoint administrator credentials and writes
+to a live identity system — read [Safety guards](#safety-guards), and preview with `--dry-run` before you
+let it write anywhere you care about.
+
+**Contributing** is welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
