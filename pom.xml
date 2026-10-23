@@ -30,8 +30,8 @@
         <midpoint.version>4.11.0</midpoint.version>
         <midpoint.oldestSupported>4.10.3</midpoint.oldestSupported>
 
-        <picocli.version>4.7.6</picocli.version>
-        <junit.version>5.10.2</junit.version>
+        <picocli.version>4.7.7</picocli.version>
+        <junit.version>6.1.3</junit.version>
     </properties>
 
     <repositories>
@@ -97,7 +97,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>
-                <version>3.4.0</version>
+                <version>3.5.0</version>
                 <configuration>
                     <propertiesEncoding>UTF-8</propertiesEncoding>
                 </configuration>
@@ -108,7 +108,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.16.0</version>
             </plugin>
 
             <!-- Fat JAR. NOTE: prism/JAXB ship XSD catalogs + ServiceLoader files under
@@ -117,7 +117,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.5.3</version>
+                <version>3.6.2</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -174,7 +174,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.2.5</version>
+                <version>3.6.0</version>
                 <configuration>
                     <!-- Blank out the ambient connection environment. ConnectionOptions honours these, so a
                          developer or CI runner that exports them turned the offline CLI tests into live
@@ -230,7 +230,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.1.0</version>
+                <version>3.2.0</version>
                 <executions>
                     <!-- Fail the build if docker/.env's MP_VER drifts from <midpoint.version>. The compile-time
                          schema jar and the rig's server image must share a major line (see docker/README.md). -->
