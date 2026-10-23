@@ -20,8 +20,9 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectType;
 
 /**
  * Compares the bundled compile-time midPoint schema version against a live server's version. The schema
- * jar is version-coupled (see DESIGN.md / docker/README.md), so a mismatched line — or a server on a newer
- * patch release — can silently misparse objects. Best-effort: if either version cannot be determined it says
+ * jar is version-coupled (see DESIGN.md / docker/README.md): it serves its own line, and the line before it
+ * from {@code <midpoint.oldestSupported>} on. Any other server — or one on a newer patch release of the
+ * bundled line — can silently misparse objects. Best-effort: if either version cannot be determined it says
  * the check did not run, and otherwise stays quiet.
  */
 final class VersionSupport {
@@ -34,6 +35,14 @@ final class VersionSupport {
     /** The {@code <midpoint.version>} the schema jar was built against, embedded via build-info.properties. */
     static String compileTimeVersion() {
         return buildProperty("midpoint.version");
+    }
+
+    /**
+     * The oldest server this build serves on the line before the bundled one ({@code <midpoint.oldestSupported>}),
+     * embedded via build-info.properties. {@code null} when it is not set, and the build serves its own line only.
+     */
+    static String oldestSupportedVersion() {
+        return buildProperty("midpoint.oldestSupported");
     }
 
     /**
@@ -81,11 +90,12 @@ final class VersionSupport {
     }
 
     /**
-     * Warn on stderr if the live server is on a different line than the bundled schema, or on a newer patch
-     * release of the same line.
+     * Warn on stderr if the live server is on a line the bundled schema does not serve, or on a newer patch
+     * release of the bundled line.
      */
     static void warnIfMismatch(PrismContext prismContext, MidpointRestClient client) {
         String compile = compileTimeVersion();
+        String oldest = oldestSupportedVersion();
         String live = liveVersion(prismContext, client);
         LOG.debug("version check: bundled schema {} vs live server {}", compile, live);
         if (compile == null) {
@@ -100,8 +110,16 @@ final class VersionSupport {
             return;
         }
         if (!sameMajorLine(compile, live)) {
+            if (servesVersion(compile, oldest, live)) {
+                // The line before the bundled one sends nothing the bundled schema lacks, bar the few
+                // long-deprecated items the newer line removed, which fail to parse rather than misparse.
+                LOG.debug("server {} is on the earlier line the bundled schema {} also serves ({})", live, compile,
+                        servedRange(compile, oldest));
+                return;
+            }
             System.err.println("midgie: warning: server midPoint version " + live
-                    + " differs from the bundled schema version " + compile
+                    + " differs from the bundled schema version " + compile + ", which serves midPoint "
+                    + servedRange(compile, oldest)
                     + "; objects may be misparsed. Rebuild with a matching <midpoint.version>.");
             return;
         }
@@ -119,6 +137,29 @@ final class VersionSupport {
             LOG.debug("server {} is an older patch release than the bundled schema {}; the bundled schema "
                     + "is a superset", live, compile);
         }
+    }
+
+    /**
+     * Whether a build bundling the schema of {@code bundled} serves a server on {@code live}: every patch of the
+     * bundled line and, when {@code oldestSupported} is set, that version and every later patch of its line. A
+     * patch on that line that cannot be read counts as served, as {@link #comparePatch} does not call it a
+     * mismatch either.
+     */
+    static boolean servesVersion(String bundled, String oldestSupported, String live) {
+        if (sameMajorLine(bundled, live)) {
+            return true;
+        }
+        return oldestSupported != null && sameMajorLine(oldestSupported, live)
+                && comparePatch(oldestSupported, live) <= 0;
+    }
+
+    /**
+     * The servers a build serves, for the messages that name them: {@code "4.10.3 to 4.11.x"}, or {@code "4.11.x"}
+     * when no oldest supported version is set.
+     */
+    static String servedRange(String bundled, String oldestSupported) {
+        String line = majorMinor(bundled) + ".x";
+        return (oldestSupported != null) ? oldestSupported + " to " + line : line;
     }
 
     /**

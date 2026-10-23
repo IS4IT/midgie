@@ -104,7 +104,7 @@ class LiveReadTest {
     }
 
     @Test
-    void aNewerPatchAndAnotherLineAreWarnedAboutAndAnUnreadableVersionIsSaid() {
+    void aNewerPatchAndAnUnservedVersionAreWarnedAboutAndAnUnreadableVersionIsSaid() {
         // The bundled version may be in any of midPoint's forms — 4.10.5, 4.11, 4.11-RC2, 4.11.0-SNAPSHOT — so
         // the server versions are made from its line and patch, not from its text.
         String bundled = VersionSupport.compileTimeVersion();
@@ -117,11 +117,25 @@ class LiveReadTest {
 
         String[] numbers = line.split("\\.");
         nodeVersion = numbers[0] + "." + (Integer.parseInt(numbers[1]) + 1) + ".0";
-        assertTrue(stderrOf(() -> VersionSupport.warnIfMismatch(prismContext, client))
-                .contains("differs from the bundled schema version"));
+        String newerLine = stderrOf(() -> VersionSupport.warnIfMismatch(prismContext, client));
+        assertTrue(newerLine.contains("differs from the bundled schema version"), newerLine);
+        assertTrue(newerLine.contains("which serves midPoint "
+                + VersionSupport.servedRange(bundled, VersionSupport.oldestSupportedVersion())), newerLine);
 
         nodeVersion = bundled;
         assertEquals("", stderrOf(() -> VersionSupport.warnIfMismatch(prismContext, client)));
+
+        // The line before the bundled one is served from its oldest supported patch on, without a word; below
+        // that patch it is warned about like any other line.
+        String oldest = VersionSupport.oldestSupportedVersion();
+        nodeVersion = oldest;
+        assertEquals("", stderrOf(() -> VersionSupport.warnIfMismatch(prismContext, client)));
+        int oldestPatch = VersionSupport.patchOf(oldest);
+        if (oldestPatch > 0) {
+            nodeVersion = VersionSupport.majorMinor(oldest) + "." + (oldestPatch - 1);
+            assertTrue(stderrOf(() -> VersionSupport.warnIfMismatch(prismContext, client))
+                    .contains("differs from the bundled schema version"));
+        }
 
         // A least-privilege account has no read on NodeType; the check not running is said, not hidden.
         nodeStatus = 403;

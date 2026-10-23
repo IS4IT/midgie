@@ -5,6 +5,15 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **midgie bundles the midPoint 4.11.0 schema, and serves midPoint 4.11.x and 4.10.3 or later.** One build covers both lines. 4.11 keeps 4.10's data model: its schema adds types and items, and the few it removed were deprecated since 4.8. `midgie --version` names the range: `bundled midPoint schema 4.11.0, for midPoint 4.10.3 to 4.11.x`. The live modes' version check warns about a server outside that range, so a 4.11 server no longer gets the "differs from the bundled schema" warning. midPoint 4.10.0 to 4.10.2 now get it: use 0.18.5 for them, the last release built on the 4.10.5 schema. Against a 4.10 server, two cases need care:
+  - A desired object that uses an item new in 4.11, such as `UserType/displayName` or `credentials/otp`, diffs fine, and the server rejects it at deploy.
+  - An object that still uses the eight OIDC resource-server items 4.11 removed, such as `issuerUri` or `jwkSetUri`, no longer parses. Their replacement, the `jwt` and `opaqueToken` token definitions, already works on 4.10.
+- **Jackson comes from midPoint again.** midPoint 4.11.0 brings jackson-core and jackson-databind 2.21.7 itself, the version 0.18.5 pinned, so the pin is gone.
+
 ## [0.18.5] - 2026-10-20
 
 ### Security

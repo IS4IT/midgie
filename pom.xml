@@ -21,19 +21,17 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>21</maven.compiler.release>
 
-        <!-- Base-schema version knob. The midpoint-schema jar carries the COMPILE-TIME base
-             object model (UserType, RoleType, ...), so this MUST match the target midPoint's
-             major line. Bump it (and rebuild) to target a different midPoint version. -->
-        <midpoint.version>4.10.5</midpoint.version>
+        <!-- Base-schema version knobs. The midpoint-schema jar carries the COMPILE-TIME base
+             object model (UserType, RoleType, ...), so it decides which servers midgie can read:
+             midpoint.version's line, and the line before it from midpoint.oldestSupported on, whose
+             schema the newer one contains bar a few long-deprecated items it removed (DESIGN.md
+             "Schema"). The runtime version check warns about any other server. Bump both (and
+             rebuild) to target a different midPoint version. -->
+        <midpoint.version>4.11.0</midpoint.version>
+        <midpoint.oldestSupported>4.10.3</midpoint.oldestSupported>
 
         <picocli.version>4.7.6</picocli.version>
         <junit.version>5.10.2</junit.version>
-
-        <!-- Jackson comes in through midpoint-schema and prism, and midPoint 4.10.5 brings 2.21.5, which
-             has known vulnerabilities fixed in 2.21.7. Pinned in dependencyManagement below, so the JAR
-             ships the fixed version and Dependabot can see it. A midpoint.version that brings 2.21.7 or
-             later makes the pin unnecessary. -->
-        <jackson.version>2.21.7</jackson.version>
     </properties>
 
     <repositories>
@@ -45,18 +43,6 @@
             <snapshots><enabled>false</enabled></snapshots>
         </repository>
     </repositories>
-
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>com.fasterxml.jackson</groupId>
-                <artifactId>jackson-bom</artifactId>
-                <version>${jackson.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
 
     <dependencies>
         <!-- Pulls prism-api / prism-impl transitively. Provides MidPointPrismContextFactory,
@@ -84,8 +70,8 @@
     <build>
         <finalName>midgie</finalName>
 
-        <!-- Filter build-info.properties only, so ${midpoint.version} is embedded for the runtime
-             version check and ${midgie.version} (derived from the git tag by the antrun execution
+        <!-- Filter build-info.properties only, so ${midpoint.version} and ${midpoint.oldestSupported}
+             are embedded for the runtime version check and ${midgie.version} (derived from the git tag by the antrun execution
              below) for the version the CLI reports; everything else (e.g. logback.xml, which contains
              its own ${} tokens) is copied verbatim. -->
         <resources>

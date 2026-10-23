@@ -60,11 +60,49 @@ class VersionSupportTest {
     }
 
     @Test
+    void servesTheBundledLineAndTheLineBeforeFromItsOldestSupportedPatch() {
+        assertTrue(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.11.0"));
+        assertTrue(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.11.2"),
+                "a newer patch of the bundled line is served, and warned about separately");
+        assertTrue(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.10.3"));
+        assertTrue(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.10.5"));
+        assertTrue(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.10.x"), "an unreadable patch is not a mismatch");
+
+        assertFalse(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.10.2"), "older than the oldest supported");
+        assertFalse(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.10"), "4.10's first release, older too");
+        assertFalse(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.9.9"), "two lines back");
+        assertFalse(VersionSupport.servesVersion("4.11.0", "4.10.3", "4.12.0"), "a newer line");
+
+        assertTrue(VersionSupport.servesVersion("4.11.0", null, "4.11.1"));
+        assertFalse(VersionSupport.servesVersion("4.11.0", null, "4.10.5"),
+                "without an oldest supported version only the bundled line is served");
+    }
+
+    @Test
+    void servedRangeNamesTheOldestSupportedVersionAndTheBundledLine() {
+        assertEquals("4.10.3 to 4.11.x", VersionSupport.servedRange("4.11.0", "4.10.3"));
+        assertEquals("4.11.x", VersionSupport.servedRange("4.11.0", null));
+    }
+
+    @Test
     void compileTimeVersionIsFilteredIntoTheJar() {
         String version = VersionSupport.compileTimeVersion();
         assertNotNull(version, "build-info.properties must be on the classpath");
         assertFalse(version.contains("$"), "the ${midpoint.version} token must be filtered, got: " + version);
         assertTrue(version.matches("\\d+\\.\\d+.*"), "should look like a version, got: " + version);
+    }
+
+    @Test
+    void oldestSupportedVersionIsFilteredIntoTheJarOnTheLineBeforeTheBundledOne() {
+        String oldest = VersionSupport.oldestSupportedVersion();
+        assertNotNull(oldest, "build-info.properties must carry midpoint.oldestSupported");
+        assertFalse(oldest.contains("$"), "the ${midpoint.oldestSupported} token must be filtered, got: " + oldest);
+        assertNotNull(VersionSupport.patchOf(oldest), "should name a patch, got: " + oldest);
+        // Bumping <midpoint.version> to a new line without moving the floor would quietly serve two lines back.
+        String[] bundled = VersionSupport.majorMinor(VersionSupport.compileTimeVersion()).split("\\.");
+        String previousLine = bundled[0] + "." + (Integer.parseInt(bundled[1]) - 1);
+        assertEquals(previousLine, VersionSupport.majorMinor(oldest),
+                "<midpoint.oldestSupported> must be on the line before <midpoint.version>");
     }
 
     @Test

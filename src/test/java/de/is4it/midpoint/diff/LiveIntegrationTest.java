@@ -319,16 +319,19 @@ class LiveIntegrationTest {
     }
 
     @Test
-    void liveVersionIsReadableAndMatchesTheBundledSchemaLine() throws Exception {
+    void liveVersionIsReadableAndServedByTheBundledSchema() throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
 
         PrismContext prismContext = new MidPointPrismContextFactory().createInitializedPrismContext();
         String live = VersionSupport.liveVersion(prismContext, client);
+        String bundled = VersionSupport.compileTimeVersion();
+        String oldest = VersionSupport.oldestSupportedVersion();
 
         assertNotNull(live, "should read the server version from GET /nodes");
-        assertTrue(VersionSupport.sameMajorLine(live, VersionSupport.compileTimeVersion()),
-                "rig version " + live + " should share a major line with the bundled schema "
-                        + VersionSupport.compileTimeVersion() + " (the rig is pinned to the same MP_VER)");
+        // The rig runs MP_VER, the bundled version, unless overridden to test the line before it.
+        assertTrue(VersionSupport.servesVersion(bundled, oldest, live),
+                "rig version " + live + " should be one the bundled schema " + bundled + " serves ("
+                        + VersionSupport.servedRange(bundled, oldest) + ")");
     }
 
     @Test

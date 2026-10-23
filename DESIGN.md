@@ -23,7 +23,7 @@ already ships the engine (`PrismObject.diff`); this CLI is the glue. The offline
 independently useful (drift detection, migration deltas, dry-run, review), which is what makes it worth
 open-sourcing rather than burying in a pipeline.
 
-## Engine (all confirmed against midPoint 4.10.x)
+## Engine (all confirmed against midPoint 4.10.x and 4.11.0)
 
 The core is ~5 lines:
 
@@ -49,11 +49,11 @@ Confirmed API facts (source references are into `/Volumes/Daten/git/midpoint`):
 
 | Element | FQN / note |
 |---|---|
-| `MidPointPrismContextFactory` | `com.evolveum.midpoint.schema.MidPointPrismContextFactory` — ctors `()` and `(File extraSchemaDir)` (infra/schema:56, :60); `createInitializedPrismContext()` (infra/schema:179) throws `SchemaException, SAXException, IOException` |
+| `MidPointPrismContextFactory` | `com.evolveum.midpoint.schema.MidPointPrismContextFactory` — ctors `()` and `(File extraSchemaDir)` (infra/schema:54, :58); `createInitializedPrismContext()` (infra/schema:177) throws `SchemaException, SAXException, IOException` |
 | `PrismContext.parseObject(File)` | returns `PrismObject<T>` (see `TestParsePasswordPolicy`, `TestParseGenericObject`). Modern form: `ctx.parserFor(file).xml().parse()` |
 | `PrismObject.diff(other, EquivalenceStrategy)` | returns `ObjectDelta<T>` (`com.evolveum.midpoint.prism.delta.ObjectDelta`); see `TestDiffEquals:456` |
 | `EquivalenceStrategy.REAL_VALUE` | ignores operational/metadata items **and container ids** when comparing values — the default for config diffing (proven in `TestParseDiffPatch`). It does *not* ignore ids when *pairing*: two list values that both carry an id are paired by it under every strategy, and then edited one into the other. That is right for a file exported from the target server and wrong for one from another server, which is why `ContainerIds.trustedOnly` checks a file's ids against the live list first (see "Container ids from another server"). The `_CONSIDER_DIFFERENT_IDS[_NATURAL_KEYS]` variants turn container-id / natural-key matching **on**, which makes the diff *pair* multi-valued entries and edit them in place; id-agnostic plain `REAL_VALUE` instead emits clean whole-value add/delete. The default `--equivalence auto` uses plain `REAL_VALUE` for that reason wherever a container's desired values do not all fill in a natural key, and natural-key pairing where they do (see "Strategy flags"); the id-considering variants are still selectable via `--equivalence` for exploration (`natural-keys`, the experimental preset, warns) |
-| `DeltaConvertor.toObjectModificationType(ObjectDelta)` | `com.evolveum.midpoint.schema.DeltaConvertor` (infra/schema:237) → `com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType`. Also `toObjectDeltaType` (:259) and `toItemDeltaTypes` (:429) |
+| `DeltaConvertor.toObjectModificationType(ObjectDelta)` | `com.evolveum.midpoint.schema.DeltaConvertor` (infra/schema:236) → `com.evolveum.midpoint.xml.ns._public.common.api_types_3.ObjectModificationType`. Also `toObjectDeltaType` (:258) and `toItemDeltaTypes` (:428) |
 | `Item.diffModifications(other, strategy)` | returns `List<ItemDelta>` — useful for a **scoped** per-item diff (see `TestDiffEquals:565`) |
 
 prism itself (`com.evolveum.midpoint.prism.*`: `PrismObject`, `PrismContext`, `ObjectDelta`,
@@ -326,15 +326,34 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
 
 - **Base** model (UserType, RoleType, SystemConfigurationType, … and their item definitions) is
   **compile-time** — generated Java bound to XSD, loaded from the `midpoint-schema` jar. It **cannot** be
-  supplied as XML. The bundled jar version (`midpoint.version` in `pom.xml`) must match the target's major
-  line. This is why a fat JAR is version-specific (ninja and midPoint Studio are too). Within a line the
+  supplied as XML. The bundled jar version (`midpoint.version` in `pom.xml`) decides which servers a build
+  can read. This is why a fat JAR is version-specific (ninja and midPoint Studio are too). Within a line the
   build tracks the **newest patch release**: patch releases change the schema as well (4.10.4 added natural
   keys and GUI items, 4.10.5 made `PasswordType/hint` a `ProtectedStringType`), and the newest one is a
-  superset of what an older patch on the same line sends. `VersionSupport` warns on a different line and on
-  a server running a newer patch than the bundled schema; an older patch is only logged. Bundling several
-  patch schemas (per-version classloaders, or older XSDs overlaid on the newest classes) was considered and
-  rejected: the gain over "newest patch plus handling the rare type change" does not pay for its size and
-  fragility.
+  superset of what an older patch on the same line sends.
+
+  A build also serves the **line before** its own, from `midpoint.oldestSupported` in `pom.xml` on (4.10.3
+  for the 4.11.0 build). A new line keeps the old one's data model, as Evolveum states for 4.11: the
+  4.10.5 → 4.11.0 schema change is additions (new types, items, enum values and object types), items moved
+  up into a new supertype under the same path, two experimental items whose type was widened
+  (`ReportDataType/data`, an association's `associationObject`), and the removal of eight
+  `OidcResourceServerAuthenticationModuleType` items deprecated since 4.8. So a 4.10 server sends nothing
+  the bundled schema misreads, and one build covers both lines instead of two builds users must pick
+  between. What it cannot do:
+  - **4.11-only items sent to a 4.10 server.** `diff` and dry-run cannot tell that a desired object uses an
+    item the older server lacks (`UserType/displayName`, `credentials/otp`); the server rejects the PATCH at
+    deploy. The schema's `a:since` annotations cannot drive a warning — 14 of the 69 items 4.11 added carry
+    none, these two among them.
+  - **The removed OIDC items.** A 4.10 object that still uses them fails to parse, with a clear error;
+    their replacement (the `jwt` / `opaqueToken` token definition) already works on 4.10.
+  - **A later 4.10.x patch** is covered only if its schema changes reached the bundled 4.11.x first, which
+    is Evolveum's order (master first) but not a guarantee.
+
+  `VersionSupport` warns on a server outside that range (a line further back or ahead, or the earlier line
+  below `midpoint.oldestSupported`) and on a server running a newer patch of the bundled line; an older
+  patch of the bundled line, and the served earlier line, are only logged. Bundling several schemas
+  (per-version classloaders, or older XSDs overlaid on the newest classes) was considered and rejected:
+  the gain over "newest patch plus handling the rare type change" does not pay for its size and fragility.
 - **Extension** schema (custom `extension` attributes, custom `SchemaType` objects) is **runtime**:
   - *File mode:* `--schema <file>` (repeatable) and/or `--schema-dir <dir>`. Both accept either format,
     chosen by extension: a `.xsd` is a raw XSD, a `.xml` is an exported `SchemaType` object (its embedded
@@ -342,7 +361,7 @@ with midPoint Studio, ninja, and REST `PUT`. Behaviour is controlled by flags:
     expected format — are warned about and skipped, since a directory may hold other files; a file named with
     `--schema` fails the run, as a missing one does, and so does a `--schema-dir` that cannot be read. Everything collected is registered via
     `schemaRegistry.registerDynamicSchemaExtensions(...)` + `prismContext.reload()` — the same call
-    midPoint's `repo-common/SchemaCache.java` (:81, :89) makes at startup.
+    midPoint's `repo-common/SchemaCache.java` (:84, :92) makes at startup.
   - *Live mode:* read the `SchemaType` objects off the server (`--url/--user/--password`) and register
     them the same way (best-effort — a read failure warns and falls back to base schema). `--no-live-schema`
     skips this `GET /schemas` read (faster, or for accounts without schema-read); extension items then need

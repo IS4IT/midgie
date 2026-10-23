@@ -34,10 +34,26 @@ test stacks (e.g. `connector-sap` on 11080) without port clashes.
 ## Version coupling (read before bumping)
 
 `midgie` bundles midPoint's **compile-time base schema** for the version pinned by
-`<midpoint.version>` in `pom.xml`. That must match the running server's major line, or
-objects fetched over REST will be misparsed. Both are pinned to **4.10.5** — to target
-another version, bump `MP_VER` in `docker/.env` **and** `midpoint.version` in `pom.xml`
-together, then rebuild.
+`<midpoint.version>` in `pom.xml`. It serves that line and the line before it from
+`<midpoint.oldestSupported>` on; a server outside that range can be misparsed. The rig runs
+the bundled version: both are pinned to **4.11.0** — to target another version, bump `MP_VER`
+in `docker/.env` **and** `midpoint.version` in `pom.xml` together, then rebuild.
+
+To run the live tests against the earlier line as well, start a second rig under its own
+project name with `MP_VER` overridden for that run only (the build's version check reads
+`docker/.env`, which stays as it is). Run one rig at a time — they share the host port:
+
+```bash
+docker compose -f docker/docker-compose.yml stop                              # the 4.11.0 rig
+MP_VER=4.10.5 docker compose -f docker/docker-compose.yml -p midgie_410 up -d  # the 4.10.5 rig
+mvn verify
+docker compose -f docker/docker-compose.yml -p midgie_410 stop
+```
+
+A rig's volumes belong to the midPoint version that created them. Moving a rig to a new
+line needs `down -v` first: the 4.11 image runs as the non-root user `midpoint` (UID 1000)
+and cannot write a volume a 4.10 container created as root, and 4.11 changed the repository's
+database schema.
 
 Versions and the port are pinned in `docker/.env`: `MP_VER` (midPoint image tag),
 `PG_VER` (PostgreSQL major version), `MP_PORT` (GUI/REST host port).
