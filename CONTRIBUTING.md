@@ -31,10 +31,12 @@ privately.
 By opening a pull request you agree that your contribution is licensed under **EUPL-1.2**, the licence of
 this project. There is no CLA to sign and copyright stays with you or your employer.
 
+<!-- REUSE-IgnoreStart: the tag below is an example, not this file's licence -->
 EUPL is not a preference: `midgie` links midPoint's `midpoint-schema` library, which is EUPL-1.2, so the
 project cannot be relicensed as MIT or Apache. Any new file needs an `SPDX-License-Identifier: EUPL-1.2`
 header (or an entry in [`REUSE.toml`](REUSE.toml) for files that cannot carry one) — CI runs a
 [REUSE](https://reuse.software/) lint and will tell you if one is missing.
+<!-- REUSE-IgnoreEnd -->
 
 ## Getting set up
 
