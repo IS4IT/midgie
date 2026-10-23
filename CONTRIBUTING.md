@@ -7,9 +7,9 @@ SPDX-License-Identifier: EUPL-1.2
 # Contributing to midgie
 
 Thanks for considering it. `midgie` is an independent tool maintained by
-[IS4IT GmbH](https://www.is4it.de/); it is **not an Evolveum product** and Evolveum support does not cover
-it. Please raise anything about `midgie` here rather than with Evolveum, on the midPoint mailing lists, or
-in the midPoint development chat.
+[IS4IT GmbH](https://www.is4it.de/iam); it is **not an Evolveum product** and Evolveum support does not cover
+it. Please raise anything about `midgie` here rather than with Evolveum or in the midPoint development
+chat.
 
 ## What is useful
 
@@ -19,7 +19,7 @@ in the midPoint development chat.
   connector configuration.
 - **A failing test.** A reproducer as a test case under `src/test/` is worth more than a paragraph, and it
   stops the bug coming back.
-- **Documentation.** Corrections, a confusing passage, a case the README does not cover.
+- **Documentation.** Corrections, a confusing passage, a case the [documentation](docs/) does not cover.
 - **Code.** See the conventions below. For anything beyond a small fix, open an issue first so we can agree
   on the approach before you spend your evening on it.
 
@@ -43,6 +43,7 @@ Requires **JDK 21 or later**.
 ```bash
 pre-commit install          # once per clone: runs gitleaks on every commit
 mvn -B -ntp verify          # what CI runs
+mvn -q test                 # unit and command tests only, no server needed
 ```
 
 The first build downloads the midPoint schema and prism dependencies from Evolveum's Nexus and is

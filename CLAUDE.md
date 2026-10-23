@@ -6,6 +6,8 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 `midgie` — a standalone, schema-aware CLI that reconciles midPoint configuration held as object XML. At its core it computes the minimal `itemDelta` between a desired and a current object and emits the `ObjectModificationType` XML that midPoint's REST `PATCH` consumes, wrapping midPoint's own `PrismObject.diff`; on top of that sit a live diff and a deploy over files and folders (one file is a tree of one). **Read `DESIGN.md` first — it is the full, self-contained brief** (modes, flags, two-layer schema handling, output/exit codes, verification).
 
+User documentation lives in `docs/`, one page per topic; `README.md` is only the overview, quick start and documentation index. A change in behaviour updates the `docs/` page it belongs to, not the README. A new page goes into both indexes, the one in `README.md` and the one in `docs/README.md`.
+
 ## Commands
 
 The first `mvn -q package` downloads the midPoint schema + prism dependencies — sizeable.

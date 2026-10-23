@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The documentation moved from the README to `docs/`.** The README is now an overview with a quick start; installing, the container image and Helm chart, the commands, removal detection, the policy file, the diff strategy, configuration, the flag reference, the safety guards and the schema each have a page of their own. Links to the README's old section anchors no longer land on those sections.
+
 ## [0.19.0] - 2026-10-23
 
 ### Changed

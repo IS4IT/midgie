@@ -14,4 +14,4 @@ midgie is in 0.x: fixes go into the next release, and only the latest release is
 
 ## Checking what you run
 
-Releases are signed and come with build provenance and an SBOM; the README's "Verifying a release" section shows how to check them.
+Releases are signed and come with build provenance and an SBOM; [Verifying a release](docs/install.md#verifying-a-release) shows how to check them.

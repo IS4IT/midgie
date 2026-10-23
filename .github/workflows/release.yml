@@ -11,7 +11,7 @@
 # and falls back to the pom version when git cannot name one — which is why versions:set stays here: it makes
 # that fallback the tag as well, so a release cannot be mislabelled even if the checkout has no usable tag.
 #
-# What a release can be checked against (README "Verifying a release" has the commands):
+# What a release can be checked against (docs/install.md "Verifying a release" has the commands):
 # - the JAR and the Helm chart carry a SLSA build-provenance attestation, and the JAR an SBOM attestation
 #   for midgie-<version>.cdx.json (the CycloneDX SBOM the build writes, attached to the release as well);
 # - the image is signed with cosign and carries a provenance attestation, both attached to it in Docker Hub
