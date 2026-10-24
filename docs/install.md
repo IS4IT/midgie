@@ -2,8 +2,9 @@
 
 ## The JAR
 
-A prebuilt fat JAR is attached to each [release](https://github.com/IS4IT/midgie/releases). To build
-from source instead:
+A prebuilt fat JAR is attached to each [release](https://github.com/IS4IT/midgie/releases). The release
+notes end with a Downloads section that says what each file is for: the JAR, the Helm chart, the SBOM, and
+the container image on Docker Hub with the digest that release built. To build from source instead:
 
 ```bash
 mvn -q package                       # builds target/midgie.jar (a fat JAR)

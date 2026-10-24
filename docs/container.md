@@ -42,7 +42,7 @@ gh workflow run Release -f tag=v0.4.3                        # rebuild that tag'
 gh workflow run Release -f tag=v0.4.3 -f update_latest=true  # ...and move :latest to it
 ```
 
-`:latest` stays put unless you ask for it, so rebuilding an older tag cannot drag it backwards (and a pre-release never takes it either way). The consequence for anyone pulling: a version tag names the midgie release, not one immutable build of it — pin the digest if you need the same bytes every time.
+`:latest` stays put unless you ask for it, so rebuilding an older tag cannot drag it backwards (and a pre-release never takes it either way). The consequence for anyone pulling: a version tag names the midgie release, not one immutable build of it — pin the digest if you need the same bytes every time. Each release's notes give the digest it built.
 
 ## Helm chart
 

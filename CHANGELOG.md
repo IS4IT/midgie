@@ -5,6 +5,12 @@ All notable changes to midgie are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Release pages say what each download is.** The assets carry labels — standalone binary, Helm chart, SBOM — that the page shows in place of the file names; the files and their download URLs keep their names. The notes end with a Downloads section that links the container image on Docker Hub and gives the digest the release built, so a deployment can pin exactly that image.
+
 ## [0.20.0] - 2026-10-23
 
 ### Added

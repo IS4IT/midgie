@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 # Release: pushing a version tag (e.g. v0.1.0) builds the fat JAR stamped with the tag's version, pushes
-# the multi-arch container image to docker.io/is4it/midgie, and publishes a GitHub Release with the JAR
-# attached and notes taken from CHANGELOG.md. The pom stays on -SNAPSHOT; the tag is the single source of
-# truth for the release version, applied with versions:set.
+# the multi-arch container image to docker.io/is4it/midgie, and publishes a GitHub Release with the JAR,
+# the Helm chart and the SBOM attached, each labelled with what it is. Its notes are the version's section
+# of CHANGELOG.md plus a Downloads section that links the image and names the digest just pushed. The pom
+# stays on -SNAPSHOT; the tag is the single source of truth for the release version, applied with
+# versions:set.
 #
 # Every other build reads the same tag for itself, with 'git describe' (see pom.xml, stamp-version-from-git),
 # and falls back to the pom version when git cannot name one — which is why versions:set stays here: it makes
@@ -89,8 +91,8 @@ jobs:
           # stamps below, so the two cannot disagree about what this JAR is.
           fetch-depth: 0
           # This job's token can write to the repository, and the build runs tests and plugins fetched from
-          # outside it. Nothing here pushes with git — the release step takes the token as its own input — so
-          # the token is not left in .git/config for anything else to find.
+          # outside it. Nothing here pushes with git — the release step gets the token in its own environment —
+          # so the token is not left in .git/config for anything else to find.
           persist-credentials: false
 
       - name: Set up JDK 21
@@ -219,29 +221,51 @@ jobs:
           subject-path: midgie-${{ env.VERSION }}.jar
           sbom-path: midgie-${{ env.VERSION }}.cdx.json
 
-      - name: Extract release notes from CHANGELOG.md
+      # The version's CHANGELOG section, then what each download is for. The image cannot be attached, so
+      # the notes link it and name the digest this run pushed: an image-only rebuild later moves the version
+      # tag, and the digest is what still names this release's bytes. Links are absolute and pinned to the
+      # tag, since a relative link in a release body does not resolve against the repository.
+      - name: Write the release notes
         if: github.event_name == 'push'
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
         run: |
+          repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          docs="${repo}/blob/${TAG}/docs"
           awk -v ver="$VERSION" '
             $0 ~ "^## \\[" ver "\\]" { flag = 1; next }
             flag && (/^## \[/ || /^\[[^]]*\]: /) { exit }
             flag { print }
           ' CHANGELOG.md > release-notes.md
           if [ ! -s release-notes.md ]; then
-            echo "See [CHANGELOG.md](CHANGELOG.md)." > release-notes.md
+            echo "See [CHANGELOG.md](${repo}/blob/${TAG}/CHANGELOG.md)." > release-notes.md
           fi
+          cat >> release-notes.md <<EOF
 
+          ### Downloads
+
+          - **Standalone binary:** \`midgie-${VERSION}.jar\`, below. Run it with \`java -jar midgie-${VERSION}.jar --help\` (Java 21 or later); see [Installing midgie](${docs}/install.md).
+          - **Container image:** [\`is4it/midgie:${VERSION}\`](https://hub.docker.com/r/is4it/midgie/tags?name=${VERSION}) on Docker Hub, for \`linux/amd64\` and \`linux/arm64\`. This release built \`docker.io/is4it/midgie:${VERSION}@${DIGEST}\`; pin that digest to keep the same bytes after an image-only rebuild moves the tag. See [Container image and Helm chart](${docs}/container.md).
+          - **Helm chart:** \`midgie-${VERSION}.tgz\`, below: \`helm install midgie ${repo}/releases/download/${TAG}/midgie-${VERSION}.tgz -n midgie --create-namespace\`
+          - **SBOM:** \`midgie-${VERSION}.cdx.json\`, below. It lists every library the JAR bundles, in CycloneDX format; [Verifying a release](${docs}/install.md#verifying-a-release) checks it against the JAR.
+          EOF
+
+      # gh rather than a release action, for the asset labels ('file#label'): the release page shows them in
+      # place of the file names, which stay as they are for download URLs. gh creates the release as a draft,
+      # uploads, and only then publishes it — deleting the draft if an upload fails — so a release never
+      # appears without its files; a file that is missing fails the step.
       - name: Publish GitHub Release
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          name: midgie ${{ env.VERSION }}
-          body_path: release-notes.md
-          files: |
-            midgie-${{ env.VERSION }}.jar
-            midgie-${{ env.VERSION }}.tgz
-            midgie-${{ env.VERSION }}.cdx.json
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
           # The tag filter admits pre-releases (v0.4.0-rc1). Without this an RC is published as a normal
           # release and becomes the repository's "Latest", so releases/latest/download hands it to everyone.
-          prerelease: ${{ contains(env.VERSION, '-') }}
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --verify-tag --title "midgie ${VERSION}" \
+            --notes-file release-notes.md "${prerelease[@]}" \
+            "midgie-${VERSION}.jar#Standalone binary (java -jar, Java 21+): midgie-${VERSION}.jar" \
+            "midgie-${VERSION}.tgz#Helm chart: midgie-${VERSION}.tgz" \
+            "midgie-${VERSION}.cdx.json#SBOM of the JAR (CycloneDX): midgie-${VERSION}.cdx.json"
