@@ -2,9 +2,10 @@
 #
 # SPDX-License-Identifier: EUPL-1.2
 
-# Release: pushing a version tag (e.g. v0.1.0) builds the fat JAR stamped with the tag's version, pushes
-# the multi-arch container image to docker.io/is4it/midgie, and publishes a GitHub Release with the JAR,
-# the Helm chart and the SBOM attached, each labelled with what it is. Its notes are the version's section
+# Release: pushing a version tag (e.g. v0.1.0) first runs the whole CI workflow on the tagged commit. Only
+# if all of it passes does it build the fat JAR stamped with the tag's version, push the multi-arch
+# container image to docker.io/is4it/midgie, and publish a GitHub Release with the JAR, its SHA-256, the
+# Helm chart and the SBOM attached, each labelled with what it is. Its notes are the version's section
 # of CHANGELOG.md plus a Downloads section that links the image and names the digest just pushed. The pom
 # stays on -SNAPSHOT; the tag is the single source of truth for the release version, applied with
 # versions:set.
@@ -63,8 +64,24 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  # The whole CI workflow, on the tagged commit itself, before anything is built for publishing: a red build,
+  # test, chart, REUSE, secret, licence or vulnerability check stops the release. It runs here rather than
+  # being looked up, so a commit CI never saw, or whose run a later push to main cancelled, cannot slip
+  # through. A rebuild by hand skips it: it rebuilds the image for a tag that passed this when released.
+  ci:
+    name: CI
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   release:
     name: Build & publish
+    needs: ci
+    # A skipped CI only counts for the rebuild by hand; on a tag push it must have passed.
+    if: >-
+      !cancelled() && (needs.ci.result == 'success'
+      || (needs.ci.result == 'skipped' && github.event_name == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

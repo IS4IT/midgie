@@ -10,11 +10,14 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # The release workflow runs all of this on the tagged commit before it publishes anything.
+  workflow_call:
 
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref (e.g. rapid pushes to a PR).
+# Cancel superseded runs on the same ref (e.g. rapid pushes to a PR). A run called by a release is grouped
+# under its tag, so a push to main cannot cancel it.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

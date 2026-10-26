@@ -53,9 +53,9 @@ sizeable. The live integration tests self-skip unless the Docker Compose rig und
 green run that reports skips is the normal case, not a problem — see [`docker/README.md`](docker/README.md)
 to bring up a real midPoint, and [`docker/tls/README.md`](docker/tls/README.md) for the TLS rig.
 
-CI runs the same `verify` on JDK 21 and 25, builds the container image for amd64 and arm64, lints the Helm
-chart, runs CodeQL, and scans the **whole history** for secrets. A commit that puts a credential anywhere
-near the repository will fail that scan, which is why the pre-commit hook exists.
+CI runs the same `verify` on JDK 21 and 25, builds the container image for amd64 and arm64, lints the Helm chart, runs CodeQL, and scans the **whole history** for secrets. A commit that puts a credential anywhere near the repository will fail that scan, which is why the pre-commit hook exists.
+
+CI also checks the libraries the JAR bundles, from the SBOM the build writes to `target/bom.json`. A licence not listed in [`.github/sbom-licences.txt`](.github/sbom-licences.txt) fails it, and so does any HIGH or CRITICAL CVE. Both usually arrive with a new midPoint version rather than with your change. A licence goes into the list once it has been checked to allow redistribution inside an EUPL-1.2 JAR. A CVE that cannot be fixed yet goes into [`.trivyignore`](.trivyignore) with a reason and an expiry date at most 90 days out. A release runs all of CI on the tagged commit first, so a red check also stops a release.
 
 ## Conventions
 

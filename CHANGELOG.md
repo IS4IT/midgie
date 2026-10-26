@@ -13,6 +13,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A release is published only when CI passes on the tagged commit.** The release workflow now runs the whole CI workflow on that commit first: build and tests on Java 21 and 25, image, chart, REUSE and secret scan, plus two new checks on the libraries the JAR bundles. A licence not yet reviewed, or a known HIGH or CRITICAL vulnerability, stops the release before anything is built or pushed.
+
 - **Release pages say what each download is.** The assets carry labels — standalone binary, Helm chart, SBOM — that the page shows in place of the file names; the files and their download URLs keep their names. The notes end with a Downloads section that links the container image on Docker Hub and gives the digest the release built, so a deployment can pin exactly that image.
 
 ## [0.20.0] - 2026-10-23
