@@ -125,6 +125,52 @@ jobs:
           helm package charts/midgie --destination /tmp --version 0.0.0-ci --app-version 0.0.0-ci
           test -f /tmp/midgie-0.0.0-ci.tgz
 
+  # Both checks read the CycloneDX SBOM the build writes, so they judge exactly what the JAR bundles.
+  dependencies:
+    name: Licences & vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # nothing here pushes; keep the token out of .git/config
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # The SBOM is written in the package phase; the build job runs the tests.
+      - name: Build the SBOM
+        run: mvn -B -ntp -DskipTests package
+
+      # A licence not in the allowlist fails here; the file says what to check before adding one.
+      - name: Check the licences
+        run: python3 -I .github/scripts/check-licences.py target/bom.json .github/sbom-licences.txt
+
+      # Downloaded and checked against the release's published SHA-256, like gitleaks above. The scan uses
+      # the SBOM's Maven coordinates, so it needs only Trivy's vulnerability database, not its Java one.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: 0.75.0
+          TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+        run: |
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$tarball" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${tarball}"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" trivy
+
+      # Any HIGH or CRITICAL CVE fails, fixed upstream or not. An exception goes into .trivyignore with an
+      # expiry date, after which it stops applying.
+      - name: Check for known vulnerabilities
+        run: |
+          "$RUNNER_TEMP/trivy" sbom --severity CRITICAL,HIGH --exit-code 1 --ignorefile .trivyignore \
+            --skip-java-db-update target/bom.json
+
   reuse:
     name: REUSE compliance
     runs-on: ubuntu-latest

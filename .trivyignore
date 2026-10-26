@@ -1,0 +1,15 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+# Exceptions to CI's vulnerability check, which fails on any HIGH or CRITICAL CVE in a library the JAR
+# bundles. An entry is for a CVE that cannot be fixed yet, typically one arriving through midpoint-schema
+# that only a new midPoint release removes, and that does not reach midgie's use of the library.
+#
+# Every entry carries an expiry date, at most 90 days out, and the reason on the line above it. Once the
+# date has passed, Trivy no longer honours the entry and the check fails again, so the exception is
+# either renewed on purpose or the CVE is gone. Format:
+#
+#   # <library> <version>, from midpoint-schema <version>: <why midgie is not exposed>.
+#   # Gone with midPoint <the release that fixes it>.
+#   CVE-YYYY-NNNNN exp:YYYY-MM-DD

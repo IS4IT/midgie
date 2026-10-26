@@ -1,0 +1,27 @@
+# Copyright (c) 2026 IS4IT
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+# The licences the libraries bundled in midgie's JAR may carry, checked against target/bom.json by
+# .github/scripts/check-licences.py in CI. The list is what the JAR shipped when the check was introduced
+# (midPoint 4.11.0, 2026-10-26), not a statement that anything else is forbidden: its job is to make the
+# next new licence, usually arriving with a midPoint bump, fail the build until someone has looked at it.
+# Adding a line here is that look: check the licence lets midgie, under EUPL-1.2, redistribute the
+# library inside its fat JAR.
+#
+# Licences, as SPDX identifiers, one per line:
+Apache-2.0
+BSD-3-Clause
+BSD-4-Clause
+MIT
+EPL-2.0
+LGPL-2.1-only
+GPL-2.0-with-classpath-exception
+EUPL-1.2
+
+# Libraries whose POM declares no licence, so the SBOM has none to check, with the licence established by
+# hand: a group:artifact pattern ('*' matches anything), then that licence, which must be listed above.
+#
+# midPoint, prism, axiom and Evolveum's commons are EUPL-1.2 (midPoint's LICENSE; prism-api's MANIFEST.MF
+# says "EUPL-1.2 or later"), but their POMs carry no <licenses> block.
+com.evolveum.*:*  EUPL-1.2
