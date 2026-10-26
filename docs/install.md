@@ -45,4 +45,6 @@ cosign verify docker.io/is4it/midgie:<version> \
   --certificate-identity-regexp '^https://github\.com/IS4IT/midgie/\.github/workflows/release\.yml@refs/(tags/v.+|heads/main)$'
 ```
 
+Without `gh` or cosign at hand, releases after 0.20.0 also attach `midgie-<version>.jar.sha256`. `sha256sum -c midgie-<version>.jar.sha256`, run next to the JAR, says `OK` for an intact download. A checksum only shows the file arrived unchanged, not who built it: it comes from the same release page as the JAR.
+
 The cosign form is the one a cluster admission policy (Kyverno, Sigstore policy-controller) can enforce. The identity admits `heads/main` as well as the version tags because an image rebuilt for an existing release (a base-image fix) is built by a run started by hand from `main`.

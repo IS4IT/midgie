@@ -121,10 +121,12 @@ jobs:
       - name: Build & test
         run: mvn -B -ntp verify
 
+      # The .sha256 is in sha256sum's own format, so 'sha256sum -c' checks a download without gh or cosign.
       - name: Name the artifacts with the version
         run: |
           cp target/midgie.jar "midgie-${VERSION}.jar"
           cp target/bom.json "midgie-${VERSION}.cdx.json"
+          sha256sum "midgie-${VERSION}.jar" > "midgie-${VERSION}.jar.sha256"
 
       # --- container image (docker.io/is4it/midgie) ---------------------------
       # Before the GitHub Release, so a registry failure does not leave a published release advertising an
@@ -244,7 +246,7 @@ jobs:
 
           ### Downloads
 
-          - **Standalone binary:** \`midgie-${VERSION}.jar\`, below. Run it with \`java -jar midgie-${VERSION}.jar --help\` (Java 21 or later); see [Installing midgie](${docs}/install.md).
+          - **Standalone binary:** \`midgie-${VERSION}.jar\`, below. Run it with \`java -jar midgie-${VERSION}.jar --help\` (Java 21 or later); see [Installing midgie](${docs}/install.md). \`midgie-${VERSION}.jar.sha256\` holds its checksum: \`sha256sum -c midgie-${VERSION}.jar.sha256\`.
           - **Container image:** [\`is4it/midgie:${VERSION}\`](https://hub.docker.com/r/is4it/midgie/tags?name=${VERSION}) on Docker Hub, for \`linux/amd64\` and \`linux/arm64\`. This release built \`docker.io/is4it/midgie:${VERSION}@${DIGEST}\`; pin that digest to keep the same bytes after an image-only rebuild moves the tag. See [Container image and Helm chart](${docs}/container.md).
           - **Helm chart:** \`midgie-${VERSION}.tgz\`, below: \`helm install midgie ${repo}/releases/download/${TAG}/midgie-${VERSION}.tgz -n midgie --create-namespace\`
           - **SBOM:** \`midgie-${VERSION}.cdx.json\`, below. It lists every library the JAR bundles, in CycloneDX format; [Verifying a release](${docs}/install.md#verifying-a-release) checks it against the JAR.
@@ -267,5 +269,6 @@ jobs:
           gh release create "$TAG" --verify-tag --title "midgie ${VERSION}" \
             --notes-file release-notes.md "${prerelease[@]}" \
             "midgie-${VERSION}.jar#Standalone binary (java -jar, Java 21+): midgie-${VERSION}.jar" \
+            "midgie-${VERSION}.jar.sha256#SHA-256 of the binary: midgie-${VERSION}.jar.sha256" \
             "midgie-${VERSION}.tgz#Helm chart: midgie-${VERSION}.tgz" \
             "midgie-${VERSION}.cdx.json#SBOM of the JAR (CycloneDX): midgie-${VERSION}.cdx.json"

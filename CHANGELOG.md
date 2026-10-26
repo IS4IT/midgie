@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A checksum next to the JAR.** Releases attach `midgie-<version>.jar.sha256`, so `sha256sum -c midgie-<version>.jar.sha256` checks a download without `gh` or cosign.
+
 ### Changed
 
 - **Release pages say what each download is.** The assets carry labels — standalone binary, Helm chart, SBOM — that the page shows in place of the file names; the files and their download URLs keep their names. The notes end with a Downloads section that links the container image on Docker Hub and gives the digest the release built, so a deployment can pin exactly that image.
