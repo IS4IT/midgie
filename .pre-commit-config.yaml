@@ -21,6 +21,8 @@ repos:
     hooks:
       - id: check-merge-conflict
       - id: check-added-large-files
+      # midgie's input is object XML: a file that is not well-formed is caught here rather than by a test.
+      - id: check-xml
       - id: check-yaml
         # Helm templates are Go templates that render to YAML, not YAML themselves.
         exclude: ^charts/midgie/templates/
