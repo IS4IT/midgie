@@ -247,6 +247,37 @@ class DiffCommandTest {
                 result.protectedSkippedPaths());
     }
 
+    @Test
+    void aStageConstantIsComparedAsTheExpressionNotItsValue(@TempDir Path dir) throws Exception {
+        // docs/staging.md: the server stores <const>ldapHost</const>, not the host it evaluates to, so the same
+        // tree is in sync on every stage. A value hard-coded on the server in its place is drift.
+        String constant = "<expression><const>ldapHost</const></expression>";
+        File desired = write(dir, "desired.xml", ldapResourceWithHost(constant));
+        File sameConstant = write(dir, "same.xml", ldapResourceWithHost(constant));
+        File hardCoded = write(dir, "hard-coded.xml", ldapResourceWithHost("ldap.prod.example"));
+
+        DiffEngine.DiffResult same = engine().diff(desired, sameConstant, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
+        assertFalse(same.hasDrift(), DeltaOutput.toModificationXml(prismContext, same.delta()));
+
+        DiffEngine.DiffResult drift = engine().diff(desired, hardCoded, EquivalenceStrategy.REAL_VALUE,
+                DiffEngine.Scope.PRESENT, DiffEngine.MultiValueStrategy.replaceAll());
+        assertTrue(drift.hasDrift(), "a literal host in place of the constant must be drift");
+        String xml = DeltaOutput.toModificationXml(prismContext, drift.delta());
+        assertTrue(xml.contains("<const>ldapHost</const>"), "the delta must restore the constant: " + xml);
+        assertTrue(xml.contains("ldap.prod.example"), "and take the literal out: " + xml);
+    }
+
+    private static String ldapResourceWithHost(String host) {
+        return "<resource xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
+                + " xmlns:icfc=\"http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/connector-schema-3\""
+                + " xmlns:cfg=\"http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/bundle/"
+                + "com.evolveum.polygon.connector-ldap/com.evolveum.polygon.connector.ldap.LdapConnector\""
+                + " oid=\"a17e57e5-0000-0000-0000-0000000000e2\"><name>r</name><connectorConfiguration>"
+                + "<icfc:configurationProperties><cfg:host>" + host + "</cfg:host><cfg:port>389</cfg:port>"
+                + "</icfc:configurationProperties></connectorConfiguration></resource>";
+    }
+
     private static String ldapResource(String bindPassword) {
         return "<resource xmlns=\"http://midpoint.evolveum.com/xml/ns/public/common/common-3\""
                 + " xmlns:t=\"http://prism.evolveum.com/xml/ns/public/types-3\""

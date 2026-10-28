@@ -61,6 +61,11 @@ class LiveIntegrationTest {
     private static final String TEMPLATE_OID = "a17e57e5-0000-0000-0000-0000000000d5";
     private static final String GUI_ROLE_OID = "a17e57e5-0000-0000-0000-0000000000d6";
     private static final String SMART_ROLE_OID = "a17e57e5-0000-0000-0000-0000000000d7";
+    // The staging tree (docs/staging.md): objects that refer to the rig's stage constants.
+    private static final String STAGE_TEMPLATE_OID = "a17e57e5-0000-0000-0000-0000000000d8";
+    private static final String STAGE_ARCHETYPE_OID = "a17e57e5-0000-0000-0000-0000000000d9";
+    private static final String STAGE_USER_OID = "a17e57e5-0000-0000-0000-0000000000da";
+    private static final String STAGE_RESOURCE_OID = "a17e57e5-0000-0000-0000-0000000000db";
     // Built-in roles, only ever induced by the throwaway role, which nobody is assigned.
     private static final String SUPERUSER_ROLE_OID = "00000000-0000-0000-0000-000000000004";
     private static final String END_USER_ROLE_OID = "00000000-0000-0000-0000-000000000008";
@@ -302,6 +307,69 @@ class LiveIntegrationTest {
         run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
         CliResult drySync = run("deploy", v2.getPath(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--dry-run");
         assertEquals(0, drySync.exit, drySync.err);
+    }
+
+    @Test
+    void aStageConstantResolvesOnTheServerWhileTheTreeStaysInSync(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteStageObjects();
+        // docs/staging.md: the tree names a constant and the server holds its value. The rig sets midgieStage
+        // directly and midgieStageFromFile through _FILE (docker/docker-compose.yml); a template mapping
+        // copies both onto a user, which is where the evaluated values can be seen.
+        writeStageTree(dir);
+
+        CliResult create = run("deploy", dir.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        assertEquals(0, create.exit, create.out + create.err);
+        String user = client.getObject("users", STAGE_USER_OID);
+        assertTrue(user.contains("<costCenter>rig</costCenter>"),
+                "MP_SET_midpoint_constants_midgieStage should reach the mapping:\n" + user);
+        assertTrue(user.contains("<telephoneNumber>rig-from-file</telephoneNumber>"),
+                "the _FILE constant should be read from its file:\n" + user);
+        assertTrue(client.getObject("objectTemplates", STAGE_TEMPLATE_OID).contains("<const>midgieStage</const>"),
+                "the server stores the constant's name, not its value");
+
+        CliResult again = run("deploy", dir.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        assertEquals(0, again.exit, again.out + again.err);
+        assertTrue(again.out.contains("0 patched, 3 in-sync"),
+                "values the server computed from constants must not read as drift:\n" + again.out);
+    }
+
+    @Test
+    void aResourceKeepsItsConstantAndAHardCodedHostIsDrift(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        tryDelete("resources", STAGE_RESOURCE_OID);
+        // The docs/staging.md example: a connector property given as <const>. Nothing listens on the host it
+        // evaluates to; the resource is only stored and read back, never connected.
+        Path file = dir.resolve("resource.xml");
+        Files.writeString(file, stageResource("<expression><const>midgieStage</const></expression>"),
+                StandardCharsets.UTF_8);
+
+        CliResult create = run("deploy", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes");
+        assertEquals(0, create.exit, create.out + create.err);
+        // Read through a search, as midgie does: midPoint tries to connect on every read of a resource, and a
+        // GET whose connection fails answers 250 with an OperationResult instead of the object.
+        String stored = client.searchObjects("resources",
+                "<query xmlns=\"http://prism.evolveum.com/xml/ns/public/query-3\"><filter><equal><path>name</path>"
+                        + "<value>zz-it-stage-resource</value></equal></filter></query>");
+        assertTrue(stored.contains("<const>midgieStage</const>"),
+                "the server stores the expression in the connector configuration:\n" + stored);
+
+        CliResult inSync = run("diff", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--format", "summary");
+        assertEquals(0, inSync.exit, "the same tree must be in sync:\n" + inSync.out + inSync.err);
+
+        // A server that holds the value hard-coded in place of the constant: that is the drift a stage diff is
+        // for. Created rather than patched in, so the check does not depend on a connector-property PATCH.
+        tryDelete("resources", STAGE_RESOURCE_OID);
+        Path hardCoded = dir.resolve("hard-coded.xml");
+        Files.writeString(hardCoded, stageResource("ldap.rig.example"), StandardCharsets.UTF_8);
+        CliResult recreate = run("deploy", hardCoded.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--yes");
+        assertEquals(0, recreate.exit, recreate.out + recreate.err);
+        CliResult drift = run("diff", file.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
+                "--format", "summary");
+        assertEquals(1, drift.exit, drift.out + drift.err);
+        assertTrue(drift.out.contains("host"), "the hard-coded host must surface:\n" + drift.out);
     }
 
     @Test
@@ -1264,6 +1332,14 @@ class LiveIntegrationTest {
         tryDelete("roles", GUI_ROLE_OID);
         tryDelete("roles", SMART_ROLE_OID);
         deleteByName("roles", COMBO_NAME);
+        deleteStageObjects();
+    }
+
+    private static void deleteStageObjects() {
+        tryDelete("users", STAGE_USER_OID);
+        tryDelete("archetypes", STAGE_ARCHETYPE_OID);
+        tryDelete("objectTemplates", STAGE_TEMPLATE_OID);
+        tryDelete("resources", STAGE_RESOURCE_OID);
     }
 
     private static void tryDelete(String type, String oid) {
@@ -1310,6 +1386,64 @@ class LiveIntegrationTest {
                         + "  <assignment><targetRef oid=\"" + DEPLOY_ROLE_OID + "\" type=\"c:RoleType\"/></assignment>\n"
                         + "</user>",
                 StandardCharsets.UTF_8);
+    }
+
+    /**
+     * A template whose mappings copy the rig's two stage constants onto a user, an archetype that applies it,
+     * and a user with that archetype. The user file names neither item the mappings set.
+     */
+    private static void writeStageTree(Path dir) throws IOException {
+        Files.writeString(dir.resolve("template.xml"),
+                "<objectTemplate xmlns=\"" + NS + "\" oid=\"" + STAGE_TEMPLATE_OID + "\">\n"
+                        + "  <name>zz-it-stage-template</name>\n"
+                        + stageMapping("stage", "midgieStage", "costCenter")
+                        + stageMapping("stage-from-file", "midgieStageFromFile", "telephoneNumber")
+                        + "</objectTemplate>",
+                StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("archetype.xml"),
+                "<archetype xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\" oid=\"" + STAGE_ARCHETYPE_OID + "\">\n"
+                        + "  <name>zz-it-stage-archetype</name>\n"
+                        + "  <archetypePolicy><objectTemplateRef oid=\"" + STAGE_TEMPLATE_OID
+                        + "\" type=\"c:ObjectTemplateType\"/></archetypePolicy>\n"
+                        + "</archetype>",
+                StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("user.xml"),
+                "<user xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\" oid=\"" + STAGE_USER_OID + "\">\n"
+                        + "  <name>zz-it-stage-user</name>\n"
+                        + "  <assignment><targetRef oid=\"" + STAGE_ARCHETYPE_OID
+                        + "\" type=\"c:ArchetypeType\"/></assignment>\n"
+                        + "</user>",
+                StandardCharsets.UTF_8);
+    }
+
+    private static String stageMapping(String name, String constant, String target) {
+        return "  <mapping>\n    <name>" + name + "</name>\n    <strength>strong</strength>\n"
+                + "    <expression><const>" + constant + "</const></expression>\n"
+                + "    <target><path>" + target + "</path></target>\n  </mapping>\n";
+    }
+
+    /**
+     * An LDAP resource whose {@code host} property is {@code host}, a literal or an expression. A rig that has
+     * run several midPoint releases keeps one LDAP connector object per release, only the current one
+     * available, so the reference filters on that too.
+     */
+    private static String stageResource(String host) {
+        return "<resource xmlns=\"" + NS + "\" xmlns:c=\"" + NS + "\""
+                + " xmlns:q=\"http://prism.evolveum.com/xml/ns/public/query-3\""
+                + " xmlns:icfc=\"http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/connector-schema-3\""
+                + " xmlns:ldap=\"http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/bundle/"
+                + "com.evolveum.polygon.connector-ldap/com.evolveum.polygon.connector.ldap.LdapConnector\""
+                + " oid=\"" + STAGE_RESOURCE_OID + "\">\n"
+                + "  <name>zz-it-stage-resource</name>\n"
+                + "  <connectorRef type=\"c:ConnectorType\"><filter><q:and><q:equal><q:path>c:connectorType</q:path>"
+                + "<q:value>com.evolveum.polygon.connector.ldap.LdapConnector</q:value></q:equal>"
+                + "<q:equal><q:path>c:available</q:path><q:value>true</q:value></q:equal></q:and></filter>"
+                + "</connectorRef>\n"
+                + "  <connectorConfiguration><icfc:configurationProperties>\n"
+                + "    <ldap:host>" + host + "</ldap:host>\n"
+                + "    <ldap:port>389</ldap:port>\n"
+                + "  </icfc:configurationProperties></connectorConfiguration>\n"
+                + "</resource>";
     }
 
     /** A lookup table with three rows keyed by {@code key} — the shape whose rows the server withholds. */

@@ -92,9 +92,22 @@ services:
       - MP_SET_midpoint_repository_database=postgresql
       - MP_UNSET_midpoint_repository_hibernateHbm2ddl=1
       - MP_NO_ENV_COMPAT=1
+      # Stage constants for the live tests of docs/staging.md, set both ways the page describes:
+      # directly, and read from a file (the _FILE suffix, as a mounted secret would be).
+      - MP_SET_midpoint_constants_midgieStage=rig
+      - MP_SET_midpoint_constants_midgieStageFromFile_FILE=/opt/midpoint/constants/midgieStageFromFile
+    configs:
+      # Inline, not a bind mount: Compose copies it into the container, so it arrives on a Colima VM
+      # that does not share this checkout's disk, or a remote Docker host, as well as on a local one.
+      - source: midgie_stage_from_file
+        target: /opt/midpoint/constants/midgieStageFromFile
     networks: [net]
     volumes:
       - mp_home:/opt/midpoint/var
+
+configs:
+  midgie_stage_from_file:
+    content: rig-from-file
 
 networks:
   net:
