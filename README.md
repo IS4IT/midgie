@@ -85,6 +85,7 @@ output — see [Exit codes](docs/reference.md#exit-codes).
 | [The policy file](docs/policy.md) | per-object and per-item settings, `apply=on-create`, the built-in rules |
 | [Diff strategy](docs/strategy.md) | equivalence and multi-value handling, and the guard rails |
 | [Configuration](docs/configuration.md) | `midgie.properties`, the tree-local file, environment variables |
+| [Staging across environments](docs/staging.md) | one tree for dev, test and prod: midPoint constants, secrets, rendered trees |
 | [Reference](docs/reference.md) | exit codes, every flag, connecting through a proxy |
 | [Safety guards](docs/safety.md) | what midgie leaves out or refuses, and why |
 | [Schema and midPoint versions](docs/schema.md) | base and extension schema, the midPoint versions a build serves |

@@ -9,6 +9,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A staging guide.** `docs/staging.md` shows how one tree serves dev, test and prod: midPoint constants for the values that differ per stage, keeping secrets out of the tree, committing rendered per-stage trees so they stay tracked, and why a branch per stage is the weaker model.
 - **A checksum next to the JAR.** Releases attach `midgie-<version>.jar.sha256`, so `sha256sum -c midgie-<version>.jar.sha256` checks a download without `gh` or cosign.
 
 ### Changed
