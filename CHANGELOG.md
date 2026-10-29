@@ -18,6 +18,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Release pages say what each download is.** The assets carry labels — standalone binary, Helm chart, SBOM — that the page shows in place of the file names; the files and their download URLs keep their names. The notes end with a Downloads section that links the container image on Docker Hub and gives the digest the release built, so a deployment can pin exactly that image.
 
+### Security
+
+- **Guava is 33.7.2.** The midPoint 4.11.0 schema brings Guava 32.1.2-jre, which GHSA-xxph-c9ww-hj94 (CVE-2026-102554) affects: a denial of service through unthrottled memory allocation during deserialization. midgie now pins 33.7.2, which fixes it, in the JAR, the image and the SBOM. midgie uses no Guava API itself and deserializes no Java objects, so the exposure was small.
+
 ## [0.20.0] - 2026-10-23
 
 ### Added

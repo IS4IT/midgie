@@ -32,6 +32,12 @@
 
         <picocli.version>4.7.7</picocli.version>
         <junit.version>6.1.3</junit.version>
+
+        <!-- Guava comes in through midpoint-schema and prism, and midPoint 4.11.0 brings 32.1.2-jre, which
+             GHSA-xxph-c9ww-hj94 affects; 33.7.2 fixes it. Pinned in dependencyManagement below, so the JAR
+             ships the fixed version and Dependabot can see it. A midpoint.version that brings 33.7.2 or
+             later makes the pin unnecessary. -->
+        <guava.version>33.7.2-jre</guava.version>
     </properties>
 
     <repositories>
@@ -43,6 +49,16 @@
             <snapshots><enabled>false</enabled></snapshots>
         </repository>
     </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+                <version>${guava.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Pulls prism-api / prism-impl transitively. Provides MidPointPrismContextFactory,
