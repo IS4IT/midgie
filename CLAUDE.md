@@ -37,7 +37,7 @@ CI's `Licences & vulnerabilities` job reads `target/bom.json`: a bundled library
 
 ## Verifying midPoint APIs
 
-The midPoint source is checked out at **`/Volumes/Daten/git/midpoint`**, at the tag matching `<midpoint.version>` (currently `v4.11.0`). When in doubt about a signature, grep there rather than guessing — DESIGN.md's API table lists the exact classes and line numbers already confirmed.
+Keep a checkout of the midPoint source (<https://github.com/Evolveum/midpoint>) outside this repo, at the tag matching `<midpoint.version>` (currently `v4.11.0`). Where it lives differs per machine; ask if you cannot find it. When in doubt about a signature, grep there rather than guessing — DESIGN.md's API table lists the exact classes and line numbers already confirmed.
 
 ## Conventions
 

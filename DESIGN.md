@@ -6,7 +6,8 @@ midPoint's own `PrismObject.diff` that emits the exact `ObjectModificationType` 
 endpoint consumes.
 
 This file is the build-ready brief. It is self-contained — you do not need the conversation it came
-from. Verify any API detail against the midPoint source at `/Volumes/Daten/git/midpoint`.
+from. Verify any API detail against a checkout of the midPoint source
+(<https://github.com/Evolveum/midpoint>) at the tag matching `<midpoint.version>` in `pom.xml`.
 
 ## Why this exists
 
@@ -45,7 +46,7 @@ ObjectDelta<?> delta   = live.diff(desired, EquivalenceStrategy.REAL_VALUE); // 
 ObjectModificationType mod = DeltaConvertor.toObjectModificationType(delta); // == the REST PATCH body
 ```
 
-Confirmed API facts (source references are into `/Volumes/Daten/git/midpoint`):
+Confirmed API facts (source references are paths in the midPoint source tree):
 
 | Element | FQN / note |
 |---|---|

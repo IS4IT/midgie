@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for the offline diff engine. Fixtures follow midPoint's own {@code TestParseDiffPatch} /
- * {@code TestDiffEquals} (see /Volumes/Daten/git/midpoint/infra/schema/src/test).
+ * {@code TestDiffEquals} (midPoint source, {@code infra/schema/src/test}).
  */
 class DiffCommandTest {
 
