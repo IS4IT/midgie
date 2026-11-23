@@ -333,6 +333,20 @@ class PolicyTest {
     }
 
     @Test
+    void linesRestatingABuiltInCountWithTheBuiltInsNotTheFile(@TempDir Path dir) throws Exception {
+        // The file 'init --write-policy' seeds holds every built-in as an active line and nothing else; the
+        // policy line used to report it as nine rules of its own, plus the same nine built-in.
+        Policy seeded = effective(dir, Policy.builtInText());
+        assertEquals(0, seeded.ruleCount(), "the seeded file adds nothing to the built-ins");
+        assertEquals(9, seeded.builtInCount());
+
+        Policy edited = effective(dir, Policy.builtInText(), "RoleType/*  scope=present",
+                "TaskType/*/executionState  apply=always");
+        assertEquals(2, edited.ruleCount(), "a new rule and an override of a built-in are the file's own");
+        assertEquals(9, edited.builtInCount());
+    }
+
+    @Test
     void theDebugLogNamesABuiltInRuleAsBuiltIn() throws Exception {
         Policy policy = Policy.effective(null);
         ch.qos.logback.classic.Logger logger =

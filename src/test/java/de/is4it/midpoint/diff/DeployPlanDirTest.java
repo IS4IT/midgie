@@ -81,8 +81,9 @@ class DeployPlanDirTest {
         Result first = deploy(dir, "--plan");
         assertEquals(1, first.exit, first.err);
         assertEquals(1, planFiles(plan).size(), "one object, one plan file");
-        assertTrue(first.out.contains("Apply with: midgie deploy " + dir + " --apply-plan --url <url>"),
-                "it says how to replay what it wrote:\n" + first.out);
+        // The path ends at a space rather than a full stop, so a double-click in a terminal selects it alone.
+        assertTrue(first.out.contains("Wrote 1 plan file(s) to " + plan + " — apply with: midgie deploy " + dir
+                + " --apply-plan --url <url>"), "it says where the plan went and how to replay it:\n" + first.out);
 
         Result second = deploy(dir, "--plan");
         assertEquals(1, second.exit, second.err);
@@ -110,7 +111,8 @@ class DeployPlanDirTest {
         Result overwritten = deploy(tree, "--plan", plan, "--overwrite");
         assertEquals(1, overwritten.exit, overwritten.err);
         assertTrue(overwritten.err.contains("replaced the previous plan in " + plan), overwritten.err);
-        assertTrue(overwritten.out.contains("Apply with: midgie deploy --apply-plan " + plan), overwritten.out);
+        assertTrue(overwritten.out.contains("Wrote 1 plan file(s) to " + plan + " — apply with: midgie deploy "
+                + "--apply-plan " + plan), overwritten.out);
     }
 
     @Test

@@ -1594,7 +1594,7 @@ public class DeployCommand implements Callable<Integer> {
             // An unfinished plan cannot be replayed anyway, so there is nothing to protect; refusing until
             // the operator deletes it by hand only makes a failed run harder to repeat.
             int discarded = PlanStore.clear(planDir);
-            note("note: discarded " + discarded + " file(s) of an unfinished plan in " + planDir + ".");
+            note("note: discarded an unfinished plan in " + planDir + " (" + discarded + " file(s)).");
         } else if (contents == PlanStore.Contents.PLAN) {
             int replaced = PlanStore.clear(planDir);
             note("note: replaced the previous plan in " + planDir + " (" + replaced + " file(s)).");
@@ -1683,7 +1683,7 @@ public class DeployCommand implements Callable<Integer> {
         emitSummary(tally, true);
         if (tally.failed > 0) {
             if (tally.changed() > 0) {
-                status("Wrote " + tally.changed() + " plan file(s) to " + planDir + ".");
+                status("Wrote " + tally.changed() + " plan file(s) to " + planDir);
             }
             note("note: the plan in " + planDir + " is incomplete and will not be replayed; fix the errors "
                     + "above and re-run --plan.");
@@ -1692,7 +1692,8 @@ public class DeployCommand implements Callable<Integer> {
         writePlanState(tracking, units, wouldApply, planFiles);
         PlanStore.markComplete(planDir);
         if (tally.changed() > 0) {
-            status("Wrote " + tally.changed() + " plan file(s) to " + planDir + ". Apply with: "
+            // The path is followed by a space, not a full stop, so a double-click in a terminal selects it alone.
+            status("Wrote " + tally.changed() + " plan file(s) to " + planDir + " — apply with: "
                     + applyPlanCommand());
         }
         return tally.changed() > 0 ? 1 : 0;
@@ -1745,7 +1746,7 @@ public class DeployCommand implements Callable<Integer> {
             for (PlanStore.Entry entry : entries) {
                 reportEntry(entry, entry.kind == PlanStore.Kind.CREATE ? "would-create" : "would-patch", "", false);
             }
-            status("Plan: " + entries.size() + " change(s) would be applied from " + applyPlanDir + ".");
+            status("Plan: " + entries.size() + " change(s) would be applied from " + applyPlanDir);
             return 1;
         }
         if (confirmEachApply && Io.console() == null) {

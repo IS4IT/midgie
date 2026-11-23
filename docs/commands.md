@@ -82,7 +82,7 @@ Three more flags round it out: **`--retry`** re-applies the failed units until t
 **Without a DIR**, `--plan` writes to `plan/` in the deployment's own folder, next to its [rollback plans](#the-rollback-plan-always-on): `$XDG_STATE_HOME/midgie/<deployment>/plan/` (else `~/.local/state/…`), readable by you alone. That folder is midgie's, so every `--plan` run replaces the plan in it — run it as often as it takes to get the tree right, and there are no old plan folders to clean up. The run ends with the command that replays it, and **`--apply-plan` without a DIR** finds the same folder from the tree you give it (default: the current directory), the way `rollback` finds its net:
 
 ```bash
-bin/midgie deploy config/ --url … --plan               # … Wrote 3 plan file(s) to ~/.local/state/midgie/<deployment>/plan. Apply with: midgie deploy config/ --apply-plan --url <url>
+bin/midgie deploy config/ --url … --plan               # … Wrote 3 plan file(s) to ~/.local/state/midgie/<deployment>/plan — apply with: midgie deploy config/ --apply-plan --url <url>
 bin/midgie deploy config/ --apply-plan --url … --yes
 ```
 

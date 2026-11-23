@@ -107,9 +107,16 @@ final class Policy {
         this.rules = rules;
     }
 
-    /** How many rules the file holds, built-ins not counted; zero for a file of comments only. */
+    /**
+     * How many rules the file adds to the built-ins; zero for a file of comments only. A file line restating a
+     * built-in, as {@code init --write-policy} writes them all, is counted with the built-ins rather than here:
+     * the freshly seeded file holds no rule of its own, and the policy line should not say it does.
+     */
     int ruleCount() {
-        return (int) rules.stream().filter(rule -> !rule.builtIn()).count();
+        Set<String> builtIns = builtInMeanings();
+        return (int) rules.stream()
+                .filter(rule -> !rule.builtIn() && !builtIns.contains(rule.meaning()))
+                .count();
     }
 
     /** How many built-in rules apply beneath the file's. */
@@ -466,12 +473,7 @@ final class Policy {
      * resource for them to reach — which says nothing about a typo.
      */
     List<String> unmatchedRules() {
-        Set<String> builtIns = new HashSet<>();
-        for (Rule rule : rules) {
-            if (rule.builtIn()) {
-                builtIns.add(rule.meaning());
-            }
-        }
+        Set<String> builtIns = builtInMeanings();
         List<String> unmatched = new ArrayList<>();
         for (Rule rule : rules) {
             if (!rule.matched && !rule.builtIn() && !builtIns.contains(rule.meaning())) {
@@ -479,6 +481,17 @@ final class Policy {
             }
         }
         return unmatched;
+    }
+
+    /** What each built-in rule says, to tell a file line that only restates one from a rule of the file's own. */
+    private Set<String> builtInMeanings() {
+        Set<String> meanings = new HashSet<>();
+        for (Rule rule : rules) {
+            if (rule.builtIn()) {
+                meanings.add(rule.meaning());
+            }
+        }
+        return meanings;
     }
 
     /** Whether an item-level selector's leading identity segments can apply to this object at all. */
