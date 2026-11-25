@@ -663,6 +663,8 @@ public class InitCommand implements Callable<Integer> {
         examples.add(new String[] {"apply=never", "Leave an item to the server entirely: never written, changed "
                 + "or removed — the exception to an object owned under scope=full, such as log levels raised "
                 + "while troubleshooting.", "SystemConfigurationType/*/logging  apply=never"});
+        examples.add(new String[] {"remainder=yes", "Have 'midgie pull' write every object of a type into the "
+                + "remainder folder, including the ones no file of the tree declares.", "RoleType/*  remainder=yes"});
         examples.add(new String[] {"smart-refs=verify", "Check references written as filters by running the filter "
                 + "on the server, instead of trusting the OID midPoint resolved.", "RoleType/*  smart-refs=verify"});
         examples.add(new String[] {"allow-inplace-merge=true", "Address an object by OID, whatever its name — here "
@@ -690,11 +692,12 @@ public class InitCommand implements Callable<Integer> {
         String builtIns = Policy.builtInText();
         out.append("\n# --- built-in rules: what midgie does with or without this file\n")
                 .append("#\n")
-                .append("# midgie applies these on every deploy and live diff. They are listed so this file\n")
+                .append("# midgie applies these on every deploy, live diff and pull. They are listed so this file\n")
                 .append("# shows the whole policy in effect; deleting one changes nothing. An apply=on-create\n")
                 .append("# item is written when its object is created and never touched again — not patched, not\n")
                 .append("# deleted under --scope full, not removed when it drops out of the file; an apply=never\n")
-                .append("# item is not even written on create. To change one, write the same selector with\n")
+                .append("# item is not even written on create, nor pulled. A remainder=no object gets no file\n")
+                .append("# from 'midgie pull'. To change one, write the same selector with\n")
                 .append("# another value ABOVE this block (lines in the block are rewritten by the next\n")
                 .append("# 'init --write-policy'). For every task, on every deploy:\n")
                 .append("#   TaskType/*/executionState  apply=always\n")

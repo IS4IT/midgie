@@ -8,6 +8,7 @@ The contract lets CI gate on drift without parsing output:
 |---|---|---|---|
 | `diff` | no differences | differences found (drift), or the object would be created | error, or the object was skipped |
 | `deploy --dry-run` / `--plan` | nothing to change | would change something | error |
+| `pull` | written, or already in step | `--dry-run`: something would change | error, or a [conflict](pull.md#what-pull-does-not-change) left an object's file as it was |
 | `deploy` (real apply) | all applied/in-sync/skipped/declined | — | a unit failed, or error |
 | `deploy` (offline, no `--url`) | printed the apply order | — | error |
 | `rollback` | restored, nothing to roll back, or declined | `--dry-run`: something would be restored | error, a refused plan (wrong server, stale), or a failed restore |
@@ -85,7 +86,7 @@ midgie deploy config/ --url https://mp.example/midpoint \
 | `--trace` | Everything `--debug` shows plus the detail behind it: per-file and per-value decisions, stack traces, full REST request/response bodies, and the framework logs. The content of `clearValue`, `cipherValue` and `digestValue` is shown as `***`; other values a file keeps in plain text are not recognisable as secrets and **may still show**, so treat a trace log as sensitive. |
 | `--no-create-if-absent` | *(deploy)* Fail on an object that does not exist instead of creating it (and skip an OID-less one). Creating is the default. |
 | `--no-match-by-name` | *(diff, deploy)* Do not patch an OID-less object found by type + name — skip it instead. Resolving it by name (a single match) is the default. |
-| `--dry-run` | *(deploy, rollback)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
+| `--dry-run` | *(deploy, pull, rollback)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
 | `-y, --yes` | *(deploy, rollback)* Apply without the interactive confirmation prompt (required non-interactively). *(init)* Answer the `--write-cacert` trust prompt. |
 
-`deploy` adds tree-level flags — `--retry`, `--plan [dir]` / `--apply-plan [dir]` / `--overwrite` (see [Saved plans](commands.md#saved-plans)), `--rollback-plan <dir>` / `--no-rollback-plan`, `--confirm-each-apply` and `--app <name>` — and shares `--policy <file>`, `--no-prune` and `--stages <glob>` (the tree's [stage folders](strategy.md#full-scope-needs-the-whole-object), comma-separated or repeated) with a live `diff`; all are described under [`deploy`](commands.md#deploy--reconcile-files-and-folders), [Detecting what you removed](removal-detection.md) and [The policy file](policy.md).
+`deploy` adds tree-level flags — `--retry`, `--plan [dir]` / `--apply-plan [dir]` / `--overwrite` (see [Saved plans](commands.md#saved-plans)), `--rollback-plan <dir>` / `--no-rollback-plan`, `--confirm-each-apply` and `--app <name>` — and shares `--policy <file>`, `--no-prune`, `--stages <glob>` (the tree's [stage folders](strategy.md#full-scope-needs-the-whole-object), comma-separated or repeated) and `--remainder <dir>` (the folder [`pull`](pull.md) writes to, whose files make an object [default to full scope](strategy.md#full-scope-needs-the-whole-object)) with a live `diff`; all are described under [`deploy`](commands.md#deploy--reconcile-files-and-folders), [Detecting what you removed](removal-detection.md) and [The policy file](policy.md).

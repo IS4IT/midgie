@@ -65,14 +65,29 @@ class TextDiffTest {
     }
 
     @Test
-    void aValueTooLargeToDiffIsRefusedRatherThanDumped() {
+    void aChangeTooLargeToDiffIsRefusedRatherThanDumped() {
         // The caller falls back to naming the sizes; the point is that it is told, not left to print a wall.
+        StringBuilder left = new StringBuilder();
+        StringBuilder right = new StringBuilder();
+        for (int i = 0; i < 500; i++) {
+            left.append("line ").append(i).append('\n');
+            right.append("other ").append(i).append('\n');
+        }
+
+        assertNull(TextDiff.unified(left.toString(), right.toString(), 2));
+    }
+
+    @Test
+    void aLongValueWithOneLocalChangeIsStillDiffed() {
+        // Only the part between the common start and end needs the table, so the length of the value is no limit.
         StringBuilder huge = new StringBuilder();
         for (int i = 0; i < 500; i++) {
             huge.append("line ").append(i).append('\n');
         }
 
-        assertNull(TextDiff.unified(huge.toString(), huge + "extra", 2));
+        String diff = TextDiff.unified(huge.toString(), huge + "extra", 2);
+
+        assertTrue(diff.contains("+ extra") && diff.contains("unchanged line(s)"), diff);
     }
 
     @Test

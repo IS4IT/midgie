@@ -63,16 +63,15 @@ bin/midgie deploy config/ --url https://mp.example/midpoint --user administrator
 bin/midgie rollback --url https://mp.example/midpoint --user administrator --dry-run
 ```
 
-`midgie` has four subcommands:
+`midgie` has five subcommands:
 
 - **`diff`** shows the change for a single object and never writes.
-- **`deploy`** reconciles any number of files and folders — one file is a tree of one — and leaves a rollback
-  plan behind.
+- **`deploy`** reconciles any number of files and folders — one file is a tree of one — and leaves a rollback plan behind.
+- **`pull`** goes the other way: it writes what a server holds beyond the tree's files into the tree, for git to review.
 - **`rollback`** puts back what the last `deploy` changed.
 - **`init`** holds the one-off set-up steps, such as turning on removal detection for a server.
 
-`diff` and `deploy --dry-run` exit `1` when something would change, so CI can gate on drift without parsing
-output — see [Exit codes](docs/reference.md#exit-codes).
+`diff` and `deploy --dry-run` exit `1` when something would change, so CI can gate on drift without parsing output — see [Exit codes](docs/reference.md#exit-codes).
 
 ## Documentation
 
@@ -80,7 +79,8 @@ output — see [Exit codes](docs/reference.md#exit-codes).
 |---|---|
 | [Installing](docs/install.md) | the JAR, the launcher, verifying a release |
 | [Container image and Helm chart](docs/container.md) | running midgie in Docker, Kubernetes and OpenShift |
-| [Commands](docs/commands.md) | `diff`, `deploy`, `rollback` and `init` in detail |
+| [Commands](docs/commands.md) | `diff`, `deploy`, `pull`, `rollback` and `init` in detail |
+| [Pulling from the server](docs/pull.md) | `pull`: what the server holds beyond the tree's files, as a remainder folder git can review |
 | [Detecting what you removed](docs/removal-detection.md) | the opt-in three-way comparison that removes what the tree dropped |
 | [The policy file](docs/policy.md) | per-object and per-item settings, `apply=on-create`, the built-in rules |
 | [Diff strategy](docs/strategy.md) | equivalence and multi-value handling, and the guard rails |

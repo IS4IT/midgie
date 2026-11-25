@@ -1,8 +1,8 @@
 # The policy file
 
-**`--policy <file>`** is a central file of `<selector> key=value` lines keyed on the object/item — for when part of the tree needs, say, `scope=full` on one object or `multivalue=merge` on a container. `deploy` and a live `diff` read it. The selector is a single glob over `Type/Name/item…` (or `oid:<oid>/item…`) with `*` (one segment) and `**` (any depth) at any level, and the most specific one wins; an `oid:` rule pins exactly one object and outranks any pattern. Note that the object identity is *two* segments, so "every role" is `RoleType/*`, and an item rule scoped to a type is one glob spanning both: `RoleType/*/assignment`. The object XML stays pure. Full design in [`DESIGN.md`](../DESIGN.md#deploy--apply-a-folder-tree).
+**`--policy <file>`** is a central file of `<selector> key=value` lines keyed on the object/item — for when part of the tree needs, say, `scope=full` on one object or `multivalue=merge` on a container. `deploy`, a live `diff` and `pull` read it. The selector is a single glob over `Type/Name/item…` (or `oid:<oid>/item…`) with `*` (one segment) and `**` (any depth) at any level, and the most specific one wins; an `oid:` rule pins exactly one object and outranks any pattern. Note that the object identity is *two* segments, so "every role" is `RoleType/*`, and an item rule scoped to a type is one glob spanning both: `RoleType/*/assignment`. The object XML stays pure. Full design in [`DESIGN.md`](../DESIGN.md#deploy--apply-a-folder-tree).
 
-Two details worth knowing when an object name is awkward: quote the selector if the name contains `=` (`"OrgType/ou=people"  scope=full`), and escape a `/` inside a name (`RoleType/App \/ Admin`), since the selector is itself a `/`-separated path. `init --write-policy` writes both forms itself. `deploy` names the policy file it uses at the start of the run — `midgie: policy: /work/repo/midgie.policy (3 rule(s), plus 9 built-in)`, where a line restating a built-in rule, as `init --write-policy` writes them all, counts as built-in rather than as one of the file's — which matters most when it came from a [config file](configuration.md#a-midgieproperties-in-the-tree) rather than the command line; and it names any policy line that matched no object, so a typo is not mistaken for a rule that ran.
+Two details worth knowing when an object name is awkward: quote the selector if the name contains `=` (`"OrgType/ou=people"  scope=full`), and escape a `/` inside a name (`RoleType/App \/ Admin`), since the selector is itself a `/`-separated path. `init --write-policy` writes both forms itself. `deploy` names the policy file it uses at the start of the run — `midgie: policy: /work/repo/midgie.policy (3 rule(s), plus 10 built-in)`, where a line restating a built-in rule, as `init --write-policy` writes them all, counts as built-in rather than as one of the file's — which matters most when it came from a [config file](configuration.md#a-midgieproperties-in-the-tree) rather than the command line; and it names any policy line that matched no object, so a typo is not mistaken for a rule that ran.
 
 A wildcard is always a *whole* segment: there is no matching inside a segment (`RoleType/App-*` is not "roles starting with App-"), and one selector is one glob (`RoleType/* **/assignment` is not shorthand for two rules). Both are refused when the file loads, with the line number — as written they used to read as a literal segment no name can equal, so the rule quietly matched nothing and the objects it was meant for kept the CLI strategy. Write `\*` for a name that really contains an asterisk.
 
@@ -18,7 +18,7 @@ The item goes into the POST that creates the object and is left alone by every l
 
 ## Built-in rules
 
-Some items are like that in nearly every midPoint deployment, so midgie ships rules for them — all `apply=on-create` so far — and applies them on every deploy and live diff, with or without a `--policy` file:
+Some items are like that in nearly every midPoint deployment, so midgie ships rules for them — the item rules all `apply=on-create` so far — and applies them on every deploy, live diff and pull, with or without a `--policy` file:
 
 | Rule | Why |
 |---|---|
@@ -30,8 +30,9 @@ Some items are like that in nearly every midPoint deployment, so midgie ships ru
 | `ResourceType/*/administrativeOperationalState` | maintenance mode; a deploy would take a resource out of it |
 | `ResourceType/*/schema/definition` | the connector schema midPoint caches and refreshes (`generationConstraints` beside it still deploys) |
 | `ResourceType/*/cacheInvalidationTimestamp` | an operator expires cached shadows with it; an older value from the file would make them count as fresh |
+| `LookupTableType/midgie-state  remainder=no` | midgie's own [state](removal-detection.md) belongs to the server it describes; [`pull`](pull.md) never writes it into a tree |
 
-None of these is flagged operational in midPoint's schema, which is why midgie would otherwise deploy them. A `--policy` file **extends** the built-ins rather than replacing them: they come after its lines, so a line naming the same item wins the tie and overrides one — for every object, or for one:
+None of the items is flagged operational in midPoint's schema, which is why midgie would otherwise deploy them. A `--policy` file **extends** the built-ins rather than replacing them: they come after its lines, so a line naming the same item wins the tie and overrides one — for every object, or for one:
 
 ```
 # deploy every task's state again
@@ -58,6 +59,17 @@ SystemConfigurationType/*/logging  apply=never
 Under the default `--scope present` the same is had by simply leaving the item out of the file; `never` matters where leaving it out would delete it. Like the other values it is per item, covers everything beneath its path, and a more specific `apply=always` rule carves an exception out of it. A new container added to an existing object goes without its `never` items, and a change that would take such an item away with its container — deleting a single-valued container it sits in, or replacing a list entry whole — is refused for that object, as for `on-create`. A file that declares a `never` item anyway gets a warning that its value is ignored; held-back differences are named in the `--dry-run`/`--plan` note, e.g. `left alone by the policy: logging (apply=never)`.
 
 What differs per stage belongs in the tree, not under `never`: a stage's own `deploymentInformation` is managed, in that stage's folder (see [Staging](staging.md) and [`--stages`](strategy.md#full-scope-needs-the-whole-object)).
+
+## `remainder`
+
+**`remainder=yes|no`** is an object-level knob only [`midgie pull`](pull.md) reads: whether it writes a remainder file for the object, holding what the tree's own files do not declare. An object the run's files manage gets one unless a rule says `no`; any other object on the server gets one only where a rule says `yes`, and a `yes` rule makes `pull` list every object of the types its selector names:
+
+```
+RoleType/*            remainder=yes
+RoleType/Scratchpad   remainder=no
+```
+
+A deploy offers no object to a rule that sets nothing but `remainder`, so such a rule is never reported as matching no object.
 
 ## Seeding one with `init --write-policy`
 

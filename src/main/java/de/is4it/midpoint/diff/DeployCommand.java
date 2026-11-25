@@ -175,6 +175,11 @@ public class DeployCommand implements Callable<Integer> {
                     + "--scope full needs.")
     List<String> stages;
 
+    @Option(names = "--remainder", paramLabel = "DIR",
+            description = "The folder 'midgie pull' writes the rest of each object to. An object deployed with "
+                    + "its remainder file and all its other files gets --scope full unless a scope is set.")
+    File remainder;
+
     @Option(names = "--no-prune",
             description = "Only report the values this tree deployed previously and no longer declares, instead "
                     + "of removing them with each object's change — which is the default once the server "
@@ -263,6 +268,9 @@ public class DeployCommand implements Callable<Integer> {
     private final Map<DeployObject, List<RemovalDetector.Removal>> removalsByUnit = new IdentityHashMap<>();
     /** Per object, the files of the tree that describe it but are not in this run (see {@link TreeIndex}). */
     private final Map<DeployObject, List<File>> filesOutsideRun = new IdentityHashMap<>();
+
+    /** Whether {@code --multivalue} was left on {@code auto}, before the run settled it to merge or replace. */
+    private boolean multiValueAuto;
 
     /** For each object, the paths of the files it was compared against as last applied. */
     private Map<DeployObject, List<String>> comparedPaths = Map.of();
@@ -415,6 +423,7 @@ public class DeployCommand implements Callable<Integer> {
         if (globalStrategy == null) {
             return EXIT_ERROR;
         }
+        multiValueAuto = globalStrategy.multiValueAuto;
 
         try {
             if (applyPlanDir != null) {
@@ -1137,14 +1146,50 @@ public class DeployCommand implements Callable<Integer> {
         if (resolved.scope == DiffEngine.Scope.FULL && filesOutsideRun.containsKey(unit)) {
             return resolved.withScope(DiffEngine.Scope.PRESENT);
         }
+        if (resolved.scope == DiffEngine.Scope.FULL && hasRemainderFile(unit) && multiValueAuto
+                && !(policy != null && policy.declares("multivalue", unit.typeName(), unit.name(), unit.oid()))) {
+            // The remainder lists every value the server held at the last pull, so a value it lacks was added on
+            // the server since; merge would keep it, and the tree would no longer describe the whole object.
+            return resolved.withMultiValue(resolved.multiValue.withGlobalMerge(false));
+        }
         return resolved;
     }
 
-    /** As {@link #strategyFor}, before the completeness check: what the flags and the policy ask for. */
+    /**
+     * As {@link #strategyFor}, before the completeness check: what the flags and the policy ask for — and full
+     * scope for an object deployed with its remainder file when neither says which scope.
+     */
     private StrategyOptions.Resolved requestedStrategyFor(DeployObject unit) {
-        return (policy != null)
+        StrategyOptions.Resolved resolved = (policy != null)
                 ? policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy)
                 : globalStrategy;
+        if (resolved.scope == DiffEngine.Scope.PRESENT && hasRemainderFile(unit) && !scopeStated(unit)) {
+            return resolved.withScope(DiffEngine.Scope.FULL);
+        }
+        return resolved;
+    }
+
+    /**
+     * Whether one of the object's files is a remainder file. The remainder is everything of the object no other
+     * file declares, so with it the run holds the whole object, and full scope is what keeps the server to it.
+     */
+    private boolean hasRemainderFile(DeployObject unit) {
+        if (remainder == null) {
+            return false;
+        }
+        RemainderLayout layout = new RemainderLayout(remainder);
+        for (File file : unit.sourceFiles()) {
+            if (layout.contains(file)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether the flags, a config file or the policy name a scope for this object. */
+    private boolean scopeStated(DeployObject unit) {
+        return strategyOptions.scopeGiven()
+                || (policy != null && policy.declares("scope", unit.typeName(), unit.name(), unit.oid()));
     }
 
     /**
@@ -1157,7 +1202,7 @@ public class DeployCommand implements Callable<Integer> {
      * compare against and is taken as complete, as every run was before the check existed.
      */
     private void findFilesOutsideRun(PrismContext prismContext, List<DeployObject> units) {
-        File root = treeRoot();
+        File root = TreeIndex.rootFor(paths);
         if (root == null) {
             LOG.debug("no tree root for {}: every object counts as complete", paths);
             return;
@@ -1196,36 +1241,6 @@ public class DeployCommand implements Callable<Integer> {
     }
 
     /**
-     * The folder the run's object files are looked up in: the tree-local config file's folder when every run
-     * path lies inside it, else the git work tree of the run paths, else {@code null}.
-     */
-    private File treeRoot() {
-        File treeFile = ConfigDefaults.locateTreeFile(new File(System.getProperty("user.dir", "."))).file();
-        if (treeFile != null && containsAll(treeFile.getAbsoluteFile().getParentFile(), paths)) {
-            return treeFile.getAbsoluteFile().getParentFile();
-        }
-        File first = paths.get(0).getAbsoluteFile();
-        GitRevision git = GitRevision.of(first.isDirectory() ? first : first.getParentFile());
-        File top = git.isRepository() ? git.topLevel() : null;
-        return (top != null && containsAll(top, paths)) ? top : null;
-    }
-
-    private static boolean containsAll(File dir, List<File> paths) {
-        java.nio.file.Path root;
-        try {
-            root = dir.getCanonicalFile().toPath();
-            for (File path : paths) {
-                if (!path.getCanonicalFile().toPath().startsWith(root)) {
-                    return false;
-                }
-            }
-        } catch (IOException e) {
-            return false;
-        }
-        return true;
-    }
-
-    /**
      * Parse the candidate object files (schema is now registered); skip anything that isn't an object.
      *
      * <p>Discovery treats any well-formed XML that is not a schema as a candidate, so a tree may hold files
@@ -1234,7 +1249,7 @@ public class DeployCommand implements Callable<Integer> {
      * it cannot be parsed the tree cannot be deployed as written. Those go to {@code unreadable}, which the
      * caller turns into an error, rather than into an advisory that {@code --quiet} would swallow.
      */
-    private static List<Fragment> parseObjects(PrismContext prismContext, Discovery.ScanResult scan,
+    static List<Fragment> parseObjects(PrismContext prismContext, Discovery.ScanResult scan,
             List<String> warnings, List<String> unreadable) {
         List<Fragment> fragments = new ArrayList<>();
         for (File file : scan.objectFiles()) {

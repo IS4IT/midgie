@@ -95,6 +95,23 @@ final class TreeIndex {
      *                 of the object in them is among {@code runFiles} already
      */
     Map<DeployObject, List<File>> outsideRun(List<DeployObject> units, List<File> runPaths) {
+        Run run = run(units, runPaths);
+        Map<DeployObject, List<File>> outside = new LinkedHashMap<>();
+        for (DeployObject unit : units) {
+            List<File> others = outside(run, unit.typeName(), unit.oid(), unit.name());
+            if (!others.isEmpty()) {
+                outside.put(unit, others);
+            }
+        }
+        return outside;
+    }
+
+    /** What a run holds of the tree: its files, and the stage folders it deploys from. */
+    record Run(Set<String> files, Set<String> stages) {
+    }
+
+    /** The files and stages of a run of {@code units}, given {@code runPaths}. */
+    Run run(List<DeployObject> units, List<File> runPaths) {
         Set<String> inRun = new HashSet<>();
         Set<String> activeStages = new HashSet<>();
         for (File path : runPaths) {
@@ -112,26 +129,58 @@ final class TreeIndex {
                 }
             }
         }
-        Map<DeployObject, List<File>> outside = new LinkedHashMap<>();
-        for (DeployObject unit : units) {
-            List<File> others = new ArrayList<>();
-            for (Entry entry : entries) {
-                if (inRun.contains(canonical(entry.file()).getPath()) || !describes(entry, unit)) {
-                    continue;
-                }
-                String stage = stageOf(entry.file());
-                if (stage != null && !activeStages.contains(stage)) {
-                    LOG.debug("{}: {} belongs to stage {}, which this run does not deploy", unit.objectPath(),
-                            entry.file(), stage);
-                    continue;
-                }
-                others.add(entry.file());
+        return new Run(inRun, activeStages);
+    }
+
+    /**
+     * The files of the tree describing the object {@code typeName}/{@code oid}/{@code name} that {@code run} does
+     * not hold, minus those of stages it does not deploy from.
+     */
+    List<File> outside(Run run, String typeName, String oid, String name) {
+        List<File> others = new ArrayList<>();
+        for (Entry entry : entries) {
+            if (run.files().contains(canonical(entry.file()).getPath()) || !describes(entry, typeName, oid, name)) {
+                continue;
             }
-            if (!others.isEmpty()) {
-                outside.put(unit, others);
+            String stage = stageOf(entry.file());
+            if (stage != null && !run.stages().contains(stage)) {
+                LOG.debug("{}/{}: {} belongs to stage {}, which this run does not deploy", typeName, name,
+                        entry.file(), stage);
+                continue;
             }
+            others.add(entry.file());
         }
-        return outside;
+        return others;
+    }
+
+    /**
+     * The folder a run over {@code paths} looks up its objects' files in: the tree-local config file's folder when
+     * every path lies inside it, else the git work tree of the paths, else {@code null} — then nothing shows
+     * that an object has files elsewhere, and every run counts as complete.
+     */
+    static File rootFor(List<File> paths) {
+        File treeFile = ConfigDefaults.locateTreeFile(new File(System.getProperty("user.dir", "."))).file();
+        if (treeFile != null && containsAll(treeFile.getAbsoluteFile().getParentFile(), paths)) {
+            return treeFile.getAbsoluteFile().getParentFile();
+        }
+        File first = paths.get(0).getAbsoluteFile();
+        GitRevision git = GitRevision.of(first.isDirectory() ? first : first.getParentFile());
+        File top = git.isRepository() ? git.topLevel() : null;
+        return (top != null && containsAll(top, paths)) ? top : null;
+    }
+
+    private static boolean containsAll(File dir, List<File> paths) {
+        try {
+            Path root = dir.getCanonicalFile().toPath();
+            for (File path : paths) {
+                if (!path.getCanonicalFile().toPath().startsWith(root)) {
+                    return false;
+                }
+            }
+        } catch (IOException e) {
+            return false;
+        }
+        return true;
     }
 
     /** {@code file} relative to the tree root, for messages; the path as given when it lies elsewhere. */
@@ -141,17 +190,17 @@ final class TreeIndex {
     }
 
     /**
-     * Whether {@code entry} describes {@code unit}: by OID where both carry one, otherwise by type and name —
-     * the same identity {@link DeployObject#group} combines fragments by.
+     * Whether {@code entry} describes the object: by OID where both carry one, otherwise by type and name — the
+     * same identity {@link DeployObject#group} combines fragments by.
      */
-    private static boolean describes(Entry entry, DeployObject unit) {
-        if (!entry.typeName().equals(unit.typeName())) {
+    private static boolean describes(Entry entry, String typeName, String oid, String name) {
+        if (!entry.typeName().equals(typeName)) {
             return false;
         }
-        if (isSet(entry.oid()) && isSet(unit.oid())) {
-            return entry.oid().equals(unit.oid());
+        if (isSet(entry.oid()) && isSet(oid)) {
+            return entry.oid().equals(oid);
         }
-        return isSet(entry.name()) && entry.name().equals(unit.name());
+        return isSet(entry.name()) && entry.name().equals(name);
     }
 
     /**

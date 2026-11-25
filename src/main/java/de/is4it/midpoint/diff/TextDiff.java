@@ -22,7 +22,10 @@ import java.util.List;
  */
 final class TextDiff {
 
-    /** Above this, the LCS table stops being free and a diff stops being the readable option anyway. */
+    /**
+     * Above this many differing lines between the common start and end, the LCS table stops being free and a
+     * diff stops being the readable option anyway.
+     */
     private static final int MAX_LINES = 400;
 
     private TextDiff() {
@@ -83,11 +86,31 @@ final class TextDiff {
     static String unified(String left, String right, int context) {
         List<String> a = lines(left);
         List<String> b = lines(right);
-        if (a.size() > MAX_LINES || b.size() > MAX_LINES) {
+        // Lines both sides share at the start and the end are unchanged whatever the middle holds, so only the
+        // middle needs the table: a long file with one local change is cheap to diff.
+        int prefix = 0;
+        while (prefix < a.size() && prefix < b.size() && a.get(prefix).equals(b.get(prefix))) {
+            prefix++;
+        }
+        int suffix = 0;
+        while (suffix < a.size() - prefix && suffix < b.size() - prefix
+                && a.get(a.size() - 1 - suffix).equals(b.get(b.size() - 1 - suffix))) {
+            suffix++;
+        }
+        List<String> middleA = a.subList(prefix, a.size() - suffix);
+        List<String> middleB = b.subList(prefix, b.size() - suffix);
+        if (middleA.size() > MAX_LINES || middleB.size() > MAX_LINES) {
             return null;
         }
 
-        List<String[]> script = script(a, b);
+        List<String[]> script = new ArrayList<>();
+        for (int i = 0; i < prefix; i++) {
+            script.add(new String[] {" ", a.get(i)});
+        }
+        script.addAll(script(middleA, middleB));
+        for (int i = a.size() - suffix; i < a.size(); i++) {
+            script.add(new String[] {" ", a.get(i)});
+        }
         boolean[] keep = new boolean[script.size()];
         for (int i = 0; i < script.size(); i++) {
             if (!" ".equals(script.get(i)[0])) {

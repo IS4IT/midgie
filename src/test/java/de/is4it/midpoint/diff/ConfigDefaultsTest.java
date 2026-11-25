@@ -293,6 +293,22 @@ class ConfigDefaultsTest {
                 "not read as paths relative to the file, and split like the flag");
     }
 
+    @Test
+    void aTreeFileNamesItsRemainderFolderForPullDeployAndDiff(@TempDir Path dir) throws Exception {
+        // Where the remainder lives is the tree's layout, so it belongs in the tree's own file — and it is a path,
+        // read from the file's folder like every other one.
+        Path repo = Files.createDirectories(dir.resolve("repo"));
+        Path tree = write(repo, ".midgie.properties", "remainder = remainder");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+        defaults.validate(Main.commandLine());
+
+        for (String command : List.of("pull", "deploy", "diff")) {
+            assertEquals(repo.resolve("remainder").toString(), value(defaults, command, "--remainder"), command);
+        }
+    }
+
     // --- relative paths, which belong to the file they are written in ---
 
     @Test

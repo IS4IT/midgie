@@ -142,6 +142,43 @@ class DeployScopeTest {
         assertTrue(!stderr.contains("--scope present"), stderr);
     }
 
+    @Test
+    void anObjectDeployedWithItsRemainderFileGetsFullScope(@TempDir Path tree) throws Exception {
+        gitInit(tree);
+        write(tree, "roles/a.xml", role("<subtype>from-a</subtype>"));
+        write(tree, "remainder/RoleType/Scoped Role." + OID + ".xml", role("<description>from-b</description>"));
+
+        assertEquals(0, deploy(tree, "--remainder", tree.resolve("remainder").toString()), stderr);
+
+        assertEquals(1, patched.size(), "the tree holds the whole object, so what it lacks goes: " + patched);
+        assertTrue(patched.get(0).contains("live-only"), patched.get(0));
+        assertTrue(!patched.get(0).contains("from-b"), "what the remainder declares stays: " + patched.get(0));
+    }
+
+    @Test
+    void aScopeAskedForWinsOverTheRemainder(@TempDir Path tree) throws Exception {
+        gitInit(tree);
+        write(tree, "roles/a.xml", role("<subtype>from-a</subtype>"));
+        write(tree, "remainder/RoleType/Scoped Role." + OID + ".xml", role("<description>from-b</description>"));
+
+        assertEquals(0, deploy(tree, "--remainder", tree.resolve("remainder").toString(), "--scope", "present"),
+                stderr);
+
+        assertTrue(patched.isEmpty(), patched.toString());
+    }
+
+    @Test
+    void theManagedFilesAloneArePresentScope(@TempDir Path tree) throws Exception {
+        gitInit(tree);
+        Path roles = write(tree, "roles/a.xml", role("<subtype>from-a</subtype>")).getParent();
+        write(tree, "remainder/RoleType/Scoped Role." + OID + ".xml", role("<description>from-b</description>"));
+
+        assertEquals(0, deploy(roles, "--remainder", tree.resolve("remainder").toString()), stderr);
+
+        assertTrue(patched.isEmpty(), "the remainder is not in the run, so its part is not either: " + patched);
+        assertTrue(stderr.contains("remainder/RoleType/Scoped Role." + OID + ".xml"), stderr);
+    }
+
     // --- helpers ---
 
     /** The role as the server holds it: both files' items, plus one no file declares. */

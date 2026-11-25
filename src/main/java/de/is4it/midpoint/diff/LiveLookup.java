@@ -66,6 +66,31 @@ final class LiveLookup {
                 .item(ObjectType.F_NAME).eqPoly(name).matchingOrig().build());
     }
 
+    /** How many objects {@link #all} asks for per request. */
+    private static final int PAGE_SIZE = 200;
+
+    /**
+     * Every object of {@code restType}, read the way {@link #byOid} reads one — so that what {@code pull} writes
+     * and what a deploy later compares it with are the same view of the object. Read in pages ordered by name;
+     * an object met twice across pages (a rename between two requests) is kept once.
+     */
+    static List<PrismObject<? extends Objectable>> all(PrismContext prismContext, MidpointRestClient client,
+            Class<?> clazz, String restType) throws SchemaException, IOException {
+        Map<String, PrismObject<? extends Objectable>> byOid = new LinkedHashMap<>();
+        for (int offset = 0; ; offset += PAGE_SIZE) {
+            ObjectQuery query = prismContext.queryFor(containerable(clazz))
+                    .asc(ObjectType.F_NAME).offset(offset).maxSize(PAGE_SIZE).build();
+            List<PrismObject<? extends Objectable>> page = search(prismContext, client, restType, query);
+            for (PrismObject<? extends Objectable> object : page) {
+                byOid.putIfAbsent(object.getOid(), object);
+            }
+            if (page.size() < PAGE_SIZE) {
+                break;
+            }
+        }
+        return new ArrayList<>(byOid.values());
+    }
+
     /**
      * The names of the objects of {@code restType} among {@code oids}, by OID, in one search. An OID missing
      * from the result is not on the server (or not visible to this account). Used only to name OIDs in

@@ -31,7 +31,8 @@ import org.slf4j.LoggerFactory;
  * nothing.
  *
  * <p>A selector that stops at the object identity sets object-level knobs ({@code scope}, {@code equivalence},
- * {@code allow-inplace-merge}, and a default {@code multivalue}); a selector that reaches an item sets
+ * {@code allow-inplace-merge}, {@code smart-refs}, a default {@code multivalue}, and {@code remainder} — whether
+ * {@code pull} writes a remainder file for the object, the one knob only {@code pull} reads); a selector that reaches an item sets
  * {@code multivalue} for that container and {@code apply} for that item ({@code on-create}: written only when
  * the object is created; {@code if-absent}: written only while the server holds no value; {@code never}: not
  * written, changed or removed at all). An object-only knob
@@ -43,8 +44,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Beneath the file sit midgie's built-in rules ({@value #BUILT_IN_RESOURCE}, in the same grammar, any knob
  * a file line may set): today the {@code apply=on-create} items midPoint or its operators own once an object
- * exists, such as a task's {@code executionState}. They apply with or without a file, after its lines, so a file line naming the same
- * item wins the tie and overrides one; there is no switch to turn them off as a whole.
+ * exists, such as a task's {@code executionState}, and {@code remainder=no} for midgie's own state table. They
+ * apply with or without a file, after its lines, so a file line naming the same item wins the tie and overrides
+ * one; there is no switch to turn them off as a whole.
  */
 final class Policy {
 
@@ -58,10 +60,13 @@ final class Policy {
 
     /** In the order the messages list them. */
     private static final List<String> KNOB_NAMES =
-            List.of("scope", "multivalue", "equivalence", "allow-inplace-merge", "smart-refs", "apply");
+            List.of("scope", "multivalue", "equivalence", "allow-inplace-merge", "smart-refs", "apply", "remainder");
     private static final Set<String> KNOWN_KNOBS = Set.copyOf(KNOB_NAMES);
     private static final Set<String> OBJECT_ONLY_KNOBS =
-            Set.of("scope", "equivalence", "allow-inplace-merge", "smart-refs");
+            Set.of("scope", "equivalence", "allow-inplace-merge", "smart-refs", "remainder");
+
+    /** The knobs only {@code pull} reads: a deploy offering no object to such a rule says nothing about a typo. */
+    private static final Set<String> PULL_ONLY_KNOBS = Set.of("remainder");
     private static final Set<String> ITEM_ONLY_KNOBS = Set.of("apply");
 
     private static final class Rule {
@@ -313,9 +318,22 @@ final class Policy {
                 return StrategyOptions.smartRefsByName(value) != null;
             case "apply":
                 return ApplyRules.Mode.byName(value) != null;
+            case "remainder":
+                return remainderByName(value) != null;
             default:
                 return false;
         }
+    }
+
+    /** Map a {@code yes|no} remainder value, or {@code null} if unrecognised. */
+    private static Boolean remainderByName(String value) {
+        if ("yes".equalsIgnoreCase(value)) {
+            return Boolean.TRUE;
+        }
+        if ("no".equalsIgnoreCase(value)) {
+            return Boolean.FALSE;
+        }
+        return null;
     }
 
     private static Boolean mergeByName(String value) {
@@ -334,11 +352,7 @@ final class Policy {
      * {@link DiffEngine.MultiValueStrategy.PathRule}s resolved per container at diff time.
      */
     StrategyOptions.Resolved resolveFor(String type, String name, String oid, StrategyOptions.Resolved baseline) {
-        List<List<String>> identity = new ArrayList<>();
-        identity.add(List.of(type != null ? type : "", name != null ? name : ""));
-        if (oid != null && !oid.isBlank()) {
-            identity.add(List.of("oid:" + oid));
-        }
+        List<List<String>> identity = identityOf(type, name, oid);
 
         DiffEngine.Scope scope = baseline.scope;
         DiffEngine.EquivalencePlan equivalence = baseline.equivalence;
@@ -482,11 +496,96 @@ final class Policy {
         Set<String> builtIns = builtInMeanings();
         List<String> unmatched = new ArrayList<>();
         for (Rule rule : rules) {
-            if (!rule.matched && !rule.builtIn() && !builtIns.contains(rule.meaning())) {
+            if (!rule.matched && !rule.builtIn() && !builtIns.contains(rule.meaning())
+                    && !PULL_ONLY_KNOBS.containsAll(rule.settings.keySet())) {
                 unmatched.add(at(rule) + ": " + rule.source);
             }
         }
         return unmatched;
+    }
+
+    /**
+     * Whether {@code pull} keeps a remainder file for this object, as the policy's {@code remainder} rules say:
+     * {@code TRUE} for {@code yes}, {@code FALSE} for {@code no}, {@code null} when no rule names the object —
+     * which leaves the decision to the caller, since that differs for an object the tree manages and one it
+     * does not. The most specific rule wins, ties to the earlier line, as for every other object-level knob.
+     */
+    Boolean remainderFor(String type, String name, String oid) {
+        List<List<String>> identity = identityOf(type, name, oid);
+        Rule chosen = null;
+        for (Rule rule : rules) {
+            if (!rule.itemLevel && rule.settings.containsKey("remainder") && matchesIdentity(rule.selector, identity)
+                    && (chosen == null || moreSpecific(rule, chosen))) {
+                chosen = rule;
+            }
+        }
+        if (chosen == null) {
+            return null;
+        }
+        LOG.debug("policy: {}/{} remainder={} ({})", type, name, chosen.settings.get("remainder"), at(chosen));
+        return remainderByName(chosen.settings.get("remainder"));
+    }
+
+    /**
+     * Of {@code types}, those a {@code remainder=yes} rule can reach by its type segment: the object types
+     * {@code pull} lists on the server. A rule naming its object by OID has no type to list, so it decides for
+     * an object found another way but never makes {@code pull} read a type.
+     */
+    List<String> remainderTypes(List<String> types) {
+        List<String> reached = new ArrayList<>();
+        for (String type : types) {
+            for (Rule rule : rules) {
+                if (remainderRule(rule, type, "yes") && !shadowedForType(rule, type)) {
+                    reached.add(type);
+                    break;
+                }
+            }
+        }
+        return reached;
+    }
+
+    /** Whether {@code rule} sets {@code remainder=value} by a selector whose type segment reaches {@code type}. */
+    private static boolean remainderRule(Rule rule, String type, String value) {
+        return !rule.itemLevel && value.equalsIgnoreCase(rule.settings.get("remainder"))
+                && !rule.selectorText.startsWith("oid:") && rule.selector.matchesPrefix(List.of(type));
+    }
+
+    /**
+     * Whether a more specific {@code remainder=no} rule takes every object of {@code type} away from {@code yes}:
+     * {@code *}{@code /* remainder=yes} under {@code ShadowType/* remainder=no} lists no shadow at all.
+     */
+    private boolean shadowedForType(Rule yes, String type) {
+        for (Rule rule : rules) {
+            if (remainderRule(rule, type, "no") && rule.selector.size() == 2 && rule.selector.matches(List.of(type, "*"))
+                    && rule.selector.matches(List.of(type, "any other name")) && moreSpecific(rule, yes)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether an object-level rule sets {@code knob} for this object. A remainder file makes an object default to
+     * full scope and replace, and what the policy states outright is not overridden by that.
+     */
+    boolean declares(String knob, String type, String name, String oid) {
+        List<List<String>> identity = identityOf(type, name, oid);
+        for (Rule rule : rules) {
+            if (!rule.itemLevel && rule.settings.containsKey(knob) && matchesIdentity(rule.selector, identity)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The identities a selector may name an object by: {@code Type/Name}, and {@code oid:X} when it has one. */
+    private static List<List<String>> identityOf(String type, String name, String oid) {
+        List<List<String>> identity = new ArrayList<>();
+        identity.add(List.of(type != null ? type : "", name != null ? name : ""));
+        if (oid != null && !oid.isBlank()) {
+            identity.add(List.of("oid:" + oid));
+        }
+        return identity;
     }
 
     /** What each built-in rule says, to tell a file line that only restates one from a rule of the file's own. */

@@ -753,6 +753,60 @@ class LiveIntegrationTest {
         assertFalse(fourth.err.contains("contradict"), fourth.err);
     }
 
+    @Test
+    void pullWritesTheRestOfAnObjectAndDeployingBothKeepsTheServerToIt(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+
+        // The tree manages one item of the role; the server holds two more.
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path roles = Files.createDirectories(tree.resolve("roles"));
+        Files.writeString(roles.resolve("a.xml"), splitRole("<subtype>from-a</subtype>"), StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        Path side = dir.resolve("side.xml");
+        Files.writeString(side, splitRole("<subtype>from-a</subtype><description>server side</description>"
+                + "<documentation>live-only</documentation>"), StandardCharsets.UTF_8);
+        assertEquals(0, run("deploy", side.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        Path remainder = tree.resolve("remainder");
+        Path file = remainder.resolve("RoleType/IT Deploy Role." + DEPLOY_ROLE_OID + ".xml");
+
+        CliResult pulled = run("pull", roles.toString(), "--remainder", remainder.toString(), "--url", HOST, "-u",
+                USER, "-p", PASSWORD);
+        assertEquals(0, pulled.exit, pulled.out + pulled.err);
+        String text = Files.readString(file);
+        assertTrue(text.contains("server side") && text.contains("live-only"), text);
+        assertFalse(text.contains("from-a") || text.contains(" id=\"") || text.contains("_metadata"), text);
+
+        CliResult again = run("pull", roles.toString(), "--remainder", remainder.toString(), "--url", HOST, "-u",
+                USER, "-p", PASSWORD);
+        assertEquals(0, again.exit, again.out + again.err);
+        assertEquals(text, Files.readString(file), "a second pull writes the same bytes");
+
+        CliResult inSync = run("deploy", tree.toString(), "--remainder", remainder.toString(), "--url", HOST, "-u",
+                USER, "-p", PASSWORD, "--dry-run");
+        assertEquals(0, inSync.exit, "the tree and its remainder are the server's object: " + inSync.out + inSync.err);
+
+        // The server gains an item after the pull. The managed files alone leave it, as present scope does ...
+        Files.writeString(side, splitRole("<costCenter>added later</costCenter>"), StandardCharsets.UTF_8);
+        assertEquals(0, run("deploy", side.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        CliResult managedOnly = run("deploy", roles.toString(), "--remainder", remainder.toString(), "--url", HOST,
+                "-u", USER, "-p", PASSWORD, "--yes", "--no-rollback-plan");
+        assertEquals(0, managedOnly.exit, managedOnly.out + managedOnly.err);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains("added later"), managedOnly.err);
+
+        // ... and the whole tree, remainder included, puts the server back to what the tree holds.
+        CliResult whole = run("deploy", tree.toString(), "--remainder", remainder.toString(), "--url", HOST, "-u",
+                USER, "-p", PASSWORD, "--yes", "--no-rollback-plan");
+        assertEquals(0, whole.exit, whole.out + whole.err);
+        String after = client.getObject("roles", DEPLOY_ROLE_OID);
+        assertFalse(after.contains("added later"), after);
+        assertTrue(after.contains("server side") && after.contains("live-only") && after.contains("from-a"), after);
+
+        deleteDeployObjects();
+    }
+
     private static String splitRole(String body) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + DEPLOY_ROLE_OID + "\"><name>IT Deploy Role</name>" + body
                 + "</role>";

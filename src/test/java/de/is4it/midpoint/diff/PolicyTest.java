@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import com.evolveum.midpoint.prism.path.ItemPath;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -280,7 +282,7 @@ class PolicyTest {
     void theBuiltInRulesApplyWithoutAFile() throws Exception {
         Policy policy = Policy.effective(null);
 
-        assertEquals(9, policy.builtInCount());
+        assertEquals(10, policy.builtInCount());
         assertEquals(0, policy.ruleCount(), "no file, so no file rules");
         ApplyRules apply = policy.resolveFor("TaskType", "Recompute", OID, baseline()).apply;
         assertEquals(ApplyRules.Mode.ON_CREATE, apply.modeOf("executionState"));
@@ -302,7 +304,7 @@ class PolicyTest {
         assertEquals(ApplyRules.Mode.ALWAYS,
                 policy.resolveFor("TaskType", "Recompute", OID, baseline()).apply.modeOf("executionState"));
         assertEquals(1, policy.ruleCount());
-        assertEquals(9, policy.builtInCount(), "the file extends the built-ins rather than replacing them");
+        assertEquals(10, policy.builtInCount(), "the file extends the built-ins rather than replacing them");
         assertEquals(ApplyRules.Mode.ON_CREATE,
                 policy.resolveFor("TaskType", "Recompute", OID, baseline()).apply.modeOf("schedulingState"),
                 "a built-in the file does not name still applies");
@@ -361,15 +363,15 @@ class PolicyTest {
     @Test
     void linesRestatingABuiltInCountWithTheBuiltInsNotTheFile(@TempDir Path dir) throws Exception {
         // The file 'init --write-policy' seeds holds every built-in as an active line and nothing else; the
-        // policy line used to report it as nine rules of its own, plus the same nine built-in.
+        // policy line used to report each built-in twice: once as the file's own rule, once as a built-in.
         Policy seeded = effective(dir, Policy.builtInText());
         assertEquals(0, seeded.ruleCount(), "the seeded file adds nothing to the built-ins");
-        assertEquals(9, seeded.builtInCount());
+        assertEquals(10, seeded.builtInCount());
 
         Policy edited = effective(dir, Policy.builtInText(), "RoleType/*  scope=present",
                 "TaskType/*/executionState  apply=always");
         assertEquals(2, edited.ruleCount(), "a new rule and an override of a built-in are the file's own");
-        assertEquals(9, edited.builtInCount());
+        assertEquals(10, edited.builtInCount());
     }
 
     @Test
@@ -474,5 +476,54 @@ class PolicyTest {
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager foo=bar"));     // unknown knob
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager scope=weird")); // bad value
         assertThrows(IOException.class, () -> load(dir, "RoleType/Manager smart-refs=maybe"));
+    }
+
+    // --- remainder ---
+
+    @Test
+    void remainderSaysWhichObjectsPullWritesAFileFor(@TempDir Path dir) throws Exception {
+        Policy policy = effective(dir, "RoleType/*  remainder=yes", "RoleType/Temp  remainder=no");
+
+        assertEquals(Boolean.TRUE, policy.remainderFor("RoleType", "Manager", OID));
+        assertEquals(Boolean.FALSE, policy.remainderFor("RoleType", "Temp", OID), "the more specific rule wins");
+        assertNull(policy.remainderFor("OrgType", "Root", OID), "no rule: the caller decides");
+        assertEquals(Boolean.FALSE, policy.remainderFor("LookupTableType", SyncState.TABLE_NAME, OID),
+                "midgie's own state is never part of a tree");
+    }
+
+    @Test
+    void pullListsTheTypesAYesRuleReaches(@TempDir Path dir) throws Exception {
+        List<String> types = List.of("OrgType", "RoleType", "ShadowType", "UserType");
+
+        assertEquals(List.of("RoleType"), effective(dir, "RoleType/*  remainder=yes").remainderTypes(types));
+        assertEquals(List.of("OrgType", "RoleType"), effective(dir, "*/*  remainder=yes",
+                "ShadowType/*  remainder=no", "UserType/*  remainder=no").remainderTypes(types),
+                "a type every one of whose objects a more specific rule excludes is not listed at all");
+        assertEquals(List.of("RoleType"), effective(dir, "RoleType/*  remainder=no",
+                "RoleType/Manager  remainder=yes").remainderTypes(types),
+                "one object of the type is enough to list it");
+        assertEquals(List.of(), effective(dir, "oid:" + OID + "  remainder=yes").remainderTypes(types),
+                "an OID names no type to list");
+    }
+
+    @Test
+    void remainderIsAnObjectKnobOnlyPullReads(@TempDir Path dir) throws Exception {
+        assertThrows(IOException.class, () -> load(dir, "RoleType/*/description  remainder=yes"));
+        assertThrows(IOException.class, () -> load(dir, "RoleType/*  remainder=sometimes"));
+
+        Policy policy = effective(dir, "OrgType/*  remainder=yes");
+        policy.resolveFor("RoleType", "Manager", OID, baseline());
+        assertTrue(policy.unmatchedRules().isEmpty(),
+                "deploy offers no object to a pull-only rule, which says nothing about a typo: "
+                        + policy.unmatchedRules());
+    }
+
+    @Test
+    void declaresSaysWhetherTheFileNamesAKnobForTheObject(@TempDir Path dir) throws Exception {
+        Policy policy = effective(dir, "RoleType/Manager  scope=present");
+
+        assertTrue(policy.declares("scope", "RoleType", "Manager", OID));
+        assertFalse(policy.declares("scope", "RoleType", "Other", OID));
+        assertFalse(policy.declares("multivalue", "RoleType", "Manager", OID));
     }
 }

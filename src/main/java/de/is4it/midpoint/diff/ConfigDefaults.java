@@ -163,7 +163,7 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
     static final Set<String> TREE_ALLOWED = Set.of(
             "rollback-plan", "policy", "scope", "multivalue", "equivalence", "path", "app",
             "schema", "schema-dir", "no-match-by-name", "no-create-if-absent", "retry", "smart-refs",
-            "allow-inplace-merge", "no-live-schema", "no-prune", "stages");
+            "allow-inplace-merge", "no-live-schema", "no-prune", "stages", "remainder");
 
     /**
      * Keys whose environment variable, when set, outranks the file.

@@ -165,7 +165,7 @@ class DeployRetryTest {
 
         assertEquals(0, result.exit(), result.err());
         assertTrue(result.err().contains("midgie: policy: " + policy.toAbsolutePath().normalize()
-                + " (2 rule(s), plus 9 built-in)"), result.err());
+                + " (2 rule(s), plus 10 built-in)"), result.err());
     }
 
     @Test

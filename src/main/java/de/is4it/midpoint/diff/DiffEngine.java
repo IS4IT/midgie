@@ -1145,7 +1145,7 @@ public final class DiffEngine {
         ((ItemDelta) mod).setEstimatedOldValues(values);
     }
 
-    private static boolean isProtectedItem(Item<?, ?> item) {
+    static boolean isProtectedItem(Item<?, ?> item) {
         ItemDefinition<?> definition = item.getDefinition();
         if (definition != null && ProtectedStringType.COMPLEX_TYPE.equals(definition.getTypeName())) {
             return true;
@@ -1788,6 +1788,11 @@ public final class DiffEngine {
 
         boolean isGlobalMerge() {
             return globalMerge;
+        }
+
+        /** This strategy with {@code merge} as the default for containers no rule names; the rules stay. */
+        MultiValueStrategy withGlobalMerge(boolean merge) {
+            return new MultiValueStrategy(merge, rules, identityPrefixes);
         }
 
         List<PathRule> pathRules() {

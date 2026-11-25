@@ -542,7 +542,7 @@ class InitCommandTest {
                 "--write-policy", policy.toString());
 
         assertEquals(0, result.exit, result.err);
-        assertTrue(result.out.contains("and the 9 built-in rule(s)"), result.out);
+        assertTrue(result.out.contains("and the 10 built-in rule(s)"), result.out);
         String content = Files.readString(policy, StandardCharsets.UTF_8);
         assertTrue(content.contains("\nTaskType/*/executionState  apply=on-create\n"), content);
         assertTrue(content.contains("\nUserType/*/credentials  apply=on-create\n"),

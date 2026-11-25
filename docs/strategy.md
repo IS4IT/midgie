@@ -47,6 +47,8 @@ stages = stages/*
 
 (`--stages stages/*` on the command line, comma-separated or repeated for several.) A stage the run does deploy from counts in full: deploying one of `stages/prod/`'s files still needs its other files there for full scope. What differs per stage is managed in that stage's folder; items no stage should touch are excluded with [`apply=never`](policy.md#applynever).
 
+**The remainder makes full scope the default.** An object deployed with its [remainder file](pull.md) — the part `midgie pull` wrote of everything the tree's own files leave out — and all its other files is the whole object, so it runs under `--scope full` and `--multivalue replace` without being asked: what the tree lacks was added on the server since the last pull. A scope or multivalue given on the command line, in a config file or by a policy rule for the object wins over that. Without its remainder file the object is incomplete as above and runs under `--scope present`.
+
 ## Syncing an item nested inside a multi-valued container
 
 To manage **one entry** deep inside multi-valued containers — say a single GUI panel at

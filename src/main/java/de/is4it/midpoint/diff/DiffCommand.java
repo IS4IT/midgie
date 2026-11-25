@@ -76,7 +76,7 @@ public class DiffCommand implements Callable<Integer> {
     private static final List<String> LIVE_ONLY = List.of("--no-prune", "--no-match-by-name", "--user",
             "--password", "--password-env", "--password-file", "--oid", "--insecure", "--cacert", "--proxy",
             "--no-proxy", "--proxy-user", "--proxy-password", "--proxy-password-env", "--proxy-password-file",
-            "--timeout", "--retries", "--no-live-schema");
+            "--timeout", "--retries", "--no-live-schema", "--stages", "--remainder");
 
     // --- Output ---
 
@@ -131,6 +131,12 @@ public class DiffCommand implements Callable<Integer> {
                     + "only): another stage's files do not count when --scope full checks that the object's "
                     + "files are all being compared.")
     List<String> stages;
+
+    @Option(names = "--remainder", paramLabel = "DIR",
+            description = "The folder 'midgie pull' writes the rest of each object to, as deploy takes it (live "
+                    + "mode only): an object compared with its remainder file and all its other files gets "
+                    + "--scope full unless a scope is set.")
+    File remainder;
 
     @Override
     public Integer call() {
@@ -222,6 +228,7 @@ public class DiffCommand implements Callable<Integer> {
         preview.output = output;
         preview.policyFile = policyFile;
         preview.stages = stages;
+        preview.remainder = remainder;
         preview.noPrune = noPrune;
         preview.noMatchByName = noMatchByName;
         preview.quiet = quiet;

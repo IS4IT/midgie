@@ -14,7 +14,12 @@ import com.evolveum.midpoint.prism.equivalence.EquivalenceStrategy;
 import com.evolveum.midpoint.prism.equivalence.ParameterizedEquivalenceStrategy;
 import com.evolveum.midpoint.prism.path.ItemPath;
 
+import picocli.CommandLine.IDefaultValueProvider;
+import picocli.CommandLine.Model.CommandSpec;
+import picocli.CommandLine.Model.OptionSpec;
 import picocli.CommandLine.Option;
+import picocli.CommandLine.ParseResult;
+import picocli.CommandLine.Spec;
 
 /**
  * Shared diff-strategy flags for the {@code diff} and {@code apply} subcommands: {@code --scope},
@@ -27,6 +32,10 @@ public final class StrategyOptions {
     @Option(names = "--scope", paramLabel = "present|full", defaultValue = "present",
             description = "present: only diff items present in DESIRED (preserve the rest). full: full replace.")
     String scope;
+
+    /** The command this is mixed into, to tell a scope someone asked for from the declared default. */
+    @Spec(Spec.Target.MIXEE)
+    CommandSpec mixee;
 
     @Option(names = "--multivalue", paramLabel = "auto|merge|replace", defaultValue = "auto",
             description = "How to treat live values a multi-valued item holds and the file does not list. "
@@ -148,6 +157,12 @@ public final class StrategyOptions {
                     tracked);
         }
 
+        /** This strategy with {@code multiValue} in place of its own; everything else stays. */
+        Resolved withMultiValue(DiffEngine.MultiValueStrategy multiValue) {
+            return new Resolved(scope, equivalence, multiValue, allowInplaceMerge, smartRefs, apply, multiValueAuto,
+                    tracked);
+        }
+
         /** This strategy with {@code scope} in place of its own; everything else, tracking included, stays. */
         Resolved withScope(DiffEngine.Scope scope) {
             return new Resolved(scope, equivalence, multiValue, allowInplaceMerge, smartRefs, apply, multiValueAuto,
@@ -200,6 +215,29 @@ public final class StrategyOptions {
         }
         return new Resolved(scopeValue, strategy, multiValue, allowInplaceMerge, smartRefsValue, ApplyRules.none(),
                 multiValueAuto);
+    }
+
+    /**
+     * Whether {@code --scope} was asked for, on the command line or in a config file, rather than left on its
+     * declared default. Deploy needs the difference: an object deployed with its remainder file defaults to full
+     * scope, unless someone said which scope to use.
+     */
+    boolean scopeGiven() {
+        if (mixee == null) {
+            return false;
+        }
+        ParseResult parsed = mixee.commandLine().getParseResult();
+        if (parsed != null && parsed.hasMatchedOption("--scope")) {
+            return true;
+        }
+        OptionSpec option = mixee.findOption("--scope");
+        IDefaultValueProvider provider = mixee.defaultValueProvider();
+        try {
+            // A config file's value arrives through the default provider; the annotation's default does not.
+            return option != null && provider != null && provider.defaultValue(option) != null;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private DiffEngine.Scope parseScope() {

@@ -64,6 +64,8 @@ policy        = midgie.policy
 rollback-plan = .midgie/nets
 ```
 
+The folder [`midgie pull`](pull.md) writes each object's remainder to is the tree's layout too, so it goes here: `remainder = remainder`. `deploy` and a live `diff` read the same key, to know which files are remainder files.
+
 `init --write-properties` writes the right template for wherever it lands — any path named `.midgie.properties` other than your own `~/.midgie.properties` gets the stripped, tree-local one, anything else gets the full one. Give it a directory (or nothing, meaning `$PWD`) and it picks the name midgie would actually *read* there, so it cannot write a file that is silently never loaded:
 
 ```bash
@@ -77,7 +79,7 @@ bin/midgie init --write-properties - | diff - ~/.midgie.properties   # what did 
 
 The disallowed keys are **omitted rather than commented out** — uncommenting a line in a midgie template must always yield a file midgie accepts, and a commented-out `url` would break that and read as an invitation. The header names them and says where they belong instead.
 
-Because it travels with somebody else's repository, this layer is **allowlisted** rather than denylisted — cloning an unfamiliar repo and running even a read would otherwise authenticate to whatever server its file names. It may set `rollback-plan`, `policy`, `scope`, `multivalue`, `equivalence`, `path`, `app`, `schema`, `schema-dir`, `no-match-by-name`, `no-create-if-absent`, `retry`, `smart-refs`, `allow-inplace-merge`, `no-live-schema`, `no-prune` and `stages`. Anything else is an error naming the file — `url`, `user`, `password*`, `insecure`, `cacert` and `proxy*`/`no-proxy` decide where credentials go, and `no-rollback-plan` would let a tree switch off its own safety net. A file may say *where* something goes, never *whether* a safety gate applies.
+Because it travels with somebody else's repository, this layer is **allowlisted** rather than denylisted — cloning an unfamiliar repo and running even a read would otherwise authenticate to whatever server its file names. It may set `rollback-plan`, `policy`, `scope`, `multivalue`, `equivalence`, `path`, `app`, `schema`, `schema-dir`, `no-match-by-name`, `no-create-if-absent`, `retry`, `smart-refs`, `allow-inplace-merge`, `no-live-schema`, `no-prune`, `stages` and `remainder`. Anything else is an error naming the file — `url`, `user`, `password*`, `insecure`, `cacert` and `proxy*`/`no-proxy` decide where credentials go, and `no-rollback-plan` would let a tree switch off its own safety net. A file may say *where* something goes, never *whether* a safety gate applies.
 
 A CA certificate is the case worth spelling out. With `cacert` in the file, TLS verifies properly for every command with nothing extra typed, so `--insecure` stops being the path of least resistance.
 
