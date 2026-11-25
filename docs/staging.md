@@ -28,7 +28,7 @@ A server gets its values in one of three ways:
 - as a system property at startup, `-Dmidpoint.constants.ldapHost=ldap.prod.example`;
 - in the container image, as an environment variable that the start script turns into that property, `MP_SET_midpoint_constants_ldapHost=ldap.prod.example`. The underscores become dots, so a constant's name must not contain one: write `ldapHost`, not `ldap_host`. Append `_FILE` (`MP_SET_midpoint_constants_ldapPassword_FILE=/run/secrets/ldap`) and midPoint reads the value from that file, which is how a mounted secret gets in.
 
-Constants work wherever midPoint evaluates an expression: connector configuration properties, mappings and object templates, and scripts through `basic.const('ldapHost')`. They do not reach plain fields, names, OIDs or references.
+Constants work wherever midPoint evaluates an expression: connector configuration properties, mappings and object templates, and scripts through `midpoint.getConst('ldapHost')`. They do not reach plain fields, names, OIDs or references.
 
 The gain on midgie's side is that the tree is now the same for every stage, and so is what the server stores: the expression, not its value. A live `diff` of the tree against test and against prod therefore shows real drift and nothing else.
 
