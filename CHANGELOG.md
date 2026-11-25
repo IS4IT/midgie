@@ -9,10 +9,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`apply=never` in the policy file.** An item under such a rule is the server's own: midgie does not write it on create, change it, or remove it, not even under `--scope full`. It is the exception list for an object the tree owns whole — `SystemConfigurationType/*/logging  apply=never` keeps the log levels an administrator raises while the rest of the system configuration is deployed with `scope=full`. A file that declares such an item is warned that its value is ignored. `init --write-policy` lists it among its examples.
+- **`--stages` / `stages`, the tree's stage folders.** A tree that keeps one folder per stage names them as globs (`stages = stages/*` in the tree-local `.midgie.properties`), so that another stage's files do not count as part of the object a run deploys — see below.
 - **A staging guide.** `docs/staging.md` shows how one tree serves dev, test and prod: midPoint constants for the values that differ per stage, keeping secrets out of the tree, committing rendered per-stage trees so they stay tracked, and why a branch per stage is the weaker model.
 - **A checksum next to the JAR.** Releases attach `midgie-<version>.jar.sha256`, so `sha256sum -c midgie-<version>.jar.sha256` checks a download without `gh` or cosign.
 
 ### Changed
+
+- **`--scope full` applies only when the run holds every file of the object.** Full scope deletes what the object's files leave out, so deploying one file of an object described by several deleted what the others declare. `deploy` and a live `diff` now read the identity of every object file in the tree (the tree-local config's folder, or the git checkout) and deploy an object with files outside the run under `--scope present`, naming those files in a note; deploy them together and full scope applies. Paths outside any checkout and tree-local config keep full scope as before. The note about an object split across files is printed on untracked runs too now, and names the files from the tree root.
 
 - **`deploy --plan` ends with the plan's folder followed by a space instead of a full stop** — `Wrote 3 plan file(s) to ~/.local/state/midgie/<deployment>/plan — apply with: …` — so a double-click in a terminal selects the path without the dot. `--apply-plan --dry-run` and the note about a discarded unfinished plan name the folder the same way.
 

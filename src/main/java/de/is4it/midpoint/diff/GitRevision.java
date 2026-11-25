@@ -141,6 +141,12 @@ final class GitRevision {
         return (prefix != null) ? prefix : "";
     }
 
+    /** The root of the work tree, or {@code null} outside one. */
+    File topLevel() {
+        String top = cached("toplevel", "rev-parse", "--show-toplevel");
+        return (top != null && !top.isBlank()) ? new File(top) : null;
+    }
+
     /** A human hint for the state row's label — the repository directory name plus the tree prefix. */
     String label() {
         String top = cached("toplevel", "rev-parse", "--show-toplevel");

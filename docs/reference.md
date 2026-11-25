@@ -19,7 +19,7 @@ The contract lets CI gate on drift without parsing output:
 
 | flag | default | meaning |
 |---|---|---|
-| `--scope present\|full` | `present` | *present*: only diff items present in `DESIRED` (unmanaged items are left alone → accrued state is preserved). *full*: full-replace (also removes items missing from desired). |
+| `--scope present\|full` | `present` | *present*: only diff items present in `DESIRED` (unmanaged items are left alone → accrued state is preserved). *full*: full-replace (also removes items missing from desired) — on a live run only when the run holds every file of the object, otherwise *present* with a note ([why](strategy.md#full-scope-needs-the-whole-object)). |
 | `--multivalue auto\|merge\|replace` | `auto` | Multi-valued container handling. *replace*: desired values are authoritative (live-only values removed). *merge*: add desired values, keep live-only ones. *auto*: merge when deploy tracks the tree (it then removes what the tree dropped itself), else replace. |
 | `--path <itemPath>=merge\|replace` | — | Per-path override of `--multivalue`. Repeatable (e.g. `--path assignment=merge`). |
 | `--equivalence <strategy>` | `auto` | What counts as "the same value". `auto` decides per container (see [Choosing a strategy](strategy.md#choosing-a-strategy)); the rest, loosest to strictest, are `real-value` · `consider-different-ids` · `natural-keys` (prism-experimental) · `ignore-metadata` · `data` · `literal`. See [`DESIGN.md`](../DESIGN.md#strategy-flags). |
@@ -88,4 +88,4 @@ midgie deploy config/ --url https://mp.example/midpoint \
 | `--dry-run` | *(deploy, rollback)* Compute and print the change(s) but do not send them; exits `1` if anything would change. |
 | `-y, --yes` | *(deploy, rollback)* Apply without the interactive confirmation prompt (required non-interactively). *(init)* Answer the `--write-cacert` trust prompt. |
 
-`deploy` adds tree-level flags — `--retry`, `--plan [dir]` / `--apply-plan [dir]` / `--overwrite` (see [Saved plans](commands.md#saved-plans)), `--rollback-plan <dir>` / `--no-rollback-plan`, `--confirm-each-apply` and `--app <name>` — and shares `--policy <file>` and `--no-prune` with a live `diff`; all are described under [`deploy`](commands.md#deploy--reconcile-files-and-folders), [Detecting what you removed](removal-detection.md) and [The policy file](policy.md).
+`deploy` adds tree-level flags — `--retry`, `--plan [dir]` / `--apply-plan [dir]` / `--overwrite` (see [Saved plans](commands.md#saved-plans)), `--rollback-plan <dir>` / `--no-rollback-plan`, `--confirm-each-apply` and `--app <name>` — and shares `--policy <file>`, `--no-prune` and `--stages <glob>` (the tree's [stage folders](strategy.md#full-scope-needs-the-whole-object), comma-separated or repeated) with a live `diff`; all are described under [`deploy`](commands.md#deploy--reconcile-files-and-folders), [Detecting what you removed](removal-detection.md) and [The policy file](policy.md).

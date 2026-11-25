@@ -333,6 +333,32 @@ class PolicyTest {
     }
 
     @Test
+    void anObjectLevelBuiltInLayersLikeAnItemLevelOne(@TempDir Path dir) throws Exception {
+        // midgie ships only item rules so far; a type-wide object rule must behave the same once it ships one.
+        Path file = dir.resolve("policy.txt");
+        Files.writeString(file, "RoleType/Manager  scope=full\nUserType/*  scope=full\n", StandardCharsets.UTF_8);
+        Policy policy = Policy.effective(file.toFile(), "RoleType/*  scope=full\nUserType/*  scope=present\n"
+                + "OrgType/*  scope=full\nRoleType/*/description  apply=never\n");
+
+        assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("RoleType", "Other", OID, baseline()).scope,
+                "the built-in applies where the file says nothing");
+        assertEquals(DiffEngine.Scope.FULL, policy.resolveFor("UserType", "jdoe", OID, baseline()).scope,
+                "an equally specific file line wins the tie");
+        assertEquals(ApplyRules.Mode.NEVER,
+                policy.resolveFor("RoleType", "Other", OID, baseline()).apply.modeOf("description"));
+        assertEquals(4, policy.builtInCount());
+        assertTrue(policy.unmatchedRules().stream().noneMatch(rule -> rule.contains("OrgType")),
+                "a built-in reaching no object is never reported: " + policy.unmatchedRules());
+    }
+
+    @Test
+    void everyShippedBuiltInLineParses() throws Exception {
+        long ruleLines = Policy.builtInText().lines()
+                .filter(line -> !line.isBlank() && !line.strip().startsWith("#")).count();
+        assertEquals(ruleLines, Policy.effective(null).builtInCount());
+    }
+
+    @Test
     void linesRestatingABuiltInCountWithTheBuiltInsNotTheFile(@TempDir Path dir) throws Exception {
         // The file 'init --write-policy' seeds holds every built-in as an active line and nothing else; the
         // policy line used to report it as nine rules of its own, plus the same nine built-in.

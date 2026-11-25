@@ -276,6 +276,23 @@ class ConfigDefaultsTest {
                 "a relative path is read from the tree file's directory");
     }
 
+    @Test
+    void aTreeFileMayNameItsStageFoldersAndTheyAreSplitOnCommas(@TempDir Path dir) throws Exception {
+        // The tree knows its own layout; a stage folder is where its files are, not whether a gate applies.
+        Path tree = write(dir, "tree.properties", "stages = stages/*, regions/*/stage");
+
+        ConfigDefaults defaults = ConfigDefaults.load(name -> null,
+                dir.resolve("absent-site").toFile(), dir.resolve("absent-user").toFile(), tree.toFile());
+        picocli.CommandLine commandLine = Main.commandLine();
+        defaults.validate(commandLine);
+        commandLine.setDefaultValueProvider(defaults);
+        commandLine.parseArgs("deploy", ".");
+
+        DeployCommand deploy = commandLine.getSubcommands().get("deploy").getCommand();
+        assertEquals(List.of("stages/*", "regions/*/stage"), deploy.stages.stream().map(String::strip).toList(),
+                "not read as paths relative to the file, and split like the flag");
+    }
+
     // --- relative paths, which belong to the file they are written in ---
 
     @Test

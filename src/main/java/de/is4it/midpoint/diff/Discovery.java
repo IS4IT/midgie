@@ -187,6 +187,15 @@ final class Discovery {
     }
 
     /**
+     * The files a scan of {@code paths} would classify — {@code .xml} and {@code .xsd}, dot-directories and
+     * {@code excludedDirs} left out — without classifying them. For {@link TreeIndex}, which walks the whole
+     * tree by the same rules but needs only each file's identity.
+     */
+    static List<File> consideredFiles(List<File> paths, List<File> excludedDirs) throws IOException {
+        return collectFiles(paths, excludedDirs, new ArrayList<>(), new int[1]);
+    }
+
+    /**
      * Every considered file under {@code paths}, deduplicated, minus anything under {@code excludedDirs}.
      *
      * <p>Overlapping arguments are an easy mistake in a pipeline ({@code deploy config config/roles}), and
@@ -303,7 +312,7 @@ final class Discovery {
     }
 
     /** Whether the document carries midgie's generated-file marker as a comment outside the root element. */
-    private static boolean isGenerated(Document document) {
+    static boolean isGenerated(Document document) {
         NodeList children = document.getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
             Node node = children.item(i);

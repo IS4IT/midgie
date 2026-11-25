@@ -18,7 +18,7 @@ The item goes into the POST that creates the object and is left alone by every l
 
 ## Built-in rules
 
-Some items are like that in nearly every midPoint deployment, so midgie ships `apply=on-create` rules for them and applies them on every deploy and live diff, with or without a `--policy` file:
+Some items are like that in nearly every midPoint deployment, so midgie ships rules for them — all `apply=on-create` so far — and applies them on every deploy and live diff, with or without a `--policy` file:
 
 | Rule | Why |
 |---|---|
@@ -46,6 +46,19 @@ The most specific rule wins whichever source it comes from, so a broader line (`
 
 **`apply=if-absent`** is the gentler sibling, midPoint's *weak* mapping strength: the item is written whenever the server holds **no value** for it and never overwritten or removed once it does — not by a PATCH, not under `--scope full`, not when it drops out of the file. It differs from `on-create` only once someone clears the item: `if-absent` fills it in again on the next deploy, `on-create` leaves it empty. It is judged per item, so a rule on a container fills in each missing child and leaves the present ones alone, and a newly added container carries its `if-absent` items along (nothing can be there yet). Held-back differences are named with their rule in the `--dry-run`/`--plan` note, e.g. `left alone by the policy: description (apply=if-absent)`.
 
+## `apply=never`
+
+**`apply=never`** leaves an item to the server entirely: midgie does not write it when it creates the object, does not change it, and does not remove it — not under `--scope full`, not when it drops out of the file. It is the exception list for an object the tree owns whole. Under `scope=full` an item the files leave out is deleted, which is what you want for the parts you own and wrong for the ones the server's people own, such as the log levels an administrator raises while troubleshooting:
+
+```
+SystemConfigurationType/SystemConfiguration  scope=full
+SystemConfigurationType/*/logging  apply=never
+```
+
+Under the default `--scope present` the same is had by simply leaving the item out of the file; `never` matters where leaving it out would delete it. Like the other values it is per item, covers everything beneath its path, and a more specific `apply=always` rule carves an exception out of it. A new container added to an existing object goes without its `never` items, and a change that would take such an item away with its container — deleting a single-valued container it sits in, or replacing a list entry whole — is refused for that object, as for `on-create`. A file that declares a `never` item anyway gets a warning that its value is ignored; held-back differences are named in the `--dry-run`/`--plan` note, e.g. `left alone by the policy: logging (apply=never)`.
+
+What differs per stage belongs in the tree, not under `never`: a stage's own `deploymentInformation` is managed, in that stage's folder (see [Staging](staging.md) and [`--stages`](strategy.md#full-scope-needs-the-whole-object)).
+
 ## Seeding one with `init --write-policy`
 
 `init --write-policy` seeds a starter policy for a tree — a separate step, so it neither needs nor implies `--create-state`:
@@ -59,7 +72,7 @@ It suggests **only what the defaults leave open**, and says in its header what t
 - **Tracked tree (deploy merges):** a list whose live copy holds values the tree does not list gets a **commented-out** `<Type>/<Name>/<path>  multivalue=replace`. Merge keeps those values; uncomment the rule if the tree should own the list, and deploy deletes them.
 - **Untracked tree (deploy replaces):** the same finding gets an **active** `multivalue=merge`, because replace would delete those values on the next deploy. Delete the rule if the tree owns the list and they should go.
 
-Each rule's comment names the object, the path and how many live values it is about. After them come midgie's **[built-in rules](#built-in-rules)**, as **active** lines with the reason for each. A deploy applies them with or without the file, so writing them changes nothing; they are there so the file shows the whole policy in effect, and as the starting point for overriding one. Last, **commented examples** of the knobs nothing above used — `scope=full` on the tree's first object, `multivalue=replace`/`merge` on a list, `apply=if-absent`, `smart-refs=verify`, and an `oid:` selector — each one a line `deploy --policy` accepts once uncommented. As written, a seeded file for a tracked tree changes nothing a deploy does.
+Each rule's comment names the object, the path and how many live values it is about. After them come midgie's **[built-in rules](#built-in-rules)**, as **active** lines with the reason for each. A deploy applies them with or without the file, so writing them changes nothing; they are there so the file shows the whole policy in effect, and as the starting point for overriding one. Last, **commented examples** of the knobs nothing above used — `scope=full` on the tree's first object, `multivalue=replace`/`merge` on a list, `apply=if-absent`, `apply=never`, `smart-refs=verify`, and an `oid:` selector — each one a line `deploy --policy` accepts once uncommented. As written, a seeded file for a tracked tree changes nothing a deploy does.
 
 Re-running it on an existing file **refreshes only its marked block**, so you can add objects to the tree and pick up their suggestions without losing anything you wrote:
 

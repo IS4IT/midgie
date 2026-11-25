@@ -8,6 +8,7 @@ package de.is4it.midpoint.diff;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.function.Predicate;
 
 import com.evolveum.midpoint.prism.Item;
 import com.evolveum.midpoint.prism.Objectable;
@@ -22,11 +23,15 @@ import com.evolveum.midpoint.prism.path.ItemPath;
 /**
  * When midgie may write an item, from the policy's {@code apply} knob — a {@code --policy} file line or one
  * of midgie's built-in rules: {@code always} (the default); {@code on-create} — written in the POST that
- * creates the object, and never touched by a later PATCH; or {@code if-absent} — written whenever the server
- * holds no value for it, and never overwritten or removed, like a midPoint mapping of weak strength. The motivating item for {@code on-create} is
- * {@code TaskType/executionState}: a task is deployed suspended or runnable, and from then on operators and
- * midPoint's task manager own it, so a redeploy must not flip it back. {@code if-absent} differs only once
- * someone clears the item: it is filled in again on the next deploy.
+ * creates the object, and never touched by a later PATCH; {@code if-absent} — written whenever the server
+ * holds no value for it, and never overwritten or removed, like a midPoint mapping of weak strength; or
+ * {@code never} — not written, changed or removed at all, the server's own. The motivating item for
+ * {@code on-create} is {@code TaskType/executionState}: a task is deployed suspended or runnable, and from then
+ * on operators and midPoint's task manager own it, so a redeploy must not flip it back. {@code if-absent}
+ * differs only once someone clears the item: it is filled in again on the next deploy. {@code never} is the
+ * exception list for an object the tree otherwise owns whole under {@code --scope full}, where an item the
+ * files leave out would be deleted: the system configuration's {@code logging}, say, which administrators
+ * raise while they troubleshoot.
  *
  * <p>Rules are identity-scoped globs like the {@code multivalue} path rules: each is matched against the
  * object's identity ({@code Type/Name}, or {@code oid:X}) followed by the item's local names. A rule covers
@@ -37,12 +42,18 @@ final class ApplyRules {
     enum Mode {
         ALWAYS("always"),
         ON_CREATE("on-create"),
-        IF_ABSENT("if-absent");
+        IF_ABSENT("if-absent"),
+        NEVER("never");
 
         final String keyword;
 
         Mode(String keyword) {
             this.keyword = keyword;
+        }
+
+        /** Whether an item under this mode is taken out of a value midgie adds to an existing object. */
+        boolean strippedFromAdds() {
+            return this == ON_CREATE || this == NEVER;
         }
 
         /** The mode a policy value names, or {@code null} if it names none. */
@@ -139,13 +150,15 @@ final class ApplyRules {
     /**
      * Take out of {@code delta} every change the policy does not allow on an object that already exists.
      *
-     * <p>A change at or beneath an {@code on-create} item is dropped whole. A change at or beneath an
+     * <p>A change at or beneath an {@code on-create} or {@code never} item is dropped whole. A change at or
+     * beneath an
      * {@code if-absent} item is dropped when the server holds a value for that item, and kept (filling it in)
      * when it holds none — so an {@code if-absent} item is never overwritten and never removed.
      *
      * <p>A change <em>above</em> such an item needs more care. Adding a container keeps the container and
-     * strips {@code on-create} items from the added value, so a new {@code activation} does not bring an
-     * {@code on-create} {@code administrativeStatus} with it; {@code if-absent} items stay, since nothing on the
+     * strips {@code on-create} and {@code never} items from the added value, so a new {@code activation} does
+     * not bring an {@code on-create} {@code administrativeStatus} with it; {@code if-absent} items stay, since
+     * nothing on the
      * server can be under a container that is only now being added. Replacing a container is the same unless
      * the server already holds a restricted item beneath it: the replace would overwrite that whatever the new
      * value carries, so it is reported as a conflict for the caller to refuse.
@@ -166,12 +179,13 @@ final class ApplyRules {
         for (ItemDelta<?, ?> mod : new ArrayList<ItemDelta<?, ?>>(delta.getModifications())) {
             List<String> names = localNames(mod.getPath());
             Mode mode = modeAt(names);
-            if (mode == Mode.ON_CREATE || (mode == Mode.IF_ABSENT && holdsValue(live, mod.getPath()))) {
+            if (mode == Mode.ON_CREATE || mode == Mode.NEVER
+                    || (mode == Mode.IF_ABSENT && holdsValue(live, mod.getPath()))) {
                 addOnce(held, label(names));
                 changed = true;
                 continue;
             }
-            if (mode == Mode.IF_ABSENT || !couldReachBelow(names, false)) {
+            if (mode == Mode.IF_ABSENT || !couldReachBelow(names, RESTRICTING)) {
                 kept.add(mod);
                 continue;
             }
@@ -191,9 +205,9 @@ final class ApplyRules {
                             + String.join(", ", onServer) + ", which the policy does not let a deploy "
                             + "overwrite");
                 }
-                stripOnCreate(copy.getValuesToReplace(), names, stripped);
+                stripUnwritable(copy.getValuesToReplace(), names, stripped);
             } else {
-                stripOnCreate(copy.getValuesToAdd(), names, stripped);
+                stripUnwritable(copy.getValuesToAdd(), names, stripped);
             }
             if (stripped.isEmpty()) {
                 kept.add(mod);
@@ -201,7 +215,7 @@ final class ApplyRules {
             }
             stripped.forEach(path -> addOnce(held, path));
             changed = true;
-            // A container value that held nothing but on-create items is left empty; sending it would
+            // A container value that held nothing but stripped items is left empty; sending it would
             // create an empty container, which is not what the file declared either.
             if (dropEmptyValues(copy)) {
                 kept.add(copy);
@@ -244,7 +258,7 @@ final class ApplyRules {
                 continue;
             }
             List<String> names = localNames(mod.getPath());
-            if (!couldReachBelow(names, false)) {
+            if (!couldReachBelow(names, RESTRICTING)) {
                 continue;
             }
             boolean replacedWhole = addsAt(delta, mod.getPath());
@@ -348,27 +362,62 @@ final class ApplyRules {
         return !mod.isEmpty();   // an add may still carry values to delete
     }
 
-    /** Remove {@code on-create} items from added container values, recording each path removed. */
-    private void stripOnCreate(Collection<? extends PrismValue> values, List<String> prefix,
+    /**
+     * Take the {@code never} items out of {@code object}, the body of a create: midgie writes nothing there,
+     * not even the first value. Returns each path taken out, labelled with its rule, for the held-back note.
+     */
+    List<String> stripNever(PrismObject<? extends Objectable> object) {
+        List<String> stripped = new ArrayList<>();
+        if (object != null && rules.stream().anyMatch(rule -> rule.mode == Mode.NEVER)) {
+            strip(object.getValue(), List.of(), mode -> mode == Mode.NEVER, true, stripped);
+        }
+        return stripped;
+    }
+
+    /**
+     * The paths {@code desired} declares although a {@code never} rule keeps midgie from writing them: a file
+     * contradicting the policy, which a deploy should name rather than silently ignore.
+     */
+    List<String> declaredNever(PrismObject<? extends Objectable> desired) {
+        List<String> found = new ArrayList<>();
+        if (desired != null && rules.stream().anyMatch(rule -> rule.mode == Mode.NEVER)) {
+            strip(desired.getValue(), List.of(), mode -> mode == Mode.NEVER, false, found);
+        }
+        return found;
+    }
+
+    /** Remove {@code on-create} and {@code never} items from added container values, recording each path. */
+    private void stripUnwritable(Collection<? extends PrismValue> values, List<String> prefix,
             List<String> stripped) {
         if (values == null) {
             return;
         }
         for (PrismValue value : values) {
             if (value instanceof PrismContainerValue<?> container) {
-                stripOnCreate(container, prefix, stripped);
+                strip(container, prefix, Mode::strippedFromAdds, true, stripped);
             }
         }
     }
 
-    private void stripOnCreate(PrismContainerValue<?> container, List<String> prefix, List<String> stripped) {
+    /**
+     * Walk {@code container} for items whose mode {@code select} picks, recording each one's labelled path and,
+     * when {@code remove}, taking it out. Descends only where such a rule could still match.
+     */
+    private void strip(PrismContainerValue<?> container, List<String> prefix, Predicate<Mode> select,
+            boolean remove, List<String> found) {
         for (Item<?, ?> item : new ArrayList<Item<?, ?>>(container.getItems())) {
             List<String> names = child(prefix, item);
-            if (modeAt(names) == Mode.ON_CREATE) {
-                container.remove(item);
-                addOnce(stripped, label(names));
-            } else if (item instanceof PrismContainer<?> && couldReachBelow(names, true)) {
-                stripOnCreate(item.getValues(), names, stripped);
+            if (select.test(modeAt(names))) {
+                if (remove) {
+                    container.remove(item);
+                }
+                addOnce(found, label(names));
+            } else if (item instanceof PrismContainer<?> && couldReachBelow(names, select)) {
+                for (PrismValue value : item.getValues()) {
+                    if (value instanceof PrismContainerValue<?> child) {
+                        strip(child, names, select, remove, found);
+                    }
+                }
             }
         }
     }
@@ -388,7 +437,7 @@ final class ApplyRules {
                 Mode mode = modeAt(names);
                 if (mode != Mode.ALWAYS && item.hasAnyValue()) {
                     addOnce(found, String.join("/", names));
-                } else if (item instanceof PrismContainer<?> && couldReachBelow(names, false)) {
+                } else if (item instanceof PrismContainer<?> && couldReachBelow(names, RESTRICTING)) {
                     collectRestricted(item.getValues(), names, found);
                 }
             }
@@ -416,13 +465,13 @@ final class ApplyRules {
         return best;
     }
 
-    /**
-     * Whether a restricting rule could match something strictly beneath {@code itemNames} — only an
-     * {@code on-create} one when {@code onCreateOnly}, since only those are stripped from added values.
-     */
-    private boolean couldReachBelow(List<String> itemNames, boolean onCreateOnly) {
+    /** Every mode that restricts what a deploy may do to an existing object. */
+    private static final Predicate<Mode> RESTRICTING = mode -> mode != Mode.ALWAYS;
+
+    /** Whether a rule whose mode {@code select} picks could match something strictly beneath {@code itemNames}. */
+    private boolean couldReachBelow(List<String> itemNames, Predicate<Mode> select) {
         for (Rule rule : rules) {
-            if (rule.mode == Mode.ALWAYS || (onCreateOnly && rule.mode != Mode.ON_CREATE)) {
+            if (!select.test(rule.mode)) {
                 continue;
             }
             for (List<String> prefix : identityPrefixes) {

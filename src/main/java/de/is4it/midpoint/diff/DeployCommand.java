@@ -164,9 +164,16 @@ public class DeployCommand implements Callable<Integer> {
 
     @Option(names = "--policy", paramLabel = "FILE",
             description = "Per-object/-item diff-strategy policy file ('<Type/Name/item glob> key=value' lines), "
-                    + "layered on midgie's built-in apply=on-create rules; most-specific selector wins, and a "
+                    + "layered on midgie's built-in rules; most-specific selector wins, and a "
                     + "file line wins a tie with a built-in one.")
     File policyFile;
+
+    @Option(names = "--stages", paramLabel = "GLOB", split = ",",
+            description = "Folders that each hold one stage's part of the tree, as globs relative to the tree "
+                    + "root (e.g. stages/*); comma-separated or repeated. A stage this run does not deploy from "
+                    + "is not counted when an object's files are checked for being all in the run, which "
+                    + "--scope full needs.")
+    List<String> stages;
 
     @Option(names = "--no-prune",
             description = "Only report the values this tree deployed previously and no longer declares, instead "
@@ -254,6 +261,8 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Each object's removals, which its own PATCH carries unless --no-prune. */
     private final Map<DeployObject, List<RemovalDetector.Removal>> removalsByUnit = new IdentityHashMap<>();
+    /** Per object, the files of the tree that describe it but are not in this run (see {@link TreeIndex}). */
+    private final Map<DeployObject, List<File>> filesOutsideRun = new IdentityHashMap<>();
 
     /** For each object, the paths of the files it was compared against as last applied. */
     private Map<DeployObject, List<String>> comparedPaths = Map.of();
@@ -556,6 +565,7 @@ public class DeployCommand implements Callable<Integer> {
             }
             LOG.debug("{} apply unit(s); mode={}", units.size(), planDir != null ? "plan" : "apply");
 
+            findFilesOutsideRun(prismContext, units);
             Tracking tracking = resolveTracking(prismContext, client);
             List<RemovalDetector.Removal> removals = findRemovals(prismContext, tracking, units);
             settleMultiValue(tracking);
@@ -759,7 +769,9 @@ public class DeployCommand implements Callable<Integer> {
         }
         for (DeployObject unit : units) {
             List<String> others = files.otherFilesOf(unit, deployed);
-            if (!others.isEmpty()) {
+            // Already said from the working tree, which sees every file of the object, not only those deployed
+            // before; tracking still speaks for a file outside the tree root.
+            if (!others.isEmpty() && !filesOutsideRun.containsKey(unit)) {
                 // Deploying part of an object applies only that part: what the other files contribute is
                 // neither sent nor read as removed, but the operator should know the object is split.
                 note("note: " + unit.objectPath() + " also has " + others.size() + " file(s) outside the "
@@ -806,8 +818,9 @@ public class DeployCommand implements Callable<Integer> {
 
     /**
      * Drop the removals under items the policy's {@code apply} rules restrict. Once the object exists midgie
-     * does not write an {@code on-create} item at all, and never removes an {@code if-absent} one — and
-     * pruning a value is a removal like any other, so a value dropped from the tree there stays on the server.
+     * does not write an {@code on-create} or {@code never} item at all, and never removes an {@code if-absent}
+     * one — and pruning a value is a removal like any other, so a value dropped from the tree there stays on
+     * the server.
      */
     static List<RemovalDetector.Removal> withoutRestricted(Policy policy, StrategyOptions.Resolved baseline,
             List<RemovalDetector.Removal> removals) {
@@ -1114,11 +1127,102 @@ public class DeployCommand implements Callable<Integer> {
         return rows;
     }
 
-    /** The strategy for one object: the CLI flags, with any matching policy knob, the file's or a built-in, layered on. */
+    /**
+     * The strategy for one object: the CLI flags, with any matching policy knob, the file's or a built-in, layered
+     * on — and {@code --scope full} only when the run holds every file of the object, since full scope reads
+     * whatever the run's files leave out as removed (see {@link TreeIndex}).
+     */
     private StrategyOptions.Resolved strategyFor(DeployObject unit) {
+        StrategyOptions.Resolved resolved = requestedStrategyFor(unit);
+        if (resolved.scope == DiffEngine.Scope.FULL && filesOutsideRun.containsKey(unit)) {
+            return resolved.withScope(DiffEngine.Scope.PRESENT);
+        }
+        return resolved;
+    }
+
+    /** As {@link #strategyFor}, before the completeness check: what the flags and the policy ask for. */
+    private StrategyOptions.Resolved requestedStrategyFor(DeployObject unit) {
         return (policy != null)
                 ? policy.resolveFor(unit.typeName(), unit.name(), unit.oid(), globalStrategy)
                 : globalStrategy;
+    }
+
+    /**
+     * Find the objects the tree describes with files this run leaves out, and say so per object. Under
+     * {@code --scope full} such an object is deployed with {@code --scope present}, so that the part outside
+     * the run is neither sent nor deleted; the note says which files keep it from full scope.
+     *
+     * <p>The tree root is the folder of the tree-local config file when it holds every run path, else the git
+     * work tree they lie in. A run with neither — paths outside any repository and config — has nothing to
+     * compare against and is taken as complete, as every run was before the check existed.
+     */
+    private void findFilesOutsideRun(PrismContext prismContext, List<DeployObject> units) {
+        File root = treeRoot();
+        if (root == null) {
+            LOG.debug("no tree root for {}: every object counts as complete", paths);
+            return;
+        }
+        TreeIndex index;
+        try {
+            index = TreeIndex.build(prismContext, root, (stages != null) ? stages : List.of(), planDirectories());
+        } catch (IOException e) {
+            // Without the index nothing shows the run is complete, so full scope could delete what an unread
+            // folder declares. Every object is held to present scope instead, and the run says why.
+            warn("could not read the tree under " + root + " (" + e.getMessage() + "); objects under --scope "
+                    + "full are deployed with --scope present this run.");
+            for (DeployObject unit : units) {
+                filesOutsideRun.put(unit, List.of());
+            }
+            return;
+        }
+        filesOutsideRun.putAll(index.outsideRun(units, paths));
+        for (Map.Entry<DeployObject, List<File>> entry : filesOutsideRun.entrySet()) {
+            DeployObject unit = entry.getKey();
+            List<String> others = new ArrayList<>();
+            for (File file : entry.getValue()) {
+                others.add(index.relative(file));
+            }
+            String files = others.size() + " file(s) outside this run (" + String.join(", ", others) + ")";
+            if (requestedStrategyFor(unit).scope == DiffEngine.Scope.FULL) {
+                note("note: " + unit.objectPath() + " has " + files + ", so it is deployed with --scope present: "
+                        + "--scope full would delete what those files declare. Deploy them together for full scope.");
+            } else {
+                // Deploying part of an object applies only that part: what the other files contribute is
+                // neither sent nor read as removed, but the operator should know the object is split.
+                note("note: " + unit.objectPath() + " also has " + files + "; deploying part of an object "
+                        + "applies only that part.");
+            }
+        }
+    }
+
+    /**
+     * The folder the run's object files are looked up in: the tree-local config file's folder when every run
+     * path lies inside it, else the git work tree of the run paths, else {@code null}.
+     */
+    private File treeRoot() {
+        File treeFile = ConfigDefaults.locateTreeFile(new File(System.getProperty("user.dir", "."))).file();
+        if (treeFile != null && containsAll(treeFile.getAbsoluteFile().getParentFile(), paths)) {
+            return treeFile.getAbsoluteFile().getParentFile();
+        }
+        File first = paths.get(0).getAbsoluteFile();
+        GitRevision git = GitRevision.of(first.isDirectory() ? first : first.getParentFile());
+        File top = git.isRepository() ? git.topLevel() : null;
+        return (top != null && containsAll(top, paths)) ? top : null;
+    }
+
+    private static boolean containsAll(File dir, List<File> paths) {
+        java.nio.file.Path root;
+        try {
+            root = dir.getCanonicalFile().toPath();
+            for (File path : paths) {
+                if (!path.getCanonicalFile().toPath().startsWith(root)) {
+                    return false;
+                }
+            }
+        } catch (IOException e) {
+            return false;
+        }
+        return true;
     }
 
     /**

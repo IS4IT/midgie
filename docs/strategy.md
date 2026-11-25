@@ -28,6 +28,25 @@ That is the rule list values already follow — only remove what midgie deployed
 
 `--multivalue merge|replace` on the command line (or in the policy, per object or path) overrides either. `--no-prune` withholds the removals but leaves the default alone: flipping the run to replace because of it would delete more, not less. Note that *your own* tree splitting a list across several files needs neither: `deploy` combines the files describing one object before diffing. `diff` reads the same history on a live run, so it shows the same change deploy would send; an offline `diff` of two files has none, and uses replace.
 
+## Full scope needs the whole object
+
+**`--scope full` applies only when the run holds every file of the object.** Full scope deletes whatever the object's files leave out, so it is right for an object the tree owns whole and wrong for a run that deploys only part of its files: deploying `roles/a.xml` alone would delete everything `extra/b.xml` declares for the same object. Before it plans, `deploy` therefore reads the identity (type, OID, name) of every object file in the tree — the folder of the tree-local [`.midgie.properties`](configuration.md#a-midgieproperties-in-the-tree) when it holds the run's paths, otherwise the git checkout they are in — and an object some of whose files the run leaves out is deployed with `--scope present`, with a note naming those files:
+
+```
+midgie: note: SystemConfigurationType/SystemConfiguration has 1 file(s) outside this run (extra/notifications.xml), so it is deployed with --scope present: --scope full would delete what those files declare. Deploy them together for full scope.
+```
+
+Deploy the files together and full scope applies. A live `diff` makes the same check. Paths outside any checkout and any tree-local config have nothing to compare against and keep full scope as asked, as before the check existed.
+
+**Stage folders.** A tree that keeps one folder per stage (see [Staging](staging.md#what-constants-cannot-reach)) describes its system configuration with the common files *and* one stage's: deploying `common/ stages/prod/` leaves `stages/dev/` out on purpose. Name the stage folders, as globs relative to the tree root, and a stage the run does not deploy from is not counted:
+
+```
+# .midgie.properties
+stages = stages/*
+```
+
+(`--stages stages/*` on the command line, comma-separated or repeated for several.) A stage the run does deploy from counts in full: deploying one of `stages/prod/`'s files still needs its other files there for full scope. What differs per stage is managed in that stage's folder; items no stage should touch are excluded with [`apply=never`](policy.md#applynever).
+
 ## Syncing an item nested inside a multi-valued container
 
 To manage **one entry** deep inside multi-valued containers — say a single GUI panel at

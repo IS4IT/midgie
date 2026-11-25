@@ -148,6 +148,12 @@ public final class StrategyOptions {
                     tracked);
         }
 
+        /** This strategy with {@code scope} in place of its own; everything else, tracking included, stays. */
+        Resolved withScope(DiffEngine.Scope scope) {
+            return new Resolved(scope, equivalence, multiValue, allowInplaceMerge, smartRefs, apply, multiValueAuto,
+                    tracked);
+        }
+
         /**
          * Whether the diff keeps live items below the top level that the desired object does not declare —
          * the nested analogue of {@code --scope present}, on a tracked run only. {@code --scope full} asks for

@@ -80,7 +80,7 @@ class ApplyRulesTest {
     @Test
     void anUnknownApplyValueIsRefused(@TempDir Path dir) {
         IOException e = assertThrows(IOException.class,
-                () -> load(dir, "TaskType/*/executionState apply=never"));
+                () -> load(dir, "TaskType/*/executionState apply=sometimes"));
         assertTrue(e.getMessage().contains("invalid value for 'apply'"), e.getMessage());
     }
 
@@ -294,6 +294,112 @@ class ApplyRulesTest {
         assertTrue(outcome.modificationXml.contains("validTo"), outcome.modificationXml);
         assertFalse(outcome.modificationXml.contains("administrativeStatus"), outcome.modificationXml);
         assertEquals(List.of("activation/administrativeStatus (apply=if-absent)"), outcome.heldBack);
+    }
+
+    // --- never ---
+
+    @Test
+    void neverLoadsAndResolves(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/description apply=never");
+        assertEquals(ApplyRules.Mode.NEVER, policy.resolveFor("UserType", "jdoe", USER_OID,
+                baseline(DiffEngine.Scope.PRESENT)).apply.modeOf("description"));
+    }
+
+    @Test
+    void neverIsNotDeletedUnderFullScope(@TempDir Path dir) throws Exception {
+        // The reason the value exists: the exception list of an object the tree owns whole.
+        Policy policy = load(dir, "UserType/*/description apply=never");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.FULL,
+                parse(user("")), parse(user("<description>set on the server</description>")));
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertEquals(List.of("description (apply=never)"), outcome.heldBack);
+        assertTrue(outcome.warnings.isEmpty(), outcome.warnings.toString());
+    }
+
+    @Test
+    void neverDoesNotFillInAnItemTheServerLacks(@TempDir Path dir) throws Exception {
+        // Unlike if-absent: the server's own, even while it holds nothing there.
+        Policy policy = load(dir, "UserType/*/description apply=never");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<description>from the file</description>")), parse(user("")));
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertEquals(List.of("description (apply=never)"), outcome.heldBack);
+    }
+
+    @Test
+    void aFileDeclaringANeverItemIsWarnedThatTheValueIsIgnored(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/description apply=never");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<description>from the file</description>")),
+                parse(user("<description>from the file</description>")));
+
+        assertEquals(Reconciler.Action.IN_SYNC, outcome.action, outcome.detail);
+        assertEquals(1, outcome.warnings.size(), outcome.warnings.toString());
+        assertTrue(outcome.warnings.get(0).contains("description (apply=never)"), outcome.warnings.get(0));
+        assertTrue(outcome.warnings.get(0).contains("ignored"), outcome.warnings.get(0));
+    }
+
+    @Test
+    void aCreateLeavesANeverItemOut(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/description apply=never");
+        PrismObject<? extends Objectable> desired = parse(user("<description>from the file</description>"));
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT, desired, null);
+
+        assertEquals(Reconciler.Action.CREATE, outcome.action, outcome.detail);
+        assertFalse(outcome.createBody.contains("from the file"), outcome.createBody);
+        assertTrue(outcome.createBody.contains("jdoe"), outcome.createBody);
+        assertEquals(List.of("description (apply=never)"), outcome.heldBack);
+        assertEquals(1, outcome.warnings.size(), outcome.warnings.toString());
+        assertNotNull(desired.findItem(ItemPath.create(new QName(NS, "description"))),
+                "the desired object itself must not be edited");
+    }
+
+    @Test
+    void aCreateWithoutNeverItemsIsUnchanged(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/description apply=never");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT, parse(user("")), null);
+
+        assertEquals(Reconciler.Action.CREATE, outcome.action, outcome.detail);
+        assertTrue(outcome.heldBack.isEmpty(), outcome.heldBack.toString());
+        assertTrue(outcome.warnings.isEmpty(), outcome.warnings.toString());
+    }
+
+    @Test
+    void anAddedContainerComesWithoutItsNeverItem(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/activation/administrativeStatus apply=never");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<activation><administrativeStatus>disabled</administrativeStatus>"
+                        + "<validTo>2030-01-01T00:00:00Z</validTo></activation>")),
+                parse(user("")));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("validTo"), outcome.modificationXml);
+        assertFalse(outcome.modificationXml.contains("administrativeStatus"), outcome.modificationXml);
+        assertEquals(List.of("activation/administrativeStatus (apply=never)"), outcome.heldBack);
+    }
+
+    @Test
+    void aSingleValuedContainerIsNotRemovedFromUnderANeverItem(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/activation/administrativeStatus apply=never");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.FULL, parse(user("")),
+                parse(user("<activation><administrativeStatus>disabled</administrativeStatus></activation>")));
+
+        assertEquals(Reconciler.Action.FAIL, outcome.action, outcome.detail);
+        assertTrue(outcome.detail.contains("activation/administrativeStatus"), outcome.detail);
+    }
+
+    @Test
+    void aMoreSpecificAlwaysRuleCarvesAnExceptionOutOfNever(@TempDir Path dir) throws Exception {
+        Policy policy = load(dir, "UserType/*/activation apply=never",
+                "UserType/*/activation/validTo apply=always");
+        Reconciler.Outcome outcome = plan(policy, DiffEngine.Scope.PRESENT,
+                parse(user("<activation><validTo>2030-01-01T00:00:00Z</validTo></activation>")),
+                parse(user("<activation><validTo>2029-01-01T00:00:00Z</validTo></activation>")));
+
+        assertEquals(Reconciler.Action.PATCH, outcome.action, outcome.detail);
+        assertTrue(outcome.modificationXml.contains("2030"), outcome.modificationXml);
     }
 
     // --- a delete above a restricted item ---

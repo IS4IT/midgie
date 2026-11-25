@@ -33,16 +33,17 @@ import org.slf4j.LoggerFactory;
  * <p>A selector that stops at the object identity sets object-level knobs ({@code scope}, {@code equivalence},
  * {@code allow-inplace-merge}, and a default {@code multivalue}); a selector that reaches an item sets
  * {@code multivalue} for that container and {@code apply} for that item ({@code on-create}: written only when
- * the object is created; {@code if-absent}: written only while the server holds no value). An object-only knob
+ * the object is created; {@code if-absent}: written only while the server holds no value; {@code never}: not
+ * written, changed or removed at all). An object-only knob
  * on an item-path selector is rejected, as is {@code apply} on an object. When
  * several rules set the same knob for the same target, the <b>most-specific</b> selector wins (more literal
  * segments, then fewer {@code **}, then a longer literal prefix; ties fall to the earlier line). The CLI flags
  * are the baseline every matching knob is layered onto. The object XML stays pure midPoint XML — strategy
  * lives here, never embedded in the objects.
  *
- * <p>Beneath the file sit midgie's built-in rules ({@value #BUILT_IN_RESOURCE}, in the same grammar): the
- * {@code apply=on-create} items midPoint or its operators own once an object exists, such as a task's
- * {@code executionState}. They apply with or without a file, after its lines, so a file line naming the same
+ * <p>Beneath the file sit midgie's built-in rules ({@value #BUILT_IN_RESOURCE}, in the same grammar, any knob
+ * a file line may set): today the {@code apply=on-create} items midPoint or its operators own once an object
+ * exists, such as a task's {@code executionState}. They apply with or without a file, after its lines, so a file line naming the same
  * item wins the tie and overrides one; there is no switch to turn them off as a whole.
  */
 final class Policy {
@@ -147,9 +148,14 @@ final class Policy {
      * block at the end of a file.
      */
     static Policy effective(File file) throws IOException {
+        return effective(file, builtInText());
+    }
+
+    /** As {@link #effective(File)}, with {@code builtIns} as the built-in rules' text — for tests of the layering. */
+    static Policy effective(File file, String builtIns) throws IOException {
         List<Rule> rules = new ArrayList<>((file != null) ? load(file).rules : List.of());
         try {
-            rules.addAll(parse(builtInText().lines().toList(), Origin.BUILT_IN_RULES, rules.size()));
+            rules.addAll(parse(builtIns.lines().toList(), Origin.BUILT_IN_RULES, rules.size()));
         } catch (IOException e) {
             throw new IllegalStateException("midgie's built-in policy does not parse: " + e.getMessage(), e);
         }

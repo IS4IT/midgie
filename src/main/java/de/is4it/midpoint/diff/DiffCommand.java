@@ -123,8 +123,14 @@ public class DiffCommand implements Callable<Integer> {
 
     @Option(names = "--policy", paramLabel = "FILE",
             description = "Per-object/-item diff-strategy policy file, as deploy takes it (live mode only). A live "
-                    + "diff applies midgie's built-in apply=on-create rules with or without one.")
+                    + "diff applies midgie's built-in rules with or without one.")
     File policyFile;
+
+    @Option(names = "--stages", paramLabel = "GLOB", split = ",",
+            description = "Folders that each hold one stage's part of the tree, as deploy takes it (live mode "
+                    + "only): another stage's files do not count when --scope full checks that the object's "
+                    + "files are all being compared.")
+    List<String> stages;
 
     @Override
     public Integer call() {
@@ -215,6 +221,7 @@ public class DiffCommand implements Callable<Integer> {
         preview.format = format;
         preview.output = output;
         preview.policyFile = policyFile;
+        preview.stages = stages;
         preview.noPrune = noPrune;
         preview.noMatchByName = noMatchByName;
         preview.quiet = quiet;

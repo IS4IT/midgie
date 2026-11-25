@@ -589,6 +589,54 @@ class LiveIntegrationTest {
     }
 
     @Test
+    void fullScopeAppliesOnlyToAnObjectWhoseFilesAreAllInTheRun(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+
+        // One role in two files of one git tree; the server then gains an item no file declares.
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path a = tree.resolve("roles/a.xml");
+        Files.createDirectories(a.getParent());
+        Files.writeString(a, splitRole("<subtype>from-a</subtype>"), StandardCharsets.UTF_8);
+        Path b = tree.resolve("extra/b.xml");
+        Files.createDirectories(b.getParent());
+        Files.writeString(b, splitRole("<description>from-b</description>"), StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        assertEquals(0, run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        Path side = dir.resolve("side.xml");
+        Files.writeString(side, splitRole("<documentation>live-only</documentation>"), StandardCharsets.UTF_8);
+        assertEquals(0, run("deploy", side.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        // Only a.xml under full scope: deleting what b.xml declares would be the bug, so present scope applies.
+        CliResult partial = run("deploy", a.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan", "--scope", "full");
+        assertEquals(0, partial.exit, partial.out + partial.err);
+        assertTrue(partial.err.contains("deployed with --scope present"), partial.err);
+        String afterPartial = client.getObject("roles", DEPLOY_ROLE_OID);
+        assertTrue(afterPartial.contains("from-b") && afterPartial.contains("live-only"), afterPartial);
+
+        // Under apply=never the server keeps its item even when the whole object is deployed under full scope.
+        Path policy = dir.resolve("never.policy");
+        Files.writeString(policy, "RoleType/*/documentation  apply=never\n", StandardCharsets.UTF_8);
+        CliResult guarded = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan", "--scope", "full", "--policy", policy.toString());
+        assertEquals(0, guarded.exit, guarded.out + guarded.err);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains("live-only"), "apply=never kept it");
+
+        // The whole tree under full scope: what no file declares goes, what b.xml declares stays.
+        CliResult whole = run("deploy", tree.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan", "--scope", "full");
+        assertEquals(0, whole.exit, whole.out + whole.err);
+        String afterWhole = client.getObject("roles", DEPLOY_ROLE_OID);
+        assertFalse(afterWhole.contains("live-only"), afterWhole);
+        assertTrue(afterWhole.contains("from-b") && afterWhole.contains("from-a"), afterWhole);
+
+        deleteDeployObjects();
+    }
+
+    @Test
     void aTrackedTreeMergesAndRemovesWhatItDroppedInTheSamePatchAndRollsBack(@TempDir Path dir)
             throws Exception {
         assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
@@ -1087,7 +1135,7 @@ class LiveIntegrationTest {
         CliResult part = run("deploy", tree.resolve("roles").toString(), "--url", HOST, "-u", USER, "-p", PASSWORD,
                 "--yes", "--no-rollback-plan");
         assertEquals(0, part.exit, part.out + part.err);
-        assertTrue(part.err.contains("also has 1 file(s) outside the deployed path (extra/role-extra.xml)"),
+        assertTrue(part.err.contains("also has 1 file(s) outside this run (extra/role-extra.xml)"),
                 part.err);
         assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains(">beta<"),
                 "what the other file contributes is not read as removed");

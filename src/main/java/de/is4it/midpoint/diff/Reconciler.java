@@ -215,7 +215,7 @@ final class Reconciler {
             return planPatch(restType, targetOid, desired, current, strategy, removals, prune);
         }
         // An object that is not there holds nothing to remove.
-        return planCreate(restType, oid, desired);
+        return planCreate(restType, oid, desired, strategy);
     }
 
     private Outcome planPatch(String restType, String targetOid, PrismObject<? extends Objectable> desired,
@@ -244,6 +244,7 @@ final class Reconciler {
         }
         ObjectDelta<? extends Objectable> delta = result.delta();
         List<String> warnings = notesOf(result);
+        warnings.addAll(neverDeclared(desired, strategy));
         RemovalJudgement judged = prune ? judgeRemovals(delta, current, removals, warnings)
                 : new RemovalJudgement(List.of(), false);
         if (!judged.removing.isEmpty()) {
@@ -465,6 +466,20 @@ final class Reconciler {
         return notes;
     }
 
+    /**
+     * A warning per item the files declare although an {@code apply=never} rule keeps midgie from writing it:
+     * the value in the file is ignored, which the file's author would not expect without being told.
+     */
+    private static List<String> neverDeclared(PrismObject<? extends Objectable> desired,
+            StrategyOptions.Resolved strategy) {
+        List<String> warnings = new ArrayList<>();
+        for (String path : strategy.apply.declaredNever(desired)) {
+            warnings.add("the tree declares " + path + ", which midgie never writes; the value in the file is "
+                    + "ignored");
+        }
+        return warnings;
+    }
+
     /** Serialize the desired object for a create POST, stripping operational/metadata items midPoint owns. */
     static String createBody(PrismContext prismContext, PrismObject<? extends Objectable> desired)
             throws SchemaException {
@@ -476,12 +491,20 @@ final class Reconciler {
         return XmlPretty.tidyRoot(prismContext.xmlSerializer().serialize(body));
     }
 
-    private Outcome planCreate(String restType, String oid, PrismObject<? extends Objectable> desired)
-            throws SchemaException {
+    private Outcome planCreate(String restType, String oid, PrismObject<? extends Objectable> desired,
+            StrategyOptions.Resolved strategy) throws SchemaException {
         if (createIfAbsent) {
             LOG.debug("{} {}: CREATE (create-if-absent)", restType, oid);
+            List<String> warnings = neverDeclared(desired, strategy);
+            // An apply=never item is the server's own from the start: not even the create writes it.
+            PrismObject<? extends Objectable> body = desired;
+            List<String> heldBack = List.of();
+            if (!warnings.isEmpty()) {
+                body = desired.clone();
+                heldBack = strategy.apply.stripNever(body);
+            }
             return new Outcome(Action.CREATE, restType, oid, 0, "would create",
-                    null, createBody(prismContext, desired), null, List.of());
+                    null, createBody(prismContext, body), null, warnings, heldBack, List.of());
         }
         if (oid != null && !oid.isBlank()) {
             return fail(restType, oid, "does not exist, and --no-create-if-absent rules out creating it");
