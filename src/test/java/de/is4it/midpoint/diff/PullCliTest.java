@@ -133,6 +133,22 @@ class PullCliTest {
     }
 
     @Test
+    void aTypeTheServerDoesNotServeIsSkippedAndItsFilesStay(@TempDir Path dir) throws Exception {
+        // The bundled schema knows types an older midPoint does not serve; here every type but RoleType answers 404.
+        roles.put(OTHER_OID, role(OTHER_OID, "Unmanaged Role", "<description>server only</description>"));
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path policy = write(dir, "midgie.policy", "*/*  remainder=yes\n");
+        Path remainder = dir.resolve("remainder");
+        Path orgFile = write(dir, "remainder/OrgType/Head Office.cccccccc-0000-0000-0f00-00000000b001.xml", "<org/>");
+
+        assertEquals(0, pull(tree, remainder, "--policy", policy.toString()), stderr);
+
+        assertTrue(Files.exists(remainder.resolve("RoleType/Unmanaged Role." + OTHER_OID + ".xml")), stderr);
+        assertTrue(stderr.contains("does not serve OrgType"), stderr);
+        assertTrue(Files.exists(orgFile), "a type that was not listed has nothing gone from the server");
+    }
+
+    @Test
     void aRenameOnTheServerRenamesTheFile(@TempDir Path dir) throws Exception {
         roles.put(OTHER_OID, role(OTHER_OID, "Old Name", "<description>d</description>"));
         Path tree = Files.createDirectories(dir.resolve("tree"));

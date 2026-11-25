@@ -250,13 +250,28 @@ public class PullCommand implements Callable<Integer> {
             }
         }
         List<String> listedTypes = policy.remainderTypes(typeNames(prismContext));
+        List<String> listedInFull = new ArrayList<>();
         for (String typeName : listedTypes) {
             ObjectTypes type = objectTypeNamed(typeName);
-            for (PrismObject<? extends Objectable> live
-                    : LiveLookup.all(prismContext, client, type.getClassDefinition(), type.getRestType())) {
+            List<PrismObject<? extends Objectable>> objects;
+            try {
+                objects = LiveLookup.all(prismContext, client, type.getClassDefinition(), type.getRestType());
+            } catch (MidpointRestClient.RestException e) {
+                if (e.statusCode() != 400 && e.statusCode() != 404) {
+                    throw e;
+                }
+                // The bundled schema knows types an older server does not serve (AllowedConnectorsListType is new
+                // in 4.11). Not listed, so none of its remainder files is read as gone from the server either.
+                note("note: the server does not serve " + typeName + " (HTTP " + e.statusCode() + " on "
+                        + type.getRestType() + "/search), so pull skips it.");
+                continue;
+            }
+            listedInFull.add(typeName);
+            for (PrismObject<? extends Objectable> live : objects) {
                 candidates.putIfAbsent(live.getOid(), new Candidate(typeName, type.getRestType(), live));
             }
         }
+        listedTypes = listedInFull;
         LOG.debug("pull: {} managed object(s), listed {}, {} candidate(s)", managed.size(), listedTypes,
                 candidates.size());
 
