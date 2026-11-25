@@ -231,7 +231,7 @@ final class ObjectSplitter {
     }
 
     /** Whether any value of a reference item is written as a filter alone, with no OID. */
-    private static boolean smartReference(Item<?, ?> item) {
+    static boolean smartReference(Item<?, ?> item) {
         for (PrismValue value : item.getValues()) {
             if (value instanceof PrismReferenceValue reference && reference.getOid() == null
                     && reference.getFilter() != null) {
@@ -241,7 +241,7 @@ final class ObjectSplitter {
         return false;
     }
 
-    private static boolean isRaw(Item<?, ?> item) {
+    static boolean isRaw(Item<?, ?> item) {
         for (PrismValue value : item.getValues()) {
             if (value.isRaw()) {
                 return true;
@@ -250,7 +250,7 @@ final class ObjectSplitter {
         return false;
     }
 
-    private static boolean sameValues(Item<?, ?> one, Item<?, ?> other) {
+    static boolean sameValues(Item<?, ?> one, Item<?, ?> other) {
         if (one.getValues().size() != other.getValues().size()) {
             return false;
         }
@@ -283,7 +283,7 @@ final class ObjectSplitter {
         return null;
     }
 
-    private static boolean containsEqual(List<? extends PrismValue> values, PrismValue candidate) {
+    static boolean containsEqual(List<? extends PrismValue> values, PrismValue candidate) {
         for (PrismValue value : values) {
             if (value.equals(candidate, EquivalenceStrategy.REAL_VALUE)) {
                 return true;
@@ -292,7 +292,7 @@ final class ObjectSplitter {
         return false;
     }
 
-    private static PrismContainerValue<?> equalValue(PrismContainer<?> container, PrismContainerValue<?> candidate) {
+    static PrismContainerValue<?> equalValue(PrismContainer<?> container, PrismContainerValue<?> candidate) {
         for (PrismContainerValue<?> value : container.getValues()) {
             if (value.equals(candidate, EquivalenceStrategy.REAL_VALUE)) {
                 return value;

@@ -89,11 +89,11 @@ class PullCliTest {
         assertTrue(text.contains("<documentation>live only</documentation>") && text.contains("<subtype>x</subtype>"),
                 text);
         assertFalse(text.contains("managed"), "the tree's own file declares it: " + text);
-        assertTrue(stderr.contains("added") && stderr.contains("wrote 1"), stderr);
+        assertTrue(stderr.contains("added") && stderr.contains("wrote 1 file(s)"), stderr);
 
         assertEquals(0, pull(managed.getParent(), remainder), stderr);
         assertEquals(text, Files.readString(file), "a second pull writes the same bytes");
-        assertTrue(stderr.contains("unchanged 1"), stderr);
+        assertTrue(stderr.contains("1 object(s) unchanged"), stderr);
     }
 
     @Test
@@ -105,7 +105,8 @@ class PullCliTest {
         assertEquals(1, pull(managed.getParent(), remainder, "--dry-run"), stderr);
 
         assertFalse(Files.exists(remainder), "nothing is written");
-        assertTrue(stdout.contains("+++ RoleType/Pulled Role." + OID + ".xml") && stdout.contains("live only"), stdout);
+        assertTrue(stdout.contains("RoleType/Pulled Role." + OID + ".xml\n") && stdout.contains("+++ ")
+                && stdout.contains("live only"), stdout);
         assertTrue(stderr.contains("would add"), stderr);
     }
 
@@ -158,7 +159,7 @@ class PullCliTest {
         assertEquals(2, pull(managed.getParent(), remainder), stderr);
 
         assertEquals("as it was", Files.readString(file));
-        assertTrue(stderr.contains("inducement") && stderr.contains("left as it is"), stderr);
+        assertTrue(stderr.contains("inducement") && stderr.contains("left as they are"), stderr);
     }
 
     @Test
@@ -184,7 +185,72 @@ class PullCliTest {
         assertTrue(stderr.contains("remainder"), stderr);
     }
 
+    @Test
+    void aManagedFileTakesTheServersValueForWhatItDeclares(@TempDir Path dir) throws Exception {
+        roles.put(OID, role(OID, "Pulled Role", "<description>changed on the server</description>"
+                + "<documentation>live only</documentation>"));
+        Path managed = write(dir, "tree/roles/a.xml", """
+                <!-- curated by hand -->
+                <role xmlns="%s" oid="%s">
+                    <name>Pulled Role</name>
+                    <description>as deployed</description>
+                </role>
+                """.formatted(NS, OID));
+        gitCommit(dir.resolve("tree"));
+        Path remainder = dir.resolve("tree/remainder");
+
+        assertEquals(0, pull(managed.getParent(), remainder), stderr);
+
+        assertEquals("""
+                <!-- curated by hand -->
+                <role xmlns="%s" oid="%s">
+                    <name>Pulled Role</name>
+                    <description>changed on the server</description>
+                </role>
+                """.formatted(NS, OID), Files.readString(managed));
+        String text = Files.readString(remainder.resolve("RoleType/Pulled Role." + OID + ".xml"));
+        assertTrue(text.contains("live only") && !text.contains("description"), text);
+        assertTrue(stderr.contains("changed description"), stderr);
+    }
+
+    @Test
+    void aManagedFileWithChangesOfItsOwnIsNotTouched(@TempDir Path dir) throws Exception {
+        roles.put(OID, role(OID, "Pulled Role", "<description>changed on the server</description>"));
+        Path managed = write(dir, "tree/roles/a.xml", role(OID, "Pulled Role", "<description>as deployed</description>"));
+        gitCommit(dir.resolve("tree"));
+        String uncommitted = role(OID, "Pulled Role", "<description>edited, not committed</description>");
+        Files.writeString(managed, uncommitted);
+        Path remainder = dir.resolve("tree/remainder");
+
+        assertEquals(2, pull(managed.getParent(), remainder), stderr);
+
+        assertEquals(uncommitted, Files.readString(managed));
+        assertTrue(stderr.contains("not committed"), stderr);
+        assertFalse(Files.exists(remainder), "nothing of the object is written");
+    }
+
+    @Test
+    void aManagedFileOutsideGitIsNotTouched(@TempDir Path dir) throws Exception {
+        roles.put(OID, role(OID, "Pulled Role", "<description>changed on the server</description>"));
+        String original = role(OID, "Pulled Role", "<description>as deployed</description>");
+        Path managed = write(dir, "tree/roles/a.xml", original);
+
+        assertEquals(2, pull(managed.getParent(), dir.resolve("remainder")), stderr);
+
+        assertEquals(original, Files.readString(managed));
+        assertTrue(stderr.contains("not in a git repository"), stderr);
+    }
+
     // --- helpers ---
+
+    private static void gitCommit(Path repo) throws Exception {
+        for (List<String> command : List.of(List.of("git", "init", "-q", "."), List.of("git", "add", "-A"),
+                List.of("git", "-c", "user.name=t", "-c", "user.email=t@example.org", "commit", "-q", "-m", "tree"))) {
+            Process process = new ProcessBuilder(command).directory(repo.toFile()).redirectErrorStream(true).start();
+            process.getInputStream().readAllBytes();
+            org.junit.jupiter.api.Assumptions.assumeTrue(process.waitFor() == 0, "git not available: " + command);
+        }
+    }
 
     private int pull(Path tree, Path remainder, String... extra) {
         List<String> args = new ArrayList<>(List.of("pull", tree.toString(), "--remainder", remainder.toString(),

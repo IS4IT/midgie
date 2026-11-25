@@ -1,6 +1,6 @@
 # Commands
 
-`midgie` has five subcommands. **`diff`** shows the change for a **single object** and never writes; **`deploy`** reconciles any number of **files and folders** — one file is a tree of one; **`pull`** goes the other way and writes what the server holds beyond the tree's files into the tree; **`rollback`** puts back what the last `deploy` changed; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see [`init`](#init--one-off-set-up)). `diff` and `deploy` read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`); `rollback` replays a saved plan and reads nothing from the tree.
+`midgie` has five subcommands. **`diff`** shows the change for a **single object** and never writes; **`deploy`** reconciles any number of **files and folders** — one file is a tree of one; **`pull`** goes the other way and brings the tree in line with the server; **`rollback`** puts back what the last `deploy` changed; **`init`** holds the one-off set-up steps — `--create-state` enables removal detection for a server, `--write-cacert` turns a server's CA into a trust file, `--write-properties` writes a config template, `--write-policy` seeds a policy file for a tree (see [`init`](#init--one-off-set-up)). `diff` and `deploy` read desired-state XML and run the same local diff engine — the current state comes from a local file (offline) or a running server (`--url`); `rollback` replays a saved plan and reads nothing from the tree.
 
 > Each object is compared with **itself**, not another object: its *desired* state (how you want it) against its *current* state (how it is now), and the delta transforms current → desired. If both sides carry an OID and the OIDs differ, the run is refused.
 
@@ -123,7 +123,7 @@ On a tracked tree, `deploy` also removes the values the tree has dropped since t
 
 ## `pull` — from the server into the tree
 
-Reads the run's objects from the server, and the ones the policy names, and writes everything the tree's files do not declare into a remainder folder, one file per object, for `git diff` to review. It never edits the tree's own files. With the remainder in the run, `deploy` holds the server to the whole object. See [Pulling from the server](pull.md).
+Reads the run's objects from the server, and the ones the policy names; brings the tree's own files in line with the server for the items they declare, changing nothing else in them; and writes everything they do not declare into a remainder folder, one file per object. `git diff` is the review. With the remainder in the run, `deploy` holds the server to the whole object. See [Pulling from the server](pull.md).
 
 ```bash
 midgie pull config/ --url https://dev.mp.example/midpoint --remainder remainder/

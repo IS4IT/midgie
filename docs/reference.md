@@ -8,7 +8,7 @@ The contract lets CI gate on drift without parsing output:
 |---|---|---|---|
 | `diff` | no differences | differences found (drift), or the object would be created | error, or the object was skipped |
 | `deploy --dry-run` / `--plan` | nothing to change | would change something | error |
-| `pull` | written, or already in step | `--dry-run`: something would change | error, or a [conflict](pull.md#what-pull-does-not-change) left an object's file as it was |
+| `pull` | written, or already in step | `--dry-run`: something would change | error, or an object left as it was: a [conflict](pull.md#what-pull-changes-in-your-files), or a managed file that could not be edited |
 | `deploy` (real apply) | all applied/in-sync/skipped/declined | — | a unit failed, or error |
 | `deploy` (offline, no `--url`) | printed the apply order | — | error |
 | `rollback` | restored, nothing to roll back, or declined | `--dry-run`: something would be restored | error, a refused plan (wrong server, stale), or a failed restore |

@@ -1,10 +1,10 @@
 # Pulling from the server
 
-A tree usually grows on a live server: you change something in the GUI, try it, change it again, and when it works you copy it into the tree by hand, from Studio or the raw XML editor. **`midgie pull`** does the copying in the other direction. It reads the objects from the server and writes everything the tree's own files do not declare into a **remainder folder**, one file per object. `git diff` then shows what changed on the server, and `git add -p` takes what you want.
+A tree usually grows on a live server: you change something in the GUI, try it, change it again, and when it works you copy it into the tree by hand, from Studio or the raw XML editor. **`midgie pull`** does the copying in the other direction. It reads the objects from the server, brings the tree's own files in line with it for the items they declare, and writes everything else into a **remainder folder**, one file per object. `git diff` then shows what changed on the server, and `git add -p` takes what you want.
 
 ```bash
 midgie pull config/ --url https://dev.mp.example/midpoint
-git diff remainder/
+git diff
 ```
 
 ## Managed files and the remainder
@@ -49,15 +49,32 @@ Whatever the managed files do not declare, item by item:
 
 Left out of every remainder file, as deploy leaves them alone: operational items and value metadata (`_metadata`, `metadata`), the object's `version` and every container id, protected values (passwords and other encrypted strings), items the server did not send (`incomplete`), and items the policy marks [`apply=never`](policy.md#applynever). The `name` always stays, so that a file says which object it holds. Each file starts with a fixed comment and holds no timestamp, so pulling twice from an unchanged server writes the same bytes.
 
-## What pull does not change
+## What pull changes in your files
 
-`pull` never edits a managed file. Where a managed file and the server disagree about an item the file declares, the file's version stays and `pull` names the item:
+Where a managed file and the server disagree about an item the file declares, `pull` changes the file to say what the server says — and nothing else in it. A file keeps its shape: an item it declares takes the server's value, one the server no longer holds goes, and nothing is added — what is new on the server goes to the remainder.
 
+- A changed value is rewritten where it stands. For a structured value, the elements are compared with the server's one by one and only what differs is rewritten: a mapping whose script changed on the server keeps its `<expression>`, `<script>` and `<code>` elements, and only the code inside the CDATA section changes.
+- A value, list entry or item the server no longer holds is removed, with its line when it stood alone on it. A container left with nothing in it goes whole.
+- A list entry without a natural key, paired with the server's by container id alone, is written whole where the old one stood, indented to match.
+
+Everything else stays as it was: comments, blank lines, attribute order, namespace prefixes, CDATA sections, line endings and a byte-order mark. A rewritten element that uses a prefix the file does not bind brings its own declaration. A comment inside a value that is rewritten is lost, and `pull` says so.
+
+```diff
+     <logging>
+         <classLogger>
+             <!-- Projector noise -->
+-            <level>INFO</level>
++            <level>DEBUG</level>
+             <package>com.evolveum.midpoint.model.impl.lens.projector.Projector</package>
 ```
-midgie: note: SystemConfigurationType/SystemConfiguration: the server differs from the tree's files at logging/rootLoggerLevel; pull leaves those files as they are (a deploy puts the files' version back).
-```
 
-One disagreement has no right answer: a list where the file holds entries the server does not, **and** the server holds entries the file does not, with nothing to pair them — typically a list entry without a natural key that someone edited on the server. Both versions would end up in the deployed object. `pull` leaves that object's remainder file as it was, says which list it is, and exits 2. Deploy the tree (the file's version wins) or bring the file in line with the server, then pull again.
+Some disagreements stay as they are, and `pull` names them: items the policy marks `apply=on-create` or `apply=if-absent` (the file holds the value the object is created or filled in with, not the one it has now), and references the file writes as a [search filter](safety.md), which only a deploy can judge against the OID the server holds.
+
+**Git is the safety net, so it is required.** `pull` edits only a file that is committed as it stands: a file outside a git repository, or one with changes of its own not yet committed, is left alone — with a warning naming what would change — and so is the rest of that object, its remainder included. Commit or stash first; then `git diff` shows exactly what the pull did, and `git checkout` undoes it.
+
+**Verify, or refuse.** Every edited file must read back as the file with the server's values put in. If it does not — or an edit cannot be placed, or the file is in an encoding other than UTF-8 — `pull` writes nothing for that object, says which file and what would have changed, and exits 2.
+
+**Conflicts.** One disagreement has no right answer: a list where the file holds entries the server does not, **and** the server holds entries the file does not, with nothing to pair them — typically a list entry without a natural key that someone edited on the server. Taking the server's entry into the file would be a guess at which one it replaces. `pull` leaves that object's files as they were, says which list it is, and exits 2. Deploy the tree (the file's version wins) or bring the file in line with the server by hand, then pull again.
 
 ## Which objects get a file
 
@@ -105,7 +122,7 @@ The remainder is ordinary files, so git is the review tool:
 midgie pull config/ stages/dev/
 git diff --stat remainder/          # which objects changed on the server
 git add -p remainder/               # take what you want
-git checkout remainder/             # throw the rest away
+git checkout .                      # throw the rest away
 ```
 
 Items keep the schema's order and list entries the server's, so a re-ordered list is a real change on the server. `git config diff.colorMoved dimmed-zebra` shows a block that only moved in dimmed colours, so it is not mistaken for an edit.
@@ -124,4 +141,4 @@ To curate an item, move it from the remainder into a managed file; the next pull
 | `--dry-run` | print what would change as a diff on stdout; write nothing |
 | `-q`, `-v`, `--trace` | quieter, or more detail |
 
-Everything is read before anything is written, so a server that stops answering leaves the folder as it was. Exit `0` when the folder was written or already in step, `1` under `--dry-run` when something would change, `2` on an error or a [conflict](#what-pull-does-not-change).
+Everything is read before anything is written, so a server that stops answering leaves the folder as it was. Exit `0` when the folder was written or already in step, `1` under `--dry-run` when something would change, `2` on an error or a [conflict](#what-pull-changes-in-your-files).

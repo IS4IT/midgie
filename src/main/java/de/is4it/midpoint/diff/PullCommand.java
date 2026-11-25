@@ -250,6 +250,7 @@ public class PullCommand implements Callable<Integer> {
                 candidates.size());
 
         RemainderWriter writer = new RemainderWriter(prismContext);
+        ManagedFileEditor editor = new ManagedFileEditor(prismContext);
         // Only the apply rules of the policy matter here, for the items it marks never; the rest is deploy's.
         StrategyOptions.Resolved baseline = new StrategyOptions.Resolved(DiffEngine.Scope.PRESENT,
                 DiffEngine.EquivalencePlan.auto(), DiffEngine.MultiValueStrategy.replaceAll(), false);
@@ -270,7 +271,7 @@ public class PullCommand implements Callable<Integer> {
             }
             Boolean wanted = policy.remainderFor(candidate.typeName, candidate.name(), oid);
             boolean covered = (candidate.managed != null) ? !Boolean.FALSE.equals(wanted) : Boolean.TRUE.equals(wanted);
-            if (!covered) {
+            if (!covered && candidate.managed == null) {
                 // Left for the sweep below, which removes a file the policy no longer asks for.
                 LOG.debug("pull: {} remainder={}; no file", candidate.label(), wanted);
                 continue;
@@ -279,22 +280,25 @@ public class PullCommand implements Callable<Integer> {
                 List<File> elsewhere = index.outside(run, candidate.typeName, oid, candidate.name());
                 if (!elsewhere.isEmpty()) {
                     note("note: " + candidate.label() + " has " + elsewhere.size() + " file(s) outside this run ("
-                            + relativeAll(index, elsewhere) + "); pull them together to update its remainder.");
+                            + relativeAll(index, elsewhere) + "); pull them together to update it.");
                     settled.add(oid);
                     continue;
                 }
             }
-            settled.add(oid);
-            int skippedBefore = skipped;
-            Change change = remainderOf(prismContext, writer, layout, baseline, candidate, current);
-            if (change == null) {
-                unchanged += (skipped == skippedBefore) ? 1 : 0;
-            } else {
-                changes.add(change);
-                if (current != null && change.text() != null && !sameFile(current, change.file())) {
-                    changes.add(new Change(current, read(current), null, "renamed on the server"));
-                }
+            if (covered) {
+                // An object the policy keeps out of the remainder still has its managed files brought up to date;
+                // its old remainder file is left to the sweep.
+                settled.add(oid);
             }
+            List<Change> objectChanges =
+                    changesOf(prismContext, writer, editor, layout, baseline, candidate, covered ? current : null, covered);
+            if (objectChanges == null) {
+                continue;
+            }
+            if (objectChanges.isEmpty()) {
+                unchanged++;
+            }
+            changes.addAll(objectChanges);
         }
         for (Map.Entry<String, File> entry : existing.entrySet()) {
             if (settled.contains(entry.getKey())) {
@@ -345,58 +349,161 @@ public class PullCommand implements Callable<Integer> {
         return candidate;
     }
 
-    /** The change to {@code candidate}'s remainder file, or {@code null} when the file is as it should be. */
-    private Change remainderOf(PrismContext prismContext, RemainderWriter writer, RemainderLayout layout,
-            StrategyOptions.Resolved baseline, Candidate candidate, File current) throws IOException {
+    /**
+     * The changes pull makes for {@code candidate}: its managed files brought in line with the server, and its
+     * remainder file written, renamed or removed. Empty when everything is as it should be; {@code null} when the
+     * object is left as it is — a conflict, or a managed file that cannot be edited — which fails the run.
+     *
+     * @param covered whether the object keeps a remainder file at all
+     */
+    private List<Change> changesOf(PrismContext prismContext, RemainderWriter writer, ManagedFileEditor editor,
+            RemainderLayout layout, StrategyOptions.Resolved baseline, Candidate candidate, File current,
+            boolean covered) throws IOException {
         String oid = candidate.oid();
         ApplyRules apply = policy.resolveFor(candidate.typeName, candidate.name(), oid, baseline).apply;
         Exclusions.Stripped stripped = Exclusions.strip(candidate.live, apply);
         if (!stripped.incompletePaths().isEmpty()) {
             note("note: " + candidate.label() + ": the server did not send " + String.join(", ",
-                    stripped.incompletePaths()) + ", so the remainder does not hold it.");
+                    stripped.incompletePaths()) + ", so pull leaves it out.");
         }
-        ObjectSplitter.Split split;
-        String text;
+        List<Change> changes = new ArrayList<>();
         try {
-            split = ObjectSplitter.split(stripped.object(),
-                    (candidate.managed != null) ? candidate.managed.object() : null);
-            if (!split.conflicts().isEmpty()) {
-                for (String conflict : split.conflicts()) {
-                    warn(candidate.label() + ": " + conflict + ". Its remainder is left as it is; deploy the "
-                            + "tree or bring the file in line with the server, then pull again.");
+            PrismObject<? extends Objectable> managed = null;
+            if (candidate.managed != null) {
+                ObjectSplitter.Split before = ObjectSplitter.split(stripped.object(), candidate.managed.object());
+                if (!before.conflicts().isEmpty()) {
+                    for (String conflict : before.conflicts()) {
+                        warn(candidate.label() + ": " + conflict + ". Its files are left as they are; deploy the "
+                                + "tree or bring the file in line with the server, then pull again.");
+                    }
+                    return refused();
                 }
-                failed = true;
-                skipped++;
-                return null;
+                ManagedProjection.Skip skip = new ManagedProjection.Skip(apply, Set.copyOf(stripped.incompletePaths()));
+                List<Fragment> edited = new ArrayList<>();
+                for (Fragment fragment : candidate.managed.fragments()) {
+                    Fragment result = edit(prismContext, editor, candidate, fragment, stripped.object(), skip, changes);
+                    if (result == null) {
+                        return refused();
+                    }
+                    edited.add(result);
+                }
+                managed = FragmentUnion.of(edited);
             }
+            ObjectSplitter.Split split = ObjectSplitter.split(stripped.object(), managed);
             if (!split.drift().isEmpty()) {
-                note("note: " + candidate.label() + ": the server differs from the tree's files at "
-                        + String.join(", ", split.drift()) + "; pull leaves those files as they are (a deploy "
-                        + "puts the files' version back).");
+                note("note: " + candidate.label() + ": the tree's files differ from the server at "
+                        + String.join(", ", split.drift()) + ", which pull leaves as they are (a policy apply rule, "
+                        + "or a reference written as a filter).");
+            }
+            if (!covered) {
+                return changes;
             }
             if (candidate.managed != null && !split.hasContent()) {
-                if (current == null) {
-                    return null;
+                if (current != null) {
+                    changes.add(new Change(current, read(current), null, "the tree's files declare all of it"));
                 }
-                return new Change(current, read(current), null, "the tree's files declare all of it");
+                return changes;
             }
-            text = writer.text(split.remainder());
+            String text = writer.text(split.remainder());
+            File target = layout.fileFor(candidate.typeName, candidate.name(), oid);
+            String before = (current != null) ? read(current) : null;
+            if (current != null && sameFile(current, target)) {
+                if (!text.equals(before)) {
+                    changes.add(new Change(target, before, text, null));
+                }
+            } else if (current != null) {
+                changes.add(new Change(target, null, text, "renamed on the server"));
+                changes.add(new Change(current, before, null, "renamed on the server"));
+            } else {
+                changes.add(new Change(target, null, text, null));
+            }
+            return changes;
         } catch (com.evolveum.midpoint.util.exception.SchemaException e) {
             warn(candidate.label() + ": " + e.getMessage());
-            failed = true;
-            skipped++;
+            return refused();
+        }
+    }
+
+    /**
+     * Bring one managed file in line with the server, adding its change to {@code changes}: the file as it reads
+     * afterwards, or {@code null} — with a warning — when it cannot be edited.
+     */
+    private Fragment edit(PrismContext prismContext, ManagedFileEditor editor, Candidate candidate, Fragment fragment,
+            PrismObject<? extends Objectable> live, ManagedProjection.Skip skip, List<Change> changes)
+            throws IOException, com.evolveum.midpoint.util.exception.SchemaException {
+        File file = fragment.sourceFile();
+        List<ManagedProjection.Edit> edits;
+        try {
+            edits = ManagedProjection.edits(fragment.object(), live, skip);
+        } catch (IllegalStateException e) {
+            warn(candidate.label() + ": " + file + ": " + e.getMessage() + ".");
             return null;
         }
-        File target = layout.fileFor(candidate.typeName, candidate.name(), oid);
-        String before = (current != null) ? read(current) : null;
-        if (current != null && sameFile(current, target) && text.equals(before)) {
+        if (edits.isEmpty()) {
+            return fragment;
+        }
+        LOG.debug("pull: {}: {}", file, ManagedProjection.labels(edits));
+        String refusal = uncommitted(file);
+        if (refusal != null) {
+            warn(candidate.label() + ": " + file + " would change (" + summary(edits) + "), but " + refusal + ".");
             return null;
         }
-        if (current != null && !sameFile(current, target) && text.equals(before)) {
-            // Same content under the old name: only the rename is a change.
-            return new Change(target, null, text, "renamed on the server");
+        String before = read(file);
+        ManagedFileEditor.Result result;
+        try {
+            result = editor.edit(before, fragment.object(), edits);
+        } catch (ManagedFileEditor.Refused e) {
+            warn(candidate.label() + ": " + file + " is left as it is: " + e.getMessage() + ". Change "
+                    + summary(edits) + " by hand.");
+            return null;
         }
-        return new Change(target, (current != null && sameFile(current, target)) ? before : null, text, null);
+        for (String note : result.notes()) {
+            note("note: " + file + ": " + note + ".");
+        }
+        changes.add(new Change(file, before, result.text(), summary(edits)));
+        String text = result.text();
+        return Fragment.of(prismContext.parseObject(text.startsWith("\uFEFF") ? text.substring(1) : text), file);
+    }
+
+    /** The items an edit touches, once each: {@code replaced description; removed subtype}. */
+    private static String summary(List<ManagedProjection.Edit> edits) {
+        Map<String, Set<String>> byKind = new LinkedHashMap<>();
+        for (ManagedProjection.Edit edit : edits) {
+            String verb = (edit.kind() == ManagedProjection.Kind.REPLACE) ? "changed" : "removed";
+            byKind.computeIfAbsent(verb, key -> new java.util.LinkedHashSet<>()).add(edit.label());
+        }
+        List<String> parts = new ArrayList<>();
+        for (Map.Entry<String, Set<String>> entry : byKind.entrySet()) {
+            parts.add(entry.getKey() + " " + String.join(", ", entry.getValue()));
+        }
+        return String.join("; ", parts);
+    }
+
+    /**
+     * Why {@code file} may not be edited, or {@code null} when it may: git is what shows the edit and undoes it, so
+     * a file outside a repository, or with changes of its own not yet committed, is not touched.
+     */
+    private static String uncommitted(File file) {
+        GitRevision git = GitRevision.of(file.getAbsoluteFile().getParentFile());
+        if (!git.isRepository()) {
+            return "it is not in a git repository, which is what would show and undo the edit";
+        }
+        String relative = git.repoRelative(file);
+        if (relative == null) {
+            return "it is not in a git repository, which is what would show and undo the edit";
+        }
+        if (git.isModified(relative)) {
+            return "it has changes that are not committed; commit or stash them first, so that git shows exactly "
+                    + "what pull changed";
+        }
+        return null;
+    }
+
+    /** Count an object left as it was, and fail the run. */
+    private List<Change> refused() {
+        failed = true;
+        skipped++;
+        return null;
     }
 
     /**
@@ -430,7 +537,7 @@ public class PullCommand implements Callable<Integer> {
         int written = 0;
         int removed = 0;
         for (Change change : changes) {
-            String shown = relative(layout, change.file());
+            String shown = shown(change.file());
             if (dryRun) {
                 System.out.println(diffOf(shown, change));
             } else if (change.text() == null) {
@@ -441,8 +548,7 @@ public class PullCommand implements Callable<Integer> {
                     Files.deleteIfExists(typeDir.toPath());
                 }
             } else {
-                Files.createDirectories(change.file().getParentFile().toPath());
-                Io.writeAtomically(change.file().toPath(), change.text());
+                write(change.file(), change.text());
             }
             if (change.text() == null) {
                 removed++;
@@ -458,8 +564,9 @@ public class PullCommand implements Callable<Integer> {
         }
         if (!quiet) {
             System.err.println("midgie: pull from " + client.host() + ": " + (dryRun ? "would write " : "wrote ")
-                    + written + ", " + (dryRun ? "would remove " : "removed ") + removed + ", unchanged " + unchanged
-                    + (skipped > 0 ? ", left as they were " + skipped : "") + " — in " + layout.root());
+                    + written + " file(s), " + (dryRun ? "would remove " : "removed ") + removed + "; "
+                    + unchanged + " object(s) unchanged" + (skipped > 0 ? ", " + skipped + " left as they were" : "")
+                    + " — remainder in " + layout.root());
         }
         if (failed) {
             return EXIT_ERROR;
@@ -530,10 +637,28 @@ public class PullCommand implements Callable<Integer> {
         return String.join(", ", shown);
     }
 
-    private static String relative(RemainderLayout layout, File file) {
-        java.nio.file.Path root = layout.root().getAbsoluteFile().toPath().normalize();
+    /** {@code file} relative to the working directory when it lies beneath it, as git shows it. */
+    private static String shown(File file) {
+        java.nio.file.Path cwd = new File(System.getProperty("user.dir", ".")).getAbsoluteFile().toPath().normalize();
         java.nio.file.Path path = file.getAbsoluteFile().toPath().normalize();
-        return path.startsWith(root) ? root.relativize(path).toString() : file.getPath();
+        return path.startsWith(cwd) ? cwd.relativize(path).toString() : path.toString();
+    }
+
+    /**
+     * Write {@code text} to {@code file} in one step, keeping the permissions an existing file had — a tree file
+     * is read by others, and {@link Io#writeAtomically} would leave it owner-only.
+     */
+    private static void write(File file, String text) throws IOException {
+        java.nio.file.Path path = file.toPath();
+        Files.createDirectories(path.toAbsolutePath().getParent());
+        boolean posix = path.toAbsolutePath().getParent().getFileSystem().supportedFileAttributeViews().contains("posix");
+        Set<java.nio.file.attribute.PosixFilePermission> permissions = !posix ? null : Files.exists(path)
+                ? Files.getPosixFilePermissions(path)
+                : java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--");
+        Io.writeAtomically(path, text);
+        if (permissions != null) {
+            Files.setPosixFilePermissions(path, permissions);
+        }
     }
 
     private static boolean sameFile(File one, File other) {

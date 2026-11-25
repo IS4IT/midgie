@@ -807,6 +807,45 @@ class LiveIntegrationTest {
         deleteDeployObjects();
     }
 
+    @Test
+    void pullEditsOnlyTheLinesOfAManagedItemTheServerChanged(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path roles = Files.createDirectories(tree.resolve("roles"));
+        Path file = roles.resolve("a.xml");
+        String managed = "<!-- kept by hand -->\n" + splitRole("\n    <description>as deployed</description>\n"
+                + "    <subtype>kept</subtype>\n") + "\n";
+        Files.writeString(file, managed, StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        assertEquals(0, run("deploy", roles.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        commit(tree, "managed");
+
+        // The server changes the item the file declares, and gains one it does not.
+        Path side = dir.resolve("side.xml");
+        Files.writeString(side, splitRole("<description>changed in the GUI</description>"
+                + "<documentation>added in the GUI</documentation>"), StandardCharsets.UTF_8);
+        assertEquals(0, run("deploy", side.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        Path remainder = tree.resolve("remainder");
+
+        CliResult pulled = run("pull", roles.toString(), "--remainder", remainder.toString(), "--url", HOST, "-u",
+                USER, "-p", PASSWORD);
+        assertEquals(0, pulled.exit, pulled.out + pulled.err);
+
+        assertEquals(managed.replace("as deployed", "changed in the GUI"), Files.readString(file),
+                "only the changed value, comment and layout as they were");
+        assertTrue(Files.readString(remainder.resolve("RoleType/IT Deploy Role." + DEPLOY_ROLE_OID + ".xml"))
+                .contains("added in the GUI"));
+        CliResult inSync = run("deploy", tree.toString(), "--remainder", remainder.toString(), "--url", HOST, "-u",
+                USER, "-p", PASSWORD, "--dry-run");
+        assertEquals(0, inSync.exit, inSync.out + inSync.err);
+
+        deleteDeployObjects();
+    }
+
     private static String splitRole(String body) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + DEPLOY_ROLE_OID + "\"><name>IT Deploy Role</name>" + body
                 + "</role>";

@@ -7,7 +7,7 @@ One page per topic. The [project README](../README.md) has the overview and a qu
 | [Installing](install.md) | the JAR, the launcher, verifying a release |
 | [Container image and Helm chart](container.md) | running midgie in Docker, Kubernetes and OpenShift |
 | [Commands](commands.md) | `diff`, `deploy`, `pull`, `rollback` and `init` in detail |
-| [Pulling from the server](pull.md) | `pull`: what the server holds beyond the tree's files, as a remainder folder git can review |
+| [Pulling from the server](pull.md) | `pull`: the server's changes into the tree — its own files edited in place, the rest in a remainder folder — for git to review |
 | [Detecting what you removed](removal-detection.md) | the opt-in three-way comparison that removes what the tree dropped |
 | [The policy file](policy.md) | per-object and per-item settings, `apply=on-create`, the built-in rules |
 | [Diff strategy](strategy.md) | equivalence and multi-value handling, and the guard rails |

@@ -67,7 +67,7 @@ bin/midgie rollback --url https://mp.example/midpoint --user administrator --dry
 
 - **`diff`** shows the change for a single object and never writes.
 - **`deploy`** reconciles any number of files and folders — one file is a tree of one — and leaves a rollback plan behind.
-- **`pull`** goes the other way: it writes what a server holds beyond the tree's files into the tree, for git to review.
+- **`pull`** goes the other way: it brings the tree in line with a server — its own files edited in place, the rest in a remainder folder — for git to review.
 - **`rollback`** puts back what the last `deploy` changed.
 - **`init`** holds the one-off set-up steps, such as turning on removal detection for a server.
 
@@ -80,7 +80,7 @@ bin/midgie rollback --url https://mp.example/midpoint --user administrator --dry
 | [Installing](docs/install.md) | the JAR, the launcher, verifying a release |
 | [Container image and Helm chart](docs/container.md) | running midgie in Docker, Kubernetes and OpenShift |
 | [Commands](docs/commands.md) | `diff`, `deploy`, `pull`, `rollback` and `init` in detail |
-| [Pulling from the server](docs/pull.md) | `pull`: what the server holds beyond the tree's files, as a remainder folder git can review |
+| [Pulling from the server](docs/pull.md) | `pull`: the server's changes into the tree — its own files edited in place, the rest in a remainder folder — for git to review |
 | [Detecting what you removed](docs/removal-detection.md) | the opt-in three-way comparison that removes what the tree dropped |
 | [The policy file](docs/policy.md) | per-object and per-item settings, `apply=on-create`, the built-in rules |
 | [Diff strategy](docs/strategy.md) | equivalence and multi-value handling, and the guard rails |
