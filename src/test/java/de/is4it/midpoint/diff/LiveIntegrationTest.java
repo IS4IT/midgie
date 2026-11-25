@@ -846,6 +846,44 @@ class LiveIntegrationTest {
         deleteDeployObjects();
     }
 
+    @Test
+    void aDeployRefusesToUndoAnEditMadeOnAServerTheTreeIsPulledFrom(@TempDir Path dir) throws Exception {
+        assumeTrue(rigUp, "midPoint rig not reachable at " + HOST + " — skipping live integration tests");
+        deleteDeployObjects();
+        assertEquals(0, run("init", "--create-state", "--url", HOST, "-u", USER, "-p", PASSWORD).exit);
+
+        Path tree = Files.createDirectories(dir.resolve("tree"));
+        Path roles = Files.createDirectories(tree.resolve("roles"));
+        Files.writeString(roles.resolve("a.xml"), splitRole("<description>Berlin</description>"), StandardCharsets.UTF_8);
+        assumeTrue(git(tree, "init", "-q", ".") == 0, "git not available — skipping");
+        commit(tree, "managed");
+        assertEquals(0, run("deploy", roles.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+        CliResult pulled = run("pull", roles.toString(), "--remainder", tree.resolve("remainder").toString(),
+                "--url", HOST, "-u", USER, "-p", PASSWORD);
+        assertEquals(0, pulled.exit, pulled.out + pulled.err);
+
+        // Someone changes the description on the server; the tree is not pulled again.
+        Path side = dir.resolve("side.xml");
+        Files.writeString(side, splitRole("<description>Leipzig</description>"), StandardCharsets.UTF_8);
+        assertEquals(0, run("deploy", side.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan").exit);
+
+        CliResult refused = run("deploy", roles.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan");
+        assertEquals(2, refused.exit, refused.out + refused.err);
+        assertTrue((refused.out + refused.err).contains("would undo a change made on the server at description"),
+                refused.out + refused.err);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains("Leipzig"), "nothing was sent");
+
+        CliResult reverted = run("deploy", roles.toString(), "--url", HOST, "-u", USER, "-p", PASSWORD, "--yes",
+                "--no-rollback-plan", "--revert-server-changes");
+        assertEquals(0, reverted.exit, reverted.out + reverted.err);
+        assertTrue(client.getObject("roles", DEPLOY_ROLE_OID).contains("Berlin"));
+
+        deleteDeployObjects();
+    }
+
     private static String splitRole(String body) {
         return "<role xmlns=\"" + NS + "\" oid=\"" + DEPLOY_ROLE_OID + "\"><name>IT Deploy Role</name>" + body
                 + "</role>";

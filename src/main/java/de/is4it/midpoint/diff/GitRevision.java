@@ -278,6 +278,53 @@ final class GitRevision {
     }
 
     /**
+     * The commits of HEAD's history that touched any of {@code repoRelativePaths}, newest first, at most
+     * {@code limit} of them; empty when there are none or git cannot tell.
+     */
+    List<String> commitsTouching(List<String> repoRelativePaths, int limit) {
+        List<String> args = new ArrayList<>(List.of("log", "--format=%H", "-n", String.valueOf(limit), "HEAD", "--"));
+        for (String path : repoRelativePaths) {
+            args.add(":(top)" + path);
+        }
+        String out = run(true, args.toArray(new String[0]));
+        List<String> commits = new ArrayList<>();
+        if (out != null) {
+            for (String line : out.split("\n")) {
+                if (isCommitish(line.strip())) {
+                    commits.add(line.strip());
+                }
+            }
+        }
+        return commits;
+    }
+
+    /**
+     * The blob ids of {@code repoRelativePaths} at {@code commit}, by path; a path the commit does not hold is
+     * missing from the map.
+     */
+    Map<String, String> blobsAt(String commit, List<String> repoRelativePaths) {
+        Map<String, String> blobs = new java.util.LinkedHashMap<>();
+        if (!isCommitish(commit) || repoRelativePaths.isEmpty()) {
+            return blobs;
+        }
+        List<String> args = new ArrayList<>(List.of("-c", "core.quotePath=false", "ls-tree", "-z", "--full-tree",
+                commit, "--"));
+        args.addAll(repoRelativePaths);
+        byte[] out = runBytes(true, args.toArray(new String[0]));
+        if (out == null) {
+            return blobs;
+        }
+        for (String entry : new String(out, StandardCharsets.UTF_8).split("\0")) {
+            int tab = entry.indexOf('\t');
+            String[] meta = (tab > 0) ? entry.substring(0, tab).split(" ") : new String[0];
+            if (meta.length == 3 && "blob".equals(meta[1])) {
+                blobs.put(entry.substring(tab + 1), meta[2]);
+            }
+        }
+        return blobs;
+    }
+
+    /**
      * Repository-relative paths deleted between {@code revision} and the working tree, restricted to this
      * tree. Renames are followed ({@code -M}) so a moved file is not mistaken for a deletion.
      *

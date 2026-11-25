@@ -61,6 +61,12 @@ public class PullCommand implements Callable<Integer> {
     private static final int EXIT_CHANGES = 1;
     private static final int EXIT_ERROR = 2;
 
+    /**
+     * The key prefix of the {@code midgie-state} row saying a tree is pulled from that server — which makes a
+     * deploy there refuse to undo an edit the tree has not taken in yet.
+     */
+    static final String MARKER_PREFIX = "pull:";
+
     @Parameters(index = "0..*", arity = "0..*", paramLabel = "PATH",
             description = "The tree's files or folders: the managed part of each object, which pull leaves out "
                     + "of the remainder.")
@@ -86,6 +92,11 @@ public class PullCommand implements Callable<Integer> {
             description = "Folders that each hold one stage's part of the tree, as deploy takes it: another "
                     + "stage's files do not count as managed files outside this run.")
     List<String> stages;
+
+    @Option(names = "--app", paramLabel = "NAME",
+            description = "The deployment's name on the server, as deploy takes it, when it is not the git "
+                    + "repository's own.")
+    String app;
 
     @Option(names = "--dry-run",
             description = "Show what would change in the remainder folder, as a diff, without writing. Exits 1 "
@@ -310,7 +321,11 @@ public class PullCommand implements Callable<Integer> {
                 changes.add(new Change(entry.getValue(), read(entry.getValue()), null, reason));
             }
         }
-        return finish(layout, client, changes, unchanged);
+        Integer exit = finish(layout, client, changes, unchanged);
+        if (!dryRun) {
+            markPulled(prismContext, client);
+        }
+        return exit;
     }
 
     /**
@@ -529,6 +544,46 @@ public class PullCommand implements Callable<Integer> {
             return null;
         }
         return Boolean.TRUE.equals(policy.remainderFor(typeName, name, oid)) ? null : "the policy no longer asks for it";
+    }
+
+    /**
+     * Record on the server that this tree is pulled from it, so that a deploy there refuses to undo an edit made
+     * on the server that the tree has not taken in. Without the state table nothing can be recorded, and a deploy
+     * cannot tell the tree's changes from the server's; that is said rather than left to be found out.
+     */
+    private void markPulled(PrismContext prismContext, MidpointRestClient client) {
+        DeploymentIdentity identity = DeploymentIdentity.of(paths.get(0), app);
+        if (!identity.isAvailable()) {
+            note("note: " + identity.unavailableReason() + ", so this pull is not recorded on the server; a deploy "
+                    + "there cannot tell your changes from ones made on the server since.");
+            return;
+        }
+        try {
+            PrismObject<? extends Objectable> table = SyncState.find(prismContext, client);
+            if (table == null || !SyncState.isEnabled(table)) {
+                note("note: the server does not track this tree ('midgie init --create-state'), so a deploy there "
+                        + "cannot tell your changes from ones made on the server since this pull.");
+                return;
+            }
+            String key = MARKER_PREFIX + identity.namespace();
+            for (SyncState.Row row : SyncState.rows(table)) {
+                if (key.equals(row.key())) {
+                    return; // recorded already: the marker says only that the tree is pulled from here
+                }
+            }
+            SyncState.Changes changes = new SyncState.Changes();
+            com.fasterxml.jackson.databind.node.ObjectNode value =
+                    new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+            value.put("at", java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString());
+            if (connectionOptions.account() != null) {
+                value.put("by", connectionOptions.account());
+            }
+            changes.set(key, value.toString(), "pulled from here");
+            SyncState.apply(prismContext, client, table, changes);
+        } catch (Exception e) {
+            warn("could not record the pull in " + SyncState.TABLE_NAME + " (" + e.getMessage() + "); a deploy "
+                    + "to this server will not refuse to undo edits made here.");
+        }
     }
 
     /** Write (or with {@code --dry-run}, show) the changes, and report. */

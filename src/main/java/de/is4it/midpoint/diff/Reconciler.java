@@ -72,6 +72,8 @@ final class Reconciler {
          * message each ({@link DiffEngine.DiffResult#keyPairingDeclined}); printed under {@code -v}.
          */
         final List<String> keyPairingDeclined;
+        /** The server's object a PATCH was computed against; {@code null} for any other action. */
+        PrismObject<? extends Objectable> current;
 
         private Outcome(Action action, String restType, String oid, int changes, String detail,
                 String modificationXml, String createBody, ObjectDelta<? extends Objectable> delta,
@@ -111,6 +113,14 @@ final class Reconciler {
         }
     }
 
+    /**
+     * {@code patch} turned into a failure that sends nothing, for a reason found after planning — a change that
+     * would undo an edit made on the server, say. Its warnings stay, so the plan still shows why.
+     */
+    static Outcome refused(Outcome patch, String reason) {
+        return new Outcome(Action.FAIL, patch.restType, patch.oid, 0, reason, null, null, null, patch.warnings);
+    }
+
     private final PrismContext prismContext;
     private final MidpointRestClient client;
     private final boolean createIfAbsent;
@@ -121,6 +131,10 @@ final class Reconciler {
         this.client = client;
         this.createIfAbsent = createIfAbsent;
         this.matchByName = matchByName;
+    }
+
+    PrismContext prismContext() {
+        return prismContext;
     }
 
     private DiffEngine.SmartReferenceCheck smartReferenceCheck(StrategyOptions.Resolved strategy) {
@@ -297,9 +311,11 @@ final class Reconciler {
         }
         LOG.debug("{} {}: PATCH, {} change(s) ({} removal(s) from the tree): {}", restType, targetOid, changes,
                 judged.removing.size(), summary);
-        return new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
+        Outcome patch = new Outcome(Action.PATCH, restType, targetOid, changes, summary, modificationXml, null,
                 delta, warnings, heldBack, result.protectedSkippedPaths(), judged.removing, judged.deferred,
                 kept, keptNested, result.keyPairingDeclined());
+        patch.current = current;
+        return patch;
     }
 
     /**

@@ -348,6 +348,7 @@ final class RemovalDetector {
     private final List<Orphan> orphaned = new ArrayList<>();
     private final List<Unjudged> unjudged = new ArrayList<>();
     private final Map<DeployObject, List<String>> comparedPaths = new java.util.IdentityHashMap<>();
+    private final Map<DeployObject, PrismObject<? extends Objectable>> deployedObjects = new java.util.IdentityHashMap<>();
 
     /** Last-applied is the tree as it was at one commit: {@code lastRevision}. */
     RemovalDetector(PrismContext prismContext, GitRevision git, String lastRevision) {
@@ -407,6 +408,7 @@ final class RemovalDetector {
                         "its files as last deployed contradict each other (" + previous.unionFailure + ")", false));
                 continue;
             }
+            deployedObjects.put(unit, before);
             collect(removals, before, unit, identityKeyOf(before), previous);
         }
 
@@ -678,6 +680,11 @@ final class RemovalDetector {
     /** Objects whose every fragment left the tree; reported so the operator can retire them deliberately. */
     List<Orphan> orphaned() {
         return orphaned;
+    }
+
+    /** Each object as it was last deployed, combined from its files then; only for objects {@link #detect} paired. */
+    Map<DeployObject, PrismObject<? extends Objectable>> lastApplied() {
+        return deployedObjects;
     }
 
     /**

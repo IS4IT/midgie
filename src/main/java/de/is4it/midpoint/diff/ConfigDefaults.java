@@ -122,11 +122,14 @@ final class ConfigDefaults implements CommandLine.IDefaultValueProvider {
      * default now, still behind that confirmation, and {@code no-prune} — which only ever deletes less — may
      * be set anywhere.) {@code overwrite} lets {@code deploy --plan} replace a plan that may be under review, which
      * is a decision about that one plan; in a file it would also apply to every deploy that writes no plan, and
-     * fail each of them for it. Each maps to the reason the refusal gives.
+     * fail each of them for it. {@code revert-server-changes} undoes edits made on a server the tree is pulled from,
+     * which is a decision about the edits one run found. Each maps to the reason the refusal gives.
      */
     private static final Map<String, String> REFUSED = Map.of(
             "yes", "it decides whether a run writes without asking",
-            "overwrite", "it decides whether a plan someone may be reviewing is replaced");
+            "overwrite", "it decides whether a plan someone may be reviewing is replaced",
+            "revert-server-changes", "it decides whether edits made on the server that the tree has not taken in "
+                    + "are undone");
 
     /**
      * Keys that named a flag which has since become the default. The option still parses on the command

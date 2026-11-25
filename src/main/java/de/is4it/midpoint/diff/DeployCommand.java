@@ -180,6 +180,11 @@ public class DeployCommand implements Callable<Integer> {
                     + "its remainder file and all its other files gets --scope full unless a scope is set.")
     File remainder;
 
+    @Option(names = "--revert-server-changes",
+            description = "Deploy an object even where the change undoes an edit made on the server that the tree "
+                    + "has never seen. On a server the tree is pulled from, such an object is otherwise refused.")
+    boolean revertServerChanges;
+
     @Option(names = "--no-prune",
             description = "Only report the values this tree deployed previously and no longer declares, instead "
                     + "of removing them with each object's change — which is the default once the server "
@@ -271,6 +276,21 @@ public class DeployCommand implements Callable<Integer> {
 
     /** Whether {@code --multivalue} was left on {@code auto}, before the run settled it to merge or replace. */
     private boolean multiValueAuto;
+
+    /** The tracking that tells a change of the tree's from an edit on the server; {@code null} when there is none. */
+    private Tracking serverEditTracking;
+
+    /** Whether the tree is pulled from this server, so that undoing an edit made there loses work. */
+    private boolean pullSource;
+
+    /** Each object as it was last deployed, as removal detection read it. */
+    private Map<DeployObject, PrismObject<? extends Objectable>> lastDeployed = Map.of();
+
+    /** Per object, whose each change of its PATCH is: the tree's, or one undoing an edit on the server. */
+    private final Map<DeployObject, List<ServerEdits.Finding>> serverEditFindings = new IdentityHashMap<>();
+
+    /** How far back the commits that may explain a server's state are looked for. */
+    private static final int HISTORY_LIMIT = 200;
 
     /** For each object, the paths of the files it was compared against as last applied. */
     private Map<DeployObject, List<String>> comparedPaths = Map.of();
@@ -578,6 +598,7 @@ public class DeployCommand implements Callable<Integer> {
             Tracking tracking = resolveTracking(prismContext, client);
             List<RemovalDetector.Removal> removals = findRemovals(prismContext, tracking, units);
             settleMultiValue(tracking);
+            resolveServerEdits(tracking);
             reportRemovals(removals, tracking);
             // Under --no-prune too: an object's removals are not sent then, but they are still what tells an item
             // the tree deployed and dropped apart from one it never deployed, which is reported as kept.
@@ -639,6 +660,129 @@ public class DeployCommand implements Callable<Integer> {
             System.err.println("midgie: " + message);
             LOG.trace("deploy failed", e);
             return EXIT_ERROR;
+        }
+    }
+
+    // --- edits made on the server (whose change is it?) ---
+
+    /**
+     * Settle whether this run can tell a change of the tree's from one undoing an edit made on the server: it
+     * needs the deploy records of a tracked server, which also say whether the tree is pulled from it.
+     */
+    private void resolveServerEdits(Tracking tracking) {
+        if (!tracking.canRecord()) {
+            return;
+        }
+        serverEditTracking = tracking;
+        String marker = PullCommand.MARKER_PREFIX + tracking.identity.namespace();
+        for (SyncState.Row row : SyncState.rows(tracking.table)) {
+            if (marker.equals(row.key())) {
+                pullSource = true;
+                break;
+            }
+        }
+        LOG.debug("server edits: tracked, pulled from: {}", pullSource);
+    }
+
+    /**
+     * Judge a PATCH's changes, and refuse it on a server the tree is pulled from when one would undo an edit made
+     * there that the tree has never seen — unless {@code --revert-server-changes} says to. A live diff only
+     * labels them.
+     */
+    private Reconciler.Outcome guard(PrismContext prismContext, DeployObject unit, Reconciler.Outcome outcome) {
+        if (serverEditTracking == null || outcome.action != Reconciler.Action.PATCH || outcome.current == null
+                || outcome.delta == null) {
+            serverEditFindings.remove(unit);
+            return outcome;
+        }
+        List<ServerEdits.Finding> findings =
+                ServerEdits.judge(outcome.delta, outcome.current, versionsOf(prismContext, unit));
+        serverEditFindings.put(unit, findings);
+        List<String> foreign = new ArrayList<>();
+        for (ServerEdits.Finding finding : findings) {
+            if (finding.kind() != ServerEdits.Kind.YOURS) {
+                foreign.add(finding.path());
+            }
+        }
+        if (foreign.isEmpty() || !pullSource || revertServerChanges || asDiff) {
+            return outcome;
+        }
+        return Reconciler.refused(outcome, "would undo a change made on the server at " + String.join(", ", foreign)
+                + " that your tree has not taken in; 'midgie pull' takes it into your files, or deploy with "
+                + "--revert-server-changes to put the tree's version back");
+    }
+
+    /**
+     * The versions of {@code unit} its tree has been through since the last deploy: what that deploy wrote, and
+     * the object as each commit since then had it. The last deploy is found in this tree's history by the
+     * contents its rows recorded; when it is not there — deployed from a version this tree does not contain, or
+     * longer ago than the history looked at — it does not count, and only the newest commit does.
+     */
+    private ServerEdits.Versions versionsOf(PrismContext prismContext, DeployObject unit) {
+        FileTracking files = serverEditTracking.files;
+        GitRevision git = serverEditTracking.identity.git();
+        List<String> paths = new ArrayList<>();
+        for (File file : unit.sourceFiles()) {
+            String path = files.pathOf(file);
+            if (path != null) {
+                paths.add(path);
+            }
+        }
+        Map<String, String> deployedBlobs = new LinkedHashMap<>();
+        for (String path : paths) {
+            String blob = files.deployedBlob(path);
+            if (blob != null) {
+                deployedBlobs.put(path, blob);
+            }
+        }
+        List<String> commits = paths.isEmpty() ? List.of() : git.commitsTouching(paths, HISTORY_LIMIT);
+        List<String> window = new ArrayList<>();
+        Set<String> pending = new LinkedHashSet<>(deployedBlobs.keySet());
+        for (String commit : commits) {
+            window.add(commit);
+            if (deployedBlobs.isEmpty()) {
+                continue; // never deployed: every version this tree has had counts
+            }
+            Map<String, String> blobs = git.blobsAt(commit, new ArrayList<>(pending));
+            pending.removeIf(path -> deployedBlobs.get(path).equals(blobs.get(path)));
+            if (pending.isEmpty()) {
+                break;
+            }
+        }
+        PrismObject<? extends Objectable> deployed = lastDeployed.get(unit);
+        if (!pending.isEmpty()) {
+            LOG.debug("{}: the last deploy of {} is not in this tree's history", unit.objectPath(), pending);
+            deployed = null;
+            window = commits.isEmpty() ? List.of() : List.of(commits.get(0));
+        }
+        List<String> chosen = window;
+        return new ServerEdits.Versions(deployed, () -> chosen.stream()
+                .map(commit -> objectAt(prismContext, git, commit, paths))
+                .filter(java.util.Objects::nonNull)
+                .<PrismObject<? extends Objectable>>map(object -> object)
+                .iterator());
+    }
+
+    /** The object as its files said at {@code commit}, combined; {@code null} when they cannot be read then. */
+    private static PrismObject<? extends Objectable> objectAt(PrismContext prismContext, GitRevision git, String commit,
+            List<String> paths) {
+        List<Fragment> fragments = new ArrayList<>();
+        for (String path : paths) {
+            String content = git.fileAt(commit, path);
+            if (content == null || content.isBlank()) {
+                continue;
+            }
+            try {
+                fragments.add(Fragment.of(prismContext.parseObject(content), new File(path)));
+            } catch (Exception e) {
+                LOG.debug("{} at {} does not parse: {}", path, commit, e.getMessage());
+            }
+        }
+        try {
+            return fragments.isEmpty() ? null : FragmentUnion.of(fragments);
+        } catch (Exception e) {
+            LOG.debug("the files at {} do not combine: {}", commit, e.getMessage());
+            return null;
         }
     }
 
@@ -752,6 +896,7 @@ public class DeployCommand implements Callable<Integer> {
             return List.of();
         }
         comparedPaths = detector.comparedPaths();
+        lastDeployed = detector.lastApplied();
         reportUnjudged(detector.unjudged(), units, files);
         for (RemovalDetector.Orphan orphan : detector.orphaned()) {
             String movedTo = files.movedTo(orphan.identityKey, orphan.paths);
@@ -1433,7 +1578,8 @@ public class DeployCommand implements Callable<Integer> {
         Tally tally = new Tally();
         for (DeployObject unit : units) {
             try {
-                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune());
+                Reconciler.Outcome outcome = guard(reconciler.prismContext(), unit,
+                        reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune()));
                 Reconciler.Action action = outcome.action;
                 tally.lastOutcome = outcome;
                 if (preview) {
@@ -1541,6 +1687,11 @@ public class DeployCommand implements Callable<Integer> {
             boolean preview) {
         for (String warning : outcome.warnings) {
             note(block, unit, "warning: " + warning);
+        }
+        for (ServerEdits.Finding finding : serverEditFindings.getOrDefault(unit, List.of())) {
+            if (preview || finding.kind() != ServerEdits.Kind.YOURS) {
+                note(block, unit, (finding.kind() == ServerEdits.Kind.YOURS ? "" : "warning: ") + finding.describe());
+            }
         }
         if (oncePerRun) {
             reportKeyPairingDeclined(block, unit, outcome);
@@ -1739,7 +1890,8 @@ public class DeployCommand implements Callable<Integer> {
                 // local projection this used to keep — advanced with each applied delta so that a second
                 // fragment of a to-be-created object became a patch rather than a second create — has
                 // nothing left to answer for now that an object's files are reconciled together.
-                Reconciler.Outcome outcome = reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune());
+                Reconciler.Outcome outcome = guard(reconciler.prismContext(), unit,
+                        reconciler.plan(unit.object(), strategyFor(unit), removalsFor(unit), prune()));
 
                 boolean lands = outcome.action == Reconciler.Action.CREATE || outcome.action == Reconciler.Action.PATCH
                         || outcome.action == Reconciler.Action.IN_SYNC;

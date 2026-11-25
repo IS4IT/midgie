@@ -118,6 +118,12 @@ final class FileTracking {
         return scopes;
     }
 
+    /** The blob id a file's row says it was last deployed as, or {@code null} when it has no row. */
+    String deployedBlob(String path) {
+        FileRow row = files.get(path);
+        return (row != null) ? row.blob() : null;
+    }
+
     /** Whether {@code path} lies inside what this run deploys. */
     boolean inScope(String path) {
         for (String scope : scopes) {

@@ -114,6 +114,42 @@ An object deployed **with its remainder file and every other file of it** runs u
 
 Deploying the managed files alone leaves the remainder out of the run, so the object is [not complete](strategy.md#full-scope-needs-the-whole-object) and runs under `--scope present` with a note. That is the way to deploy only what you curate, onto a server whose other settings are not yours — a newer midPoint version on dev than on production, say, where the remainder holds the newer version's defaults.
 
+## Deploying back to the server you pull from
+
+Deploying a tree overwrites the server with what the tree says. On a test or production server that is the point. On the server you pull from, it can lose work: you pull from dev, a colleague goes on changing things in the GUI, and your next deploy to dev would quietly undo all of it.
+
+So for every change a deploy would make, midgie asks **whose change it is**. It compares three states of the item: what the **server** holds now, what the **last deploy** wrote, and what the **tree** says.
+
+| server | last deployed | tree | what happened | deploy |
+|---|---|---|---|---|
+| Berlin | Berlin | Hamburg | you changed the file | sends your change |
+| Leipzig | Berlin | Berlin | someone changed the server since the last deploy | would undo their change |
+| Leipzig | Berlin | Hamburg | both changed it | would overwrite their change with yours |
+
+More precisely, a change is **yours** when the server holds a value your tree has had since the last deploy: the value that deploy wrote, or the value a commit since then had — the pulled value you then edited, say. Anything else was done outside your tree: in the GUI, or by a deploy from a version your tree does not contain, such as a colleague's commit you have not merged. Only the history since the last deploy counts. A yes/no item, or a phone number that has gone back and forth, has held every value somewhere in a long history, and "ever" would excuse every edit.
+
+The plan shows each change with its states. `--dry-run` and `--plan` list them all; a real run lists only those that are not yours:
+
+```
+  error         users/jdoe.xml  UserType/jdoe
+                would undo a change made on the server at locality that your tree has not taken in; 'midgie pull' takes it into your files, or deploy with --revert-server-changes to put the tree's version back
+                warning: locality: undoes a change made on the server — server "Leipzig", last deployed "Berlin" → tree "Berlin"
+                telephoneNumber: your change — server "+49 30 1234", last deployed "+49 30 1234" → tree "+49 30 9876"
+```
+
+**On a server the tree is pulled from, such an object is refused**, with exit 2, and nothing of it is sent. `midgie pull` takes the server's change into your files, where `git diff` shows it; or deploy with **`--revert-server-changes`** to put the tree's version back on purpose. That flag works on the command line only: a config file may not set it. A server counts as pulled from once `pull` has recorded itself there, in `midgie-state`. Every other server is only told: the changes are labelled the same way, and deployed.
+
+It compares values, not text or commits. A change your colleague made, copied into your file by hand, is yours as soon as it says the same; formatting does not matter. A copy that differs, by one character, is caught.
+
+What it needs, and what it cannot see:
+
+- **A tracked server** (`midgie init --create-state`) **and a tree in git.** The last deploy is known from the file contents `midgie-state` recorded, looked up in your repository; without either, nothing is checked, and `pull` says so when it cannot record itself.
+- **The last deploy must be in your history.** When it was made from a version your tree does not contain, or more than 200 commits ago, only your latest commit counts: anything else on the server is reported as not in your tree's history.
+- **A deploy from uncommitted files** is recorded as their committed version, so the check after it is only as exact as that.
+- **An edit that sets an item back to a value your own commits had since the last deploy** looks like the tree moving on, and is not caught. Every deploy shortens that window again.
+- **An edit made in the seconds between deploy reading an object and writing it** is not caught: midPoint's REST interface has no way to make a write depend on the object being unchanged.
+- **`--apply-plan`** replays what `--plan` checked; it does not check again.
+
 ## Reviewing with git
 
 The remainder is ordinary files, so git is the review tool:
@@ -138,6 +174,7 @@ To curate an item, move it from the remainder into a managed file; the next pull
 | `--remainder DIR` | where the remainder files go; `remainder` in the tree's `.midgie.properties` |
 | `--policy FILE` | its `remainder` rules choose the objects, its `apply=never` items are left out |
 | `--stages GLOB` | folders that each hold one stage's files, as deploy takes it |
+| `--app NAME` | the deployment's name on the server when it is not the repository's own, as deploy takes it |
 | `--dry-run` | print what would change as a diff on stdout; write nothing |
 | `-q`, `-v`, `--trace` | quieter, or more detail |
 

@@ -123,7 +123,7 @@ On a tracked tree, `deploy` also removes the values the tree has dropped since t
 
 ## `pull` — from the server into the tree
 
-Reads the run's objects from the server, and the ones the policy names; brings the tree's own files in line with the server for the items they declare, changing nothing else in them; and writes everything they do not declare into a remainder folder, one file per object. `git diff` is the review. With the remainder in the run, `deploy` holds the server to the whole object. See [Pulling from the server](pull.md).
+Reads the run's objects from the server, and the ones the policy names; brings the tree's own files in line with the server for the items they declare, changing nothing else in them; and writes everything they do not declare into a remainder folder, one file per object. `git diff` is the review. With the remainder in the run, `deploy` holds the server to the whole object; on a server the tree is pulled from, it refuses to undo edits made there that the tree has not taken in. See [Pulling from the server](pull.md).
 
 ```bash
 midgie pull config/ --url https://dev.mp.example/midpoint --remainder remainder/
